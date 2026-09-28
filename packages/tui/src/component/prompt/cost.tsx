@@ -1,6 +1,6 @@
 import { RGBA } from "@opentui/core"
 import type { Session } from "@opencode-ai/sdk/v2"
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { useSDK } from "../../context/sdk"
 import { sessionTotalCost } from "../../util/session-cost"
 
@@ -47,14 +47,12 @@ export function SessionCost(props: {
   )
 
   return (
-    <Show when={total() > 0 || (props.sessionCost ?? 0) > 0}>
-      <text
-        fg={props.color}
-        wrapMode="none"
-        onMouseUp={() => setScope((current) => (current === "total" ? "session" : "total"))}
-      >
-        {` · ${scope()} ${money.format(scope() === "total" ? total() : (props.sessionCost ?? 0))}`}
-      </text>
-    </Show>
+    <text
+      fg={props.color}
+      wrapMode="none"
+      onMouseUp={() => setScope((current) => (current === "total" ? "session" : "total"))}
+    >
+      {` · ${scope()} ${money.format(scope() === "total" ? total() : (props.sessionCost ?? 0))}`}
+    </text>
   )
 }

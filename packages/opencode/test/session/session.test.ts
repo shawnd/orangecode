@@ -238,6 +238,71 @@ describe("Session", () => {
     }),
   )
 
+  it.instance("starts a fork at zero cost while preserving historical usage", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({}), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const userID = MessageID.ascending()
+      yield* session.updateMessage({
+        id: userID,
+        sessionID: created.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "test",
+        model: { providerID: "test", modelID: "test" },
+      } as SessionV1.User)
+      const assistantID = MessageID.ascending()
+      yield* session.updateMessage({
+        id: assistantID,
+        sessionID: created.id,
+        role: "assistant",
+        parentID: userID,
+        time: { created: Date.now() },
+        agent: "test",
+        mode: "",
+        modelID: "test",
+        providerID: "test",
+        path: { cwd: "/", root: "/" },
+        cost: 1.25,
+        tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+      } as SessionV1.Assistant)
+      const tokens = { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }
+      yield* session.updatePart({
+        id: PartID.ascending(),
+        messageID: assistantID,
+        sessionID: created.id,
+        type: "step-finish",
+        reason: "stop",
+        cost: 1.25,
+        tokens,
+      })
+
+      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      expect((yield* session.get(created.id)).cost).toBe(1.25)
+      expect((yield* session.get(fork.id)).cost).toBe(0)
+      expect((yield* session.get(fork.id)).tokens?.input).toBe(0)
+      const history = yield* session.messages({ sessionID: fork.id })
+      const copied = history[1]
+      if (!copied) throw new Error("missing forked assistant message")
+      expect(copied.parts).toContainEqual(expect.objectContaining({ type: "step-finish", cost: 1.25 }))
+
+      yield* session.updatePart({
+        id: PartID.ascending(),
+        messageID: copied.info.id,
+        sessionID: fork.id,
+        type: "step-finish",
+        reason: "stop",
+        cost: 0.4,
+        tokens,
+      })
+      expect((yield* session.get(fork.id)).cost).toBe(0.4)
+    }),
+  )
+
   it.instance("forks the chronological prefix across mixed message ID ordering", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service

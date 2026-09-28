@@ -728,6 +728,8 @@ const layer: Layer.Layer<
           yield* updatePart(p)
         }
       }
+      // Copied step-finish parts preserve the transcript, but their usage predates this fork.
+      yield* patch(session.id, { cost: 0, tokens: session.tokens })
       return session
     })
 

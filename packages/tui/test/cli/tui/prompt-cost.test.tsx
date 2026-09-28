@@ -39,3 +39,28 @@ test("clicking cost toggles between total subagent cost and session-only cost", 
     app.renderer.destroy()
   }
 })
+
+test("shows zero total cost for a fork before its first new turn", async () => {
+  const [cost, setCost] = createSignal(0)
+  const app = await testRender(
+    () => (
+      <SessionCost
+        sessionID="fork"
+        sessionCost={cost()}
+        sessions={[{ id: "fork", cost: cost() }]}
+        color={RGBA.fromHex("#ffffff")}
+      />
+    ),
+    { width: 40, height: 3 },
+  )
+
+  try {
+    await app.flush()
+    expect(app.captureCharFrame()).toContain("total $0.00")
+    setCost(0.4)
+    await app.flush()
+    expect(app.captureCharFrame()).toContain("total $0.40")
+  } finally {
+    app.renderer.destroy()
+  }
+})
