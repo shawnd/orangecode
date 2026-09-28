@@ -57,6 +57,7 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
+import { SessionCost, useSessionCostChildren } from "./cost"
 
 registerOpencodeSpinner()
 
@@ -95,11 +96,6 @@ export type PromptRef = {
   focus(): void
   submit(): void
 }
-
-const money = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-})
 
 const DRAFT_RETENTION_MIN_CHARS = 20
 
@@ -176,6 +172,7 @@ export function Prompt(props: PromptProps) {
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
+  const subagents = useSessionCostChildren(() => props.sessionID)
   const editorContext = createMemo(() => {
     const selection = fileContextEnabled() ? editor.selection() : undefined
     if (!selection) return
@@ -263,7 +260,6 @@ export function Prompt(props: PromptProps) {
 
   const usage = createMemo(() => {
     if (!props.sessionID) return
-    const session = sync.session.get(props.sessionID)
     const msg = sync.data.message[props.sessionID] ?? []
     const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
     if (!last) return
@@ -274,10 +270,8 @@ export function Prompt(props: PromptProps) {
 
     const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
     const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
-    const cost = session?.cost ?? 0
     return {
       context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
-      cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
 
@@ -1664,9 +1658,18 @@ export function Prompt(props: PromptProps) {
                   <Switch>
                     <Match when={usage()}>
                       {(item) => (
-                        <text fg={theme.textMuted} wrapMode="none">
-                          {[item().context, item().cost].filter(Boolean).join(" · ")}
-                        </text>
+                        <box flexDirection="row">
+                          <text fg={theme.textMuted} wrapMode="none">
+                            {item().context}
+                          </text>
+                          <SessionCost
+                            sessionID={props.sessionID}
+                            sessionCost={props.sessionID ? sync.session.get(props.sessionID)?.cost : undefined}
+                            sessions={sync.data.session}
+                            historical={subagents()}
+                            color={theme.textMuted}
+                          />
+                        </box>
                       )}
                     </Match>
                     <Match when={true}>

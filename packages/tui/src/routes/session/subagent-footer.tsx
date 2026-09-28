@@ -7,12 +7,14 @@ import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useCommandShortcut, useOpencodeKeymap } from "../../keymap"
+import { SessionCost, useSessionCostChildren } from "../../component/prompt/cost"
 
 export function SubagentFooter() {
   const route = useRouteData("session")
   const sync = useSync()
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const subagents = useSessionCostChildren(() => route.sessionID)
 
   const subagentInfo = createMemo(() => {
     const s = session()
@@ -41,16 +43,8 @@ export function SubagentFooter() {
 
     const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
     const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
-    const cost = session()?.cost ?? 0
-
-    const money = new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-    })
-
     return {
       context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
-      cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
 
@@ -87,9 +81,18 @@ export function SubagentFooter() {
             </Show>
             <Show when={usage()}>
               {(item) => (
-                <text fg={theme.textMuted} wrapMode="none">
-                  {[item().context, item().cost].filter(Boolean).join(" · ")}
-                </text>
+                <box flexDirection="row">
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {item().context}
+                  </text>
+                  <SessionCost
+                    sessionID={route.sessionID}
+                    sessionCost={session()?.cost}
+                    sessions={sync.data.session}
+                    historical={subagents()}
+                    color={theme.textMuted}
+                  />
+                </box>
               )}
             </Show>
           </box>
