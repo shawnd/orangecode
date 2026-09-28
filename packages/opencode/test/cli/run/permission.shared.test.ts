@@ -8,6 +8,7 @@ import {
   permissionInfo,
   permissionReject,
   permissionRun,
+  permissionOptions,
 } from "@/cli/cmd/run/permission.shared"
 
 function req(input: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -47,6 +48,19 @@ describe("run permission shared", () => {
       stage: "permission",
       selected: "always",
     })
+  })
+
+  test("offers global approval for external directories and confirms it", () => {
+    const request = req({ permission: "external_directory", always: ["/tmp/shared/*"] })
+    expect(permissionOptions("permission", request)).toEqual(["once", "always", "global", "reject"])
+    expect(permissionOptions("permission", req())).not.toContain("global")
+    const next = permissionRun(createPermissionBodyState(request.id), request.id, "global")
+    expect(next.state.stage).toBe("global")
+    expect(permissionRun(next.state, request.id, "confirm").reply).toEqual({
+      requestID: request.id,
+      reply: "global",
+    })
+    expect(permissionAlwaysLines(request, true)).toContain("- /tmp/shared/*")
   })
 
   test("builds trimmed reject replies and stage transitions", () => {

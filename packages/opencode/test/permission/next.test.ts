@@ -1,7 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { test, expect } from "bun:test"
 import os from "os"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Permission } from "../../src/permission"
@@ -12,6 +12,8 @@ import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { Config } from "../../src/config/config"
+import { TestConfig } from "../fixture/config"
 
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = AppNodeBuilder.build(
@@ -19,6 +21,33 @@ const env = AppNodeBuilder.build(
   [[InstanceStore.bootstrapNode, noopBootstrap]],
 )
 const it = testEffect(env)
+
+const globalEnv = AppNodeBuilder.build(
+  LayerNode.group([Permission.node, EventV2Bridge.node, CrossSpawnSpawner.node, InstanceStore.node]),
+  [
+    [InstanceStore.bootstrapNode, noopBootstrap],
+    [
+      Config.node,
+      Layer.effect(
+        Config.Service,
+        Effect.gen(function* () {
+          const rules = yield* Ref.make<Record<string, PermissionV1.Action>>({})
+          return TestConfig.make({
+            getGlobal: () =>
+              Ref.get(rules).pipe(Effect.map((external_directory) => ({ permission: { external_directory } }))),
+            updateGlobal: (config) =>
+              Effect.gen(function* () {
+                const next = config.permission?.external_directory
+                if (next && typeof next !== "string") yield* Ref.update(rules, (current) => ({ ...current, ...next }))
+                return { info: config, changed: true }
+              }),
+          })
+        }),
+      ),
+    ],
+  ],
+)
+const globalIt = testEffect(globalEnv)
 
 const rejectAll = (message?: string) =>
   Effect.gen(function* () {
@@ -802,6 +831,45 @@ it.instance(
       expect(result).toBeUndefined()
     }),
   { git: true },
+)
+
+globalIt.live("global folder approval is applied across projects and after instance reload", () =>
+  Effect.gen(function* () {
+    const one = yield* tmpdirScoped({ git: true })
+    const two = yield* tmpdirScoped({ git: true })
+    const store = yield* InstanceStore.Service
+    const request = {
+      sessionID: SessionID.make("session_global"),
+      permission: "external_directory",
+      patterns: ["/shared/folder/*"],
+      always: ["/shared/folder/*"],
+      metadata: {},
+      ruleset: [],
+    }
+    const first = yield* store.provide({ directory: one }, ask(request)).pipe(Effect.forkScoped)
+    const pending = yield* store.provide({ directory: one }, waitForPending(1))
+    yield* store.provide({ directory: one }, reply({ requestID: pending[0].id, reply: "global" }))
+    yield* Fiber.join(first)
+
+    yield* store.provide({ directory: two }, ask(request))
+    yield* store.reload({ directory: one })
+    yield* store.provide({ directory: one }, ask(request))
+    expect(yield* store.provide({ directory: two }, list())).toHaveLength(0)
+    expect(yield* store.provide({ directory: one }, list())).toHaveLength(0)
+
+    const denied = yield* store.provide(
+      { directory: two },
+      fail(ask({ ...request, ruleset: [{ permission: "external_directory", pattern: "*", action: "deny" }] })),
+    )
+    expect(denied).toBeInstanceOf(PermissionV1.DeniedError)
+
+    const other = yield* store
+      .provide({ directory: two }, ask({ ...request, patterns: ["/another/folder/*"] }))
+      .pipe(Effect.forkScoped)
+    expect(yield* store.provide({ directory: two }, waitForPending(1))).toHaveLength(1)
+    yield* store.provide({ directory: two }, rejectAll())
+    yield* Fiber.await(other)
+  }),
 )
 
 it.instance(

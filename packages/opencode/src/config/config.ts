@@ -637,7 +637,9 @@ const layer = Layer.effect(
 
     const update = Effect.fn("Config.update")(function* (config: Info) {
       const dir = yield* InstanceState.directory
-      const file = path.join(dir, "config.json")
+      const file =
+        ["opencode.jsonc", "opencode.json", "config.json"].map((name) => path.join(dir, name)).find(existsSync) ??
+        path.join(dir, "opencode.json")
       const existing = yield* loadFile(file)
       const text = yield* readConfigFile(file)
       const original = text ? ConfigParse.jsonc(text, file) : writable(existing)

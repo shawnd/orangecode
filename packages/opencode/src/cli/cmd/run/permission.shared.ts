@@ -19,8 +19,8 @@ import { toolPath, toolPermissionInfo } from "./tool"
 
 type Dict = Record<string, unknown>
 
-export type PermissionStage = "permission" | "always" | "reject"
-export type PermissionOption = "once" | "always" | "reject" | "confirm" | "cancel"
+export type PermissionStage = "permission" | "always" | "global" | "reject"
+export type PermissionOption = "once" | "always" | "global" | "reject" | "confirm" | "cancel"
 
 export type PermissionBodyState = {
   requestID: string
@@ -77,12 +77,14 @@ export function createPermissionBodyState(requestID: string): PermissionBodyStat
   }
 }
 
-export function permissionOptions(stage: PermissionStage): PermissionOption[] {
+export function permissionOptions(stage: PermissionStage, request?: PermissionRequest): PermissionOption[] {
   if (stage === "permission") {
-    return ["once", "always", "reject"]
+    return request?.permission === "external_directory" && request.always.length
+      ? ["once", "always", "global", "reject"]
+      : ["once", "always", "reject"]
   }
 
-  if (stage === "always") {
+  if (stage === "always" || stage === "global") {
     return ["confirm", "cancel"]
   }
 
@@ -123,7 +125,12 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
   }
 }
 
-export function permissionAlwaysLines(request: PermissionRequest): string[] {
+export function permissionAlwaysLines(request: PermissionRequest, global = false): string[] {
+  if (global)
+    return [
+      "Allow these directory patterns in every project, including after restart:",
+      ...request.always.map((item) => `- ${item}`),
+    ]
   if (request.always.length === 1 && request.always[0] === "*") {
     return [`This will allow ${request.permission} until OpenCode is restarted.`]
   }
@@ -137,6 +144,7 @@ export function permissionAlwaysLines(request: PermissionRequest): string[] {
 export function permissionLabel(option: PermissionOption): string {
   if (option === "once") return "Allow once"
   if (option === "always") return "Allow always"
+  if (option === "global") return "Allow global"
   if (option === "reject") return "Reject"
   if (option === "confirm") return "Confirm"
   return "Cancel"
@@ -150,8 +158,12 @@ export function permissionReply(requestID: string, reply: PermissionReply["reply
   }
 }
 
-export function permissionShift(state: PermissionBodyState, dir: -1 | 1): PermissionBodyState {
-  const list = permissionOptions(state.stage)
+export function permissionShift(
+  state: PermissionBodyState,
+  dir: -1 | 1,
+  request?: PermissionRequest,
+): PermissionBodyState {
+  const list = permissionOptions(state.stage, request)
   if (list.length === 0) {
     return state
   }
@@ -177,11 +189,11 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
   }
 
   if (state.stage === "permission") {
-    if (option === "always") {
+    if (option === "always" || option === "global") {
       return {
         state: {
           ...state,
-          stage: "always",
+          stage: option,
           selected: "confirm",
         },
       }
@@ -203,7 +215,7 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
     }
   }
 
-  if (state.stage !== "always") {
+  if (state.stage !== "always" && state.stage !== "global") {
     return { state }
   }
 
@@ -212,14 +224,14 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
       state: {
         ...state,
         stage: "permission",
-        selected: "always",
+        selected: state.stage,
       },
     }
   }
 
   return {
     state,
-    reply: permissionReply(requestID, "always"),
+    reply: permissionReply(requestID, state.stage),
   }
 }
 
@@ -240,11 +252,11 @@ export function permissionCancel(state: PermissionBodyState): PermissionBodyStat
 }
 
 export function permissionEscape(state: PermissionBodyState): PermissionBodyState {
-  if (state.stage === "always") {
+  if (state.stage === "always" || state.stage === "global") {
     return {
       ...state,
       stage: "permission",
-      selected: "always",
+      selected: state.stage,
     }
   }
 

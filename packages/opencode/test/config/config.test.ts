@@ -6,6 +6,7 @@ import { Cause, Effect, Exit, Layer, Logger, Option } from "effect"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "@/config/config"
+import { ConfigPaths } from "@/config/paths"
 import { ConfigManaged } from "@/config/managed"
 import { ConfigParse } from "../../src/config/parse"
 import { ConfigV2Compat } from "../../src/config/v2-compat"
@@ -363,13 +364,23 @@ it.instance("updates config and preserves empty shell sentinel", () =>
     yield* writeConfigEffect(
       test.directory,
       { $schema: "https://opencode.ai/config.json", shell: "bash" },
-      "config.json",
+      "opencode.json",
     )
 
     yield* Config.Service.use((svc) => svc.update(ConfigParse.schema(ConfigV1.Info, { shell: "" }, "test:config")))
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "opencode.json"))
     expect(writtenConfig).toMatchObject({ shell: "" })
+  }),
+)
+
+it.instance("writes a new project config where the loader reads it", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const svc = yield* Config.Service
+    yield* svc.update({ lsp: true })
+    expect(yield* FSUtil.use.readJson(path.join(test.directory, "opencode.json"))).toMatchObject({ lsp: true })
+    expect(yield* ConfigPaths.files("opencode", test.directory)).toContain(path.join(test.directory, "opencode.json"))
   }),
 )
 
@@ -380,6 +391,22 @@ it.effect("updates global config and omits empty shell key in json", () =>
 
       const writtenConfig = yield* FSUtil.use.readJson(path.join(dir, "opencode.json"))
       expect(writtenConfig).not.toHaveProperty("shell")
+    }),
+  ),
+)
+
+it.effect("persists global folder approvals alongside existing settings", () =>
+  withGlobalConfig({ config: { permission: { external_directory: { "/first/*": "allow" } } } }, ({ dir }) =>
+    Effect.gen(function* () {
+      yield* Config.use.updateGlobal({ permission: { external_directory: { "/second/*": "allow" } } })
+      const written = yield* FSUtil.use.readJson(path.join(dir, "opencode.json"))
+      expect(written).toMatchObject({
+        permission: { external_directory: { "/first/*": "allow", "/second/*": "allow" } },
+      })
+      expect((yield* Config.use.getGlobal()).permission?.external_directory).toEqual({
+        "/first/*": "allow",
+        "/second/*": "allow",
+      })
     }),
   ),
 )
@@ -1084,7 +1111,7 @@ it.instance("updates config and writes to file", () =>
       svc.update(ConfigParse.schema(ConfigV1.Info, { model: "updated/model" }, "test:config")),
     )
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "opencode.json"))
     expect(writtenConfig).toMatchObject({ model: "updated/model" })
   }),
 )

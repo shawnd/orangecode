@@ -1678,7 +1678,7 @@ export function Prompt(props: PromptProps) {
                       </text>
                     </Match>
                   </Switch>
-                  <text fg={theme.text}>
+                  <text fg={theme.text} onMouseUp={() => keymap.dispatchCommand("command.palette.show")}>
                     {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                   </text>
                 </Match>

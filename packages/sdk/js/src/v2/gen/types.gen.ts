@@ -1397,7 +1397,7 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           requestID: string
-          reply: "once" | "always" | "reject"
+          reply: "once" | "always" | "global" | "reject"
         }
       }
     | {
@@ -2020,6 +2020,10 @@ export type Config = {
     tail_turns?: number
     preserve_recent_tokens?: number
     reserved?: number
+    /**
+     * Compact at this percentage of the model context window, subject to the safe output and input limits.
+     */
+    threshold_percent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -5739,7 +5743,7 @@ export type PermissionReplied = {
   data: {
     sessionID: string
     requestID: string
-    reply: "once" | "always" | "reject"
+    reply: "once" | "always" | "global" | "reject"
   }
 }
 
@@ -6884,7 +6888,7 @@ export type EventPermissionReplied = {
   properties: {
     sessionID: string
     requestID: string
-    reply: "once" | "always" | "reject"
+    reply: "once" | "always" | "global" | "reject"
   }
 }
 
@@ -9266,7 +9270,7 @@ export type PermissionListResponse = PermissionListResponses[keyof PermissionLis
 
 export type PermissionReplyData = {
   body?: {
-    reply: "once" | "always" | "reject"
+    reply: "once" | "always" | "global" | "reject"
     message?: string
   }
   path: {
@@ -10372,7 +10376,7 @@ export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnre
 
 export type PermissionRespondData = {
   body?: {
-    response: "once" | "always" | "reject"
+    response: "once" | "always" | "global" | "reject"
   }
   path: {
     sessionID: string

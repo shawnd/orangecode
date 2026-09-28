@@ -17,7 +17,7 @@ import { useTuiConfig } from "../../config"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 
-type PermissionStage = "permission" | "always" | "reject"
+type PermissionStage = "permission" | "always" | "global" | "reject"
 
 function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
@@ -135,11 +135,21 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
   return (
     <Switch>
-      <Match when={store.stage === "always"}>
+      <Match when={store.stage === "always" || store.stage === "global"}>
         <Prompt
-          title="Always allow"
+          title={store.stage === "global" ? "Allow globally" : "Always allow"}
           body={
             <Switch>
+              <Match when={store.stage === "global"}>
+                <box paddingLeft={1} gap={1}>
+                  <text fg={theme.textMuted}>
+                    Allow these directory patterns in every project, including after restart:
+                  </text>
+                  <box>
+                    <For each={props.request.always}>{(pattern) => <text fg={theme.text}>{"- " + pattern}</text>}</For>
+                  </box>
+                </box>
+              </Match>
               <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
                 <TextBody title={"This will allow " + props.request.permission + " until OpenCode is restarted."} />
               </Match>
@@ -163,10 +173,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           options={{ confirm: "Confirm", cancel: "Cancel" }}
           escapeKey="cancel"
           onSelect={(option) => {
+            const reply = store.stage === "global" ? "global" : "always"
             setStore("stage", "permission")
             if (option === "cancel") return
             void sdk.client.permission.reply({
-              reply: "always",
+              reply,
               requestID: props.request.id,
               directory: props.directory,
               workspace: project.workspace.current(),
@@ -402,12 +413,16 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={
+                props.request.permission === "external_directory" && props.request.always.length
+                  ? { once: "Allow once", always: "Allow always", global: "Allow global", reject: "Reject" }
+                  : { once: "Allow once", always: "Allow always", reject: "Reject" }
+              }
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
-                if (option === "always") {
-                  setStore("stage", "always")
+                if (option === "always" || option === "global") {
+                  setStore("stage", option)
                   return
                 }
                 if (option === "reject") {

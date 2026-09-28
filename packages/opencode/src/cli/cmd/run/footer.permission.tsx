@@ -141,12 +141,13 @@ export function RunPermissionBody(props: {
   const info = createMemo(() => permissionInfo(props.request))
   const ft = createMemo(() => toolFiletype(info().file))
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
-  const opts = createMemo(() => permissionOptions(state().stage))
+  const opts = createMemo(() => permissionOptions(state().stage, props.request))
   const busy = createMemo(() => state().submitting)
   const title = createMemo(() => {
     if (state().stage === "always") {
       return "Always allow"
     }
+    if (state().stage === "global") return "Allow globally"
 
     if (state().stage === "reject") {
       return "Reject permission"
@@ -165,7 +166,7 @@ export function RunPermissionBody(props: {
   })
 
   const shift = (dir: -1 | 1) => {
-    setState((prev) => permissionShift(prev, dir))
+    setState((prev) => permissionShift(prev, dir, props.request))
   }
 
   const submit = async (next: PermissionReply) => {
@@ -410,7 +411,7 @@ export function RunPermissionBody(props: {
                 }}
               >
                 <box width="100%" flexDirection="column" gap={1} paddingLeft={1}>
-                  <For each={permissionAlwaysLines(props.request)}>
+                  <For each={permissionAlwaysLines(props.request, state().stage === "global")}>
                     {(line) => (
                       <text fg={props.theme.text} wrapMode="word">
                         {line}
@@ -461,7 +462,10 @@ export function RunPermissionBody(props: {
                 enter <span style={{ fg: props.theme.muted }}>confirm</span>
               </text>
               <text fg={props.theme.text}>
-                esc <span style={{ fg: props.theme.muted }}>{state().stage === "always" ? "cancel" : "reject"}</span>
+                esc{" "}
+                <span style={{ fg: props.theme.muted }}>
+                  {state().stage === "always" || state().stage === "global" ? "cancel" : "reject"}
+                </span>
               </text>
             </box>
           </Show>

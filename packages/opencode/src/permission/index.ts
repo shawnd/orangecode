@@ -6,6 +6,7 @@ import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Config } from "@/config/config"
 
 export const Event = PermissionV1.Event
 
@@ -43,6 +44,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const config = yield* Config.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -67,10 +69,17 @@ const layer = Layer.effect(
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
+      const folder =
+        request.permission === "external_directory"
+          ? (yield* config.getGlobal()).permission?.external_directory
+          : undefined
+      const global = folder ? fromConfig({ external_directory: folder }) : []
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const configured = evaluate(request.permission, pattern, ruleset)
+        const rule =
+          configured.action === "deny" ? configured : evaluate(request.permission, pattern, ruleset, global, approved)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
@@ -110,6 +119,16 @@ const layer = Layer.effect(
       const { approved, pending } = yield* InstanceState.get(state)
       const existing = pending.get(input.requestID)
       if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+
+      if (input.reply === "global") {
+        if (existing.info.permission !== "external_directory" || !existing.info.always.length)
+          return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+        yield* config.updateGlobal({
+          permission: {
+            external_directory: Object.fromEntries(existing.info.always.map((pattern) => [pattern, "allow" as const])),
+          },
+        })
+      }
 
       pending.delete(input.requestID)
       yield* events.publish(Event.Replied, {
@@ -160,7 +179,7 @@ const layer = Layer.effect(
         yield* events.publish(Event.Replied, {
           sessionID: item.info.sessionID,
           requestID: item.info.id,
-          reply: "always",
+          reply: input.reply,
         })
         yield* Deferred.succeed(item.deferred, undefined)
       }
@@ -218,6 +237,6 @@ export function visibleTools<T>(tools: Record<string, T>, ruleset: PermissionV1.
   return Object.fromEntries(Object.entries(tools).filter(([name]) => !hidden.has(name)))
 }
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [EventV2Bridge.node] })
+export const node = LayerNode.make({ service: Service, layer: layer, deps: [EventV2Bridge.node, Config.node] })
 
 export * as Permission from "."
