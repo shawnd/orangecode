@@ -28,6 +28,7 @@ import type { PlanExitTool } from "@/tool/plan"
 import type { QuestionTool } from "@/tool/question"
 import type { ReadTool } from "@/tool/read"
 import type { SkillTool } from "@/tool/skill"
+import type { ModelsSearchTool, ModelsTool } from "@/tool/models"
 import type { TaskTool } from "@/tool/task"
 import type { TodoWriteTool } from "@/tool/todo"
 import type { WebFetchTool } from "@/tool/webfetch"
@@ -109,6 +110,8 @@ type ToolDefs = {
   webfetch: typeof WebFetchTool
   websearch: typeof WebSearchTool
   skill: typeof SkillTool
+  models: typeof ModelsTool
+  models_search: typeof ModelsSearchTool
   plan_exit: typeof PlanExitTool
 }
 
@@ -366,11 +369,13 @@ function runWebSearch(p: ToolProps<typeof WebSearchTool>): ToolInline {
 function runTask(p: ToolProps<typeof TaskTool>): ToolInline {
   const kind = Locale.titlecase(p.input.subagent_type || "unknown")
   const desc = p.input.description
+  const model = p.input.model
   const icon = p.frame.status === "error" ? "✗" : p.frame.status === "running" ? "•" : "✓"
+  const agent = desc ? `${kind} Agent` : undefined
   return {
     icon,
     title: desc || `${kind} Task`,
-    description: desc ? `${kind} Agent` : undefined,
+    description: [agent, model].filter((part) => part !== undefined).join(" · ") || undefined,
   }
 }
 
@@ -397,6 +402,20 @@ function runSkill(p: ToolProps<typeof SkillTool>): ToolInline {
   return {
     icon: "→",
     title: `Skill "${p.input.name ?? ""}"`,
+  }
+}
+
+function runModels(p: ToolProps<typeof ModelsTool>): ToolInline {
+  return {
+    icon: "◈",
+    title: p.input.provider ? `Models ${p.input.provider}` : "Models",
+  }
+}
+
+function runModelsSearch(p: ToolProps<typeof ModelsSearchTool>): ToolInline {
+  return {
+    icon: "◈",
+    title: p.input.query ? `Search models "${p.input.query}"` : "Search models",
   }
 }
 
@@ -572,7 +591,7 @@ function snapTask(p: ToolProps<typeof TaskTool>): ToolSnapshot {
   const kind = Locale.titlecase(p.input.subagent_type || "general")
   const desc = p.input.description
   const title = text(p.frame.state.title)
-  const rows = [desc || title].filter((item): item is string => Boolean(item))
+  const rows = [desc || title, p.input.model].filter((item): item is string => Boolean(item))
 
   return {
     kind: "task",
@@ -861,6 +880,14 @@ function scrollLspStart(p: ToolProps<typeof LspTool>): string {
 
 function scrollSkillStart(p: ToolProps<typeof SkillTool>): string {
   return `→ Skill "${p.input.name ?? ""}"`
+}
+
+function scrollModelsStart(p: ToolProps<typeof ModelsTool>): string {
+  return p.input.provider ? `→ Models ${p.input.provider}` : "→ Models"
+}
+
+function scrollModelsSearchStart(p: ToolProps<typeof ModelsSearchTool>): string {
+  return `→ Search models "${p.input.query ?? ""}"`
 }
 
 function scrollGlobStart(p: ToolProps<typeof GlobTool>): string {
@@ -1217,6 +1244,26 @@ const TOOL_RULES = {
     run: runSkill,
     scroll: {
       start: scrollSkillStart,
+    },
+  },
+  models: {
+    view: {
+      output: false,
+      final: false,
+    },
+    run: runModels,
+    scroll: {
+      start: scrollModelsStart,
+    },
+  },
+  models_search: {
+    view: {
+      output: false,
+      final: false,
+    },
+    run: runModelsSearch,
+    scroll: {
+      start: scrollModelsSearchStart,
     },
   },
   plan_exit: {

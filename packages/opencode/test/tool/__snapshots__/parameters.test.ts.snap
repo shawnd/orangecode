@@ -186,6 +186,35 @@ exports[`tool parameters JSON Schema (wire shape) lsp 1`] = `
 }
 `;
 
+exports[`tool parameters JSON Schema (wire shape) models 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "provider": {
+      "description": "Only include models from this provider id",
+      "type": "string",
+    },
+  },
+  "type": "object",
+}
+`;
+
+exports[`tool parameters JSON Schema (wire shape) models_search 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "query": {
+      "description": "The user's model or setup wording, for example grok 4.7 max, astra, or sol 5.6",
+      "type": "string",
+    },
+  },
+  "required": [
+    "query",
+  ],
+  "type": "object",
+}
+`;
+
 exports[`tool parameters JSON Schema (wire shape) plan 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -313,6 +342,10 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
       "description": "A short (3-5 words) description of the task",
       "type": "string",
     },
+    "model": {
+      "description": "LLM setup for this subagent when the user names one, for example grok 4.7 max, astra, sol 5.6, or provider/model. Short names are resolved against connected models. A trailing effort such as max, xhigh, high, medium, low, minimal, or none selects that variant. Omit to keep the current subagent model.",
+      "type": "string",
+    },
     "prompt": {
       "description": "The task for the agent to perform",
       "type": "string",
@@ -323,6 +356,10 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
     },
     "task_id": {
       "description": "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
+      "type": "string",
+    },
+    "variant": {
+      "description": "Reasoning effort for the subagent model, such as max, xhigh, high, medium, low, minimal, or none. Omit to use an effort included in model, or the current effort when the model is unchanged.",
       "type": "string",
     },
   },

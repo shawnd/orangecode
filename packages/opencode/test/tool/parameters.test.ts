@@ -15,6 +15,7 @@ import { Parameters as Glob } from "../../src/tool/glob"
 import { Parameters as Grep } from "../../src/tool/grep"
 import { Parameters as Invalid } from "../../src/tool/invalid"
 import { Parameters as Lsp } from "../../src/tool/lsp"
+import { ListParameters as Models, SearchParameters as ModelsSearch } from "../../src/tool/models"
 import { Parameters as Plan } from "../../src/tool/plan"
 import { Parameters as Question } from "../../src/tool/question"
 import { Parameters as Read } from "../../src/tool/read"
@@ -43,6 +44,8 @@ describe("tool parameters", () => {
     test("grep", () => expect(toJsonSchema(Grep)).toMatchSnapshot())
     test("invalid", () => expect(toJsonSchema(Invalid)).toMatchSnapshot())
     test("lsp", () => expect(toJsonSchema(Lsp)).toMatchSnapshot())
+    test("models", () => expect(toJsonSchema(Models)).toMatchSnapshot())
+    test("models_search", () => expect(toJsonSchema(ModelsSearch)).toMatchSnapshot())
     test("plan", () => expect(toJsonSchema(Plan)).toMatchSnapshot())
     test("question", () => expect(toJsonSchema(Question)).toMatchSnapshot())
     test("read", () => expect(toJsonSchema(Read)).toMatchSnapshot())
@@ -225,6 +228,24 @@ describe("tool parameters", () => {
     })
   })
 
+  describe("models", () => {
+    test("accepts an empty list request", () => {
+      expect(parse(Models, {})).toEqual({})
+    })
+    test("accepts a provider filter", () => {
+      expect(parse(Models, { provider: "xai" }).provider).toBe("xai")
+    })
+  })
+
+  describe("models_search", () => {
+    test("accepts a query", () => {
+      expect(parse(ModelsSearch, { query: "grok 4.7 max" }).query).toBe("grok 4.7 max")
+    })
+    test("rejects a missing query", () => {
+      expect(accepts(ModelsSearch, {})).toBe(false)
+    })
+  })
+
   describe("skill", () => {
     test("accepts name", () => {
       expect(parse(Skill, { name: "foo" }).name).toBe("foo")
@@ -242,6 +263,17 @@ describe("tool parameters", () => {
     test("accepts optional background flag", () => {
       const parsed = parse(Task, { description: "d", prompt: "p", subagent_type: "general", background: true })
       expect(parsed.background).toBe(true)
+    })
+    test("accepts optional model and variant", () => {
+      const parsed = parse(Task, {
+        description: "d",
+        prompt: "p",
+        subagent_type: "general",
+        model: "grok 4.7 max",
+        variant: "max",
+      })
+      expect(parsed.model).toBe("grok 4.7 max")
+      expect(parsed.variant).toBe("max")
     })
     test("rejects missing prompt", () => {
       expect(accepts(Task, { description: "d", subagent_type: "general" })).toBe(false)

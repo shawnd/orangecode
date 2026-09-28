@@ -1,0 +1,6 @@
+List connected LLM setups the user can ask you to use.
+
+Favorites are listed first, then recently used models, then other connected models.
+Use this when the user asks which models or setups are available, or before choosing a subagent model.
+Pass provider/model from the result to the Task tool model parameter.
+Variants in parentheses, such as max or high, can be passed as variant or as a trailing word in model.

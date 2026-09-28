@@ -17,3 +17,4 @@ Usage notes:
 5. The agent's outputs should generally be trusted
 6. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent. Tell it how to verify its work if possible (e.g., relevant test commands).
 7. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+8. If the user names an LLM setup for subagents, pass it as the model parameter on every Task call until they choose a different one. Use the models tool to see favorites first, or models_search with their wording (for example grok 4.7 max, astra, or sol 5.6) when you need the provider/model id. A trailing effort such as max, xhigh, high, medium, low, minimal, or none selects that variant; or pass variant separately. Omit model to keep the current subagent model.

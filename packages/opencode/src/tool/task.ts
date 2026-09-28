@@ -10,7 +10,11 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
+import { Provider } from "@/provider/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Effect, Exit, Schema, Scope } from "effect"
+import { TaskModel } from "./task-model"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
@@ -49,6 +53,14 @@ const BaseParameterFields = {
       "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
   }),
   command: Schema.optional(Schema.String).annotate({ description: "The command that triggered this task" }),
+  model: Schema.optional(Schema.String).annotate({
+    description:
+      "LLM setup for this subagent when the user names one, for example grok 4.7 max, astra, sol 5.6, or provider/model. Short names are resolved against connected models. A trailing effort such as max, xhigh, high, medium, low, minimal, or none selects that variant. Omit to keep the current subagent model.",
+  }),
+  variant: Schema.optional(Schema.String).annotate({
+    description:
+      "Reasoning effort for the subagent model, such as max, xhigh, high, medium, low, minimal, or none. Omit to use an effort included in model, or the current effort when the model is unchanged.",
+  }),
 }
 
 const BaseParameters = Schema.Struct(BaseParameterFields)
@@ -84,6 +96,7 @@ export const TaskTool = Tool.define(
     const agent = yield* Agent.Service
     const background = yield* BackgroundJob.Service
     const config = yield* Config.Service
+    const provider = yield* Provider.Service
     const sessions = yield* Session.Service
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
@@ -124,6 +137,7 @@ export const TaskTool = Tool.define(
           metadata: {
             description: params.description,
             subagent_type: params.subagent_type,
+            ...(params.model ? { model: params.model } : {}),
           },
         })
       }
@@ -132,6 +146,43 @@ export const TaskTool = Tool.define(
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
       }
+
+      const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.orDie,
+      )
+      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
+      const parentVariant = msg.info.variant
+      const inherited = next.model ?? {
+        modelID: msg.info.modelID,
+        providerID: msg.info.providerID,
+      }
+      const query = params.model?.trim()
+      const effort = params.variant?.trim()
+      const requested =
+        query || effort
+          ? TaskModel.resolve({
+              query,
+              variant: effort,
+              current: inherited,
+              preferProviderID: msg.info.providerID,
+              models: candidates(yield* provider.list()),
+            })
+          : undefined
+      if (requested && !requested.ok) return yield* Effect.fail(new Error(requested.error))
+      const picked = requested?.model
+      const model = picked
+        ? {
+            providerID: ProviderV2.ID.make(picked.providerID),
+            modelID: ModelV2.ID.make(picked.modelID),
+          }
+        : inherited
+      const same = model.providerID === msg.info.providerID && model.modelID === msg.info.modelID
+      const taskVariant = picked
+        ? (picked.variant ?? (same ? parentVariant : undefined))
+        : next.model
+          ? undefined
+          : parentVariant
 
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
@@ -171,17 +222,6 @@ export const TaskTool = Tool.define(
           ],
         }))
 
-      const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
-        Effect.provideService(Database.Service, database),
-        Effect.orDie,
-      )
-      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
-      const variant = msg.info.variant
-
-      const model = next.model ?? {
-        modelID: msg.info.modelID,
-        providerID: msg.info.providerID,
-      }
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
@@ -206,7 +246,7 @@ export const TaskTool = Tool.define(
             modelID: model.modelID,
             providerID: model.providerID,
           },
-          variant: next.model ? undefined : variant,
+          variant: taskVariant,
           agent: next.name,
           parts,
         })
@@ -233,7 +273,7 @@ export const TaskTool = Tool.define(
           .prompt({
             sessionID: ctx.sessionID,
             agent: currentParent.agent ?? ctx.agent,
-            variant,
+            variant: parentVariant,
             parts: [
               {
                 type: "text",
@@ -369,3 +409,15 @@ export const TaskTool = Tool.define(
     }
   }),
 )
+
+function candidates(providers: Record<string, Provider.Info>): TaskModel.Candidate[] {
+  return Object.values(providers).flatMap((item) =>
+    Object.values(item.models).map((model) => ({
+      providerID: model.providerID,
+      modelID: model.id,
+      name: model.name,
+      releaseDate: model.release_date,
+      variants: Object.keys(model.variants ?? {}),
+    })),
+  )
+}

@@ -54,6 +54,8 @@ export function toToolKind(toolName: string): ToolKind {
 
     case "grep":
     case "glob":
+    case "models":
+    case "models_search":
     case "context":
     case "context7_resolve_library_id":
     case "context7_get_library_docs":

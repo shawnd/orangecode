@@ -24,6 +24,8 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { Provider } from "@/provider/provider"
+import { ProviderTest } from "../fake/provider"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -38,6 +40,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
     LayerNode.group([
       Agent.node,
+      Provider.node,
       BackgroundJob.node,
       EventV2Bridge.node,
       Config.node,
@@ -52,7 +55,30 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
       RuntimeFlags.node,
       Ripgrep.node,
     ]),
-    [[RuntimeFlags.node, RuntimeFlags.layer(flags)]],
+    [
+      [RuntimeFlags.node, RuntimeFlags.layer(flags)],
+      [
+        Provider.node,
+        ProviderTest.fake({
+          info: ProviderTest.info({
+            id: ProviderV2.ID.make("fixture"),
+            models: {
+              "fixture-astra": ProviderTest.model({
+                id: ModelV2.ID.make("fixture-astra"),
+                providerID: ProviderV2.ID.make("fixture"),
+                name: "Fixture Astra",
+              }),
+              "fixture-grok-4.7": ProviderTest.model({
+                id: ModelV2.ID.make("fixture-grok-4.7"),
+                providerID: ProviderV2.ID.make("fixture"),
+                name: "Fixture Grok 4.7",
+                variants: { max: { reasoningEffort: "max" }, high: { reasoningEffort: "high" } },
+              }),
+            },
+          }),
+        }).layer,
+      ],
+    ],
   )
 
 const it = testEffect(layer())
@@ -282,6 +308,62 @@ describe("tool.task", () => {
       expect(seen?.sessionID).toBe(child.id)
       expect(seen?.variant).toBe("xhigh")
     }),
+  )
+
+  it.instance(
+    "execute uses the requested subagent model",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+        yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            model: "fixture grok 4.7 max",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.model).toEqual({
+          providerID: ProviderV2.ID.make("fixture"),
+          modelID: ModelV2.ID.make("fixture-grok-4.7"),
+        })
+        expect(seen?.variant).toBe("max")
+      }),
+    {
+      config: {
+        provider: {
+          fixture: {
+            npm: "@ai-sdk/openai-compatible",
+            models: {
+              "fixture-astra": { name: "Fixture Astra" },
+              "fixture-grok-4.7": {
+                name: "Fixture Grok 4.7",
+                variants: {
+                  max: { reasoningEffort: "max" },
+                  high: { reasoningEffort: "high" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   )
 
   it.instance("execute surfaces child errors with a resumable task_id", () =>

@@ -23,6 +23,8 @@ describe("acp tool conversion", () => {
     expect(toToolKind("write")).toBe("edit")
     expect(toToolKind("grep")).toBe("search")
     expect(toToolKind("glob")).toBe("search")
+    expect(toToolKind("models")).toBe("search")
+    expect(toToolKind("models_search")).toBe("search")
     expect(toToolKind("context7_resolve_library_id")).toBe("search")
     expect(toToolKind("context7_get_library_docs")).toBe("search")
     expect(toToolKind("read")).toBe("read")
