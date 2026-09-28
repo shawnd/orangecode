@@ -850,6 +850,39 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
+it.instance("compact tool defers compaction until after its turn and resumes from the summary", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Compact from tool",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "Compact and continue" }],
+    })
+    yield* llm.tool("compact", {})
+    yield* llm.text("Summary of work so far")
+    yield* llm.text("Continuing after compaction")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(3)
+    expect(result.parts.some((part) => part.type === "text" && part.text === "Continuing after compaction")).toBe(true)
+    const history = yield* sessions.messages({ sessionID: session.id })
+    const request = history
+      .flatMap((message) => message.parts)
+      .find((part) => part.type === "tool" && part.tool === "compact")
+    expect(request?.type).toBe("tool")
+    if (request?.type === "tool") expect(request.state.status).toBe("completed")
+    expect(history.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(true)
+    expect(history.some((message) => message.info.role === "assistant" && message.info.summary)).toBe(true)
+  }),
+)
+
 it.instance("loop continues when finish is unknown", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

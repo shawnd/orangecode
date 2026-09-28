@@ -56,6 +56,7 @@ export function toToolKind(toolName: string): ToolKind {
     case "glob":
     case "models":
     case "models_search":
+    case "context_usage":
     case "context":
     case "context7_resolve_library_id":
     case "context7_get_library_docs":
@@ -65,6 +66,7 @@ export function toToolKind(toolName: string): ToolKind {
       return "read"
 
     case "task":
+    case "compact":
       return "think"
 
     default:

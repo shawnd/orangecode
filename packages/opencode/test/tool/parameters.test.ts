@@ -10,6 +10,8 @@ import { ToolJsonSchema } from "../../src/tool/json-schema"
 // provider-compatible while tools use Effect Schema internally.
 
 import { Parameters as ApplyPatch } from "../../src/tool/apply_patch"
+import { Parameters as Compact } from "../../src/tool/compact"
+import { Parameters as ContextUsage } from "../../src/tool/context-usage"
 import { Parameters as Edit } from "../../src/tool/edit"
 import { Parameters as Glob } from "../../src/tool/glob"
 import { Parameters as Grep } from "../../src/tool/grep"
@@ -38,6 +40,8 @@ const toJsonSchema = ToolJsonSchema.fromSchema
 describe("tool parameters", () => {
   describe("JSON Schema (wire shape)", () => {
     test("apply_patch", () => expect(toJsonSchema(ApplyPatch)).toMatchSnapshot())
+    test("compact", () => expect(toJsonSchema(Compact)).toMatchSnapshot())
+    test("context_usage", () => expect(toJsonSchema(ContextUsage)).toMatchSnapshot())
     test("bash", () => expect(toJsonSchema(Shell)).toMatchSnapshot())
     test("edit", () => expect(toJsonSchema(Edit)).toMatchSnapshot())
     test("glob", () => expect(toJsonSchema(Glob)).toMatchSnapshot())

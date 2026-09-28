@@ -17,6 +17,8 @@ import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { ModelsSearchTool, ModelsTool } from "./models"
+import { CompactTool } from "./compact"
+import { ContextUsageTool } from "./context-usage"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -117,6 +119,8 @@ const layer = Layer.effect(
     const skilltool = yield* SkillTool
     const models = yield* ModelsTool
     const modelsSearch = yield* ModelsSearchTool
+    const compact = yield* CompactTool
+    const contextUsage = yield* ContextUsageTool
     const agent = yield* Agent.Service
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
     const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
@@ -224,6 +228,8 @@ const layer = Layer.effect(
           skill: Tool.init(skilltool),
           models: Tool.init(models),
           modelsSearch: Tool.init(modelsSearch),
+          compact: Tool.init(compact),
+          contextUsage: Tool.init(contextUsage),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
@@ -249,6 +255,8 @@ const layer = Layer.effect(
             tool.skill,
             tool.models,
             tool.modelsSearch,
+            tool.compact,
+            tool.contextUsage,
             tool.patch,
             ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),

@@ -45,6 +45,7 @@ import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
+import { CompactTool } from "@/tool/compact"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -1317,6 +1318,20 @@ const layer = Layer.effect(
             }
 
             if (result === "stop") return "break" as const
+            if (result === "continue") {
+              const completed = yield* MessageV2.get({ sessionID, messageID: handle.message.id }).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.orDie,
+              )
+              if (
+                completed.parts.some(
+                  (part) => part.type === "tool" && part.tool === CompactTool.id && part.state.status === "completed",
+                )
+              ) {
+                yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+                return "continue" as const
+              }
+            }
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,

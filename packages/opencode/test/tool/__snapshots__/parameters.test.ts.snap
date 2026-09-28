@@ -16,6 +16,22 @@ exports[`tool parameters JSON Schema (wire shape) apply_patch 1`] = `
 }
 `;
 
+exports[`tool parameters JSON Schema (wire shape) compact 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {},
+  "type": "object",
+}
+`;
+
+exports[`tool parameters JSON Schema (wire shape) context_usage 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {},
+  "type": "object",
+}
+`;
+
 exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",

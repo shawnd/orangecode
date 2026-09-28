@@ -100,6 +100,18 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
+  it.instance("exposes compact and context_usage to the build agent", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.get("build"),
+      })
+      expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(["compact", "context_usage"]))
+    }),
+  )
   it.instance("does not expose task_status", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
