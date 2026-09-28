@@ -1,9 +1,10 @@
 import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { Config } from "@opencode-ai/core/config"
+import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
 import { ConfigProvider } from "@opencode-ai/core/config/provider"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -20,6 +21,19 @@ import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.empty)
+
+it.effect("validates compaction percentages in both config formats", () =>
+  Effect.sync(() => {
+    for (const threshold_percent of [0, -1, 101]) {
+      expect(Option.isNone(Schema.decodeUnknownOption(ConfigCompaction.Info)({ threshold_percent }))).toBe(true)
+      expect(Option.isNone(Schema.decodeUnknownOption(ConfigV1.Info)({ compaction: { threshold_percent } }))).toBe(true)
+    }
+    expect(Option.isSome(Schema.decodeUnknownOption(ConfigCompaction.Info)({ threshold_percent: 80.5 }))).toBe(true)
+    expect(Option.isSome(Schema.decodeUnknownOption(ConfigV1.Info)({ compaction: { threshold_percent: 80.5 } }))).toBe(
+      true,
+    )
+  }),
+)
 
 function testLayer(
   directory: string,
@@ -340,6 +354,7 @@ describe("Config", () => {
                   prune: false,
                   keep: { tokens: 2000 },
                   buffer: 10000,
+                  threshold_percent: 80,
                 },
                 skills: ["./skills", "~/shared-skills", "https://example.com/.well-known/skills/"],
                 instructions: ["CONTRIBUTING.md", ".cursor/rules/*.md", "https://example.com/shared-rules.md"],
@@ -426,6 +441,7 @@ describe("Config", () => {
               prune: false,
               keep: { tokens: 2000 },
               buffer: 10000,
+              threshold_percent: 80,
             })
             expect(documents[0]?.info.skills).toEqual([
               "./skills",
@@ -558,7 +574,13 @@ describe("Config", () => {
                     },
                   },
                 },
-                compaction: { auto: true, tail_turns: 3, preserve_recent_tokens: 2000, reserved: 10000 },
+                compaction: {
+                  auto: true,
+                  tail_turns: 3,
+                  preserve_recent_tokens: 2000,
+                  reserved: 10000,
+                  threshold_percent: 80,
+                },
                 experimental: { mcp_timeout: 5000 },
                 mcp: {
                   local: { type: "local", command: ["node", "server.js"], enabled: false, timeout: 10000 },
@@ -642,6 +664,7 @@ describe("Config", () => {
               prune: undefined,
               keep: { tokens: 2000 },
               buffer: 10000,
+              threshold_percent: 80,
             })
             expect(documents[0]?.info.mcp).toMatchObject({
               timeout: { request: 5000 },

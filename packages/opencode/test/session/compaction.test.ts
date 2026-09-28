@@ -381,6 +381,35 @@ function compactionContext(context: string) {
 
 describe("session.compaction.isOverflow", () => {
   it.live(
+    "compacts at a configured percentage of the model context",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const model = createModel({ context: 200_000, output: 32_000 })
+          const tokens = { input: 95_000, output: 5_000, reasoning: 0, cache: { read: 0, write: 0 } }
+          expect(yield* compact.isOverflow({ tokens, model })).toBe(true)
+          expect(yield* compact.isOverflow({ tokens: { ...tokens, input: 94_999 }, model })).toBe(false)
+        }),
+      { config: { compaction: { threshold_percent: 50 } } },
+    ),
+  )
+
+  it.live(
+    "keeps the safe token limit when the configured percentage is higher",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const model = createModel({ context: 100_000, output: 32_000 })
+          const tokens = { input: 69_000, output: 1_000, reasoning: 0, cache: { read: 0, write: 0 } }
+          expect(yield* compact.isOverflow({ tokens, model })).toBe(true)
+        }),
+      { config: { compaction: { threshold_percent: 95 } } },
+    ),
+  )
+
+  it.live(
     "returns true when token count exceeds usable context",
     provideTmpdirInstance(() =>
       Effect.gen(function* () {

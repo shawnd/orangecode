@@ -164,6 +164,12 @@ export const Info = Schema.Struct({
       reserved: Schema.optional(NonNegativeInt).annotate({
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
       }),
+      threshold_percent: Schema.optional(
+        Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
+      ).annotate({
+        description:
+          "Compact at this percentage of the model context window, subject to the safe output and input limits.",
+      }),
     }),
   ),
   experimental: Schema.optional(

@@ -3,6 +3,8 @@ import {
   LLMClient,
   LLMError,
   LLMEvent,
+  LLM,
+  Message,
   Model,
   TransportReason,
   InvalidRequestReason,
@@ -40,6 +42,7 @@ import { ApplicationTools } from "@opencode-ai/core/tool/application-tools"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
+import { SessionCompaction } from "@opencode-ai/core/session/compaction"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import {
   SessionContextEpochTable,
@@ -1177,6 +1180,54 @@ describe("SessionRunnerLLM", () => {
       expect(continuation).not.toContain("EARLIER_END")
       expect(continuation).toContain("<recent-context>\n[Assistant]: Earlier answer")
       expect(continuation).toContain(`RECENT_BOUNDARY ${"b".repeat(3_000)} RECENT_END`)
+    }),
+  )
+
+  it.effect("uses the configured context percentage before the default token buffer", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const events = yield* EventV2.Service
+      const llm = yield* LLMClient.Service.pipe(Effect.provide(client))
+      const request = LLM.request({ model: compactModel, messages: [Message.user("x".repeat(10_000))], tools: [] })
+      const entries = [
+        {
+          seq: 1,
+          message: SessionMessage.User.make({
+            id: SessionMessage.ID.create(),
+            type: "user",
+            text: "Earlier request",
+            time: { created: DateTime.makeUnsafe(0) },
+          }),
+        },
+        {
+          seq: 2,
+          message: SessionMessage.User.make({
+            id: SessionMessage.ID.create(),
+            type: "user",
+            text: "Recent request",
+            time: { created: DateTime.makeUnsafe(0) },
+          }),
+        },
+      ]
+      const config = (threshold_percent: number) => [
+        new Config.Document({
+          type: "document",
+          info: new Config.Info({
+            compaction: new ConfigCompaction.Info({
+              threshold_percent,
+              buffer: 100,
+              keep: new ConfigCompaction.Keep({ tokens: 10 }),
+            }),
+          }),
+        }),
+      ]
+      const input = { sessionID, entries, model: compactModel, request }
+      const priorRequests = requests.length
+      expect(yield* SessionCompaction.make({ events, llm, config: config(100) }).compactIfNeeded(input)).toBe(false)
+      expect(requests).toHaveLength(priorRequests)
+      responses = [fragmentFixture("text", "percent-summary", ["## Objective\n- Continue"]).completeEvents]
+      expect(yield* SessionCompaction.make({ events, llm, config: config(50) }).compactIfNeeded(input)).toBe(true)
+      expect(requests).toHaveLength(priorRequests + 1)
     }),
   )
 

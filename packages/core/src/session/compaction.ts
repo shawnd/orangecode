@@ -63,6 +63,7 @@ type Settings = {
   readonly auto: boolean
   readonly buffer: number
   readonly tokens: number
+  readonly threshold_percent?: number
 }
 
 type Dependencies = {
@@ -129,6 +130,7 @@ const settings = (documents: readonly Config.Entry[]) => {
       auto: current.auto ?? result.auto,
       buffer: current.buffer ?? result.buffer,
       tokens: current.keep?.tokens ?? result.tokens,
+      threshold_percent: current.threshold_percent ?? result.threshold_percent,
     }),
     { auto: true, buffer: DEFAULT_BUFFER, tokens: DEFAULT_KEEP_TOKENS },
   )
@@ -234,9 +236,12 @@ export const make = (dependencies: Dependencies) => {
     const context = input.model.route.defaults.limits?.context
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
+    const limit = Math.min(
+      context - Math.max(output, config.buffer),
+      config.threshold_percent === undefined ? context : (context * config.threshold_percent) / 100,
+    )
     if (
-      estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) <=
-      context - Math.max(output, config.buffer)
+      estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) <= limit
     )
       return false
     return yield* compactAfterOverflow(input)

@@ -12,4 +12,10 @@ export class Info extends Schema.Class<Info>("ConfigV2.Compaction")({
   prune: Schema.Boolean.pipe(Schema.optional),
   keep: Keep.pipe(Schema.optional),
   buffer: NonNegativeInt.pipe(Schema.optional),
+  threshold_percent: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100))
+    .pipe(Schema.optional)
+    .annotate({
+      description:
+        "Compact at this percentage of the model context window, subject to the safe output and input limits.",
+    }),
 }) {}
