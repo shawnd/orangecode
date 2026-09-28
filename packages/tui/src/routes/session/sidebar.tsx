@@ -5,12 +5,16 @@ import { useTheme } from "../../context/theme"
 import { useTuiConfig } from "../../config"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { usePluginRuntime } from "../../plugin/runtime"
+import { useClipboard } from "../../context/clipboard"
+import { useToast } from "../../ui/toast"
 
 import { getScrollAcceleration } from "../../util/scroll"
 import { WorkspaceLabel } from "../../component/workspace-label"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const pluginRuntime = usePluginRuntime()
+  const clipboard = useClipboard()
+  const toast = useToast()
   const project = useProject()
   const sync = useSync()
   const { theme } = useTheme()
@@ -58,7 +62,17 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                   <b>{session()!.title}</b>
                 </text>
                 <Show when={InstallationChannel !== "latest"}>
-                  <text fg={theme.textMuted}>{props.sessionID}</text>
+                  <text
+                    fg={theme.textMuted}
+                    onMouseUp={() =>
+                      void clipboard
+                        .write?.(props.sessionID)
+                        .then(() => toast.show({ message: "Session ID copied to clipboard", variant: "info" }))
+                        .catch(toast.error)
+                    }
+                  >
+                    {props.sessionID}
+                  </text>
                 </Show>
                 <Show when={session()!.workspaceID}>
                   <text fg={theme.textMuted}>

@@ -6,7 +6,7 @@ import { useTuiPaths } from "../../context/runtime"
 
 const id = "internal:sidebar-footer"
 
-function View(props: { api: TuiPluginApi; sessionID: string }) {
+export function SidebarFooterView(props: { api: TuiPluginApi; sessionID: string }) {
   const paths = useTuiPaths()
   const theme = () => props.api.theme.current
   const has = createMemo(() =>
@@ -16,6 +16,14 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   )
   const done = createMemo(() => props.api.kv.get("dismissed_getting_started", false))
   const show = createMemo(() => !has() && !done())
+  const changes = createMemo(() =>
+    props.api.state.session
+      .diff(props.sessionID)
+      .reduce(
+        (total, file) => ({ additions: total.additions + file.additions, deletions: total.deletions + file.deletions }),
+        { additions: 0, deletions: 0 },
+      ),
+  )
   const path = createMemo(() => {
     const session = props.api.state.session.get(props.sessionID)
     const dir = session?.directory || props.api.state.path.directory || paths.cwd
@@ -64,10 +72,20 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
           </box>
         </box>
       </Show>
-      <text>
-        <span style={{ fg: theme().textMuted }}>{path().parent}/</span>
-        <span style={{ fg: theme().text }}>{path().name}</span>
-      </text>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text flexShrink={1} wrapMode="none">
+          <span style={{ fg: theme().textMuted }}>{path().parent}/</span>
+          <span style={{ fg: theme().text }}>{path().name}</span>
+        </text>
+        <box flexDirection="row" gap={1} flexShrink={0}>
+          <Show when={changes().additions}>
+            <text fg={theme().diffAdded}>+{changes().additions}</text>
+          </Show>
+          <Show when={changes().deletions}>
+            <text fg={theme().diffRemoved}>-{changes().deletions}</text>
+          </Show>
+        </box>
+      </box>
       <text fg={theme().textMuted}>
         <span style={{ fg: theme().success }}>•</span> <b>Open</b>
         <span style={{ fg: theme().text }}>
@@ -84,7 +102,7 @@ const tui: TuiPlugin = async (api) => {
     order: 100,
     slots: {
       sidebar_footer(_ctx, props) {
-        return <View api={api} sessionID={props.session_id} />
+        return <SidebarFooterView api={api} sessionID={props.session_id} />
       },
     },
   })
