@@ -88,6 +88,8 @@ import { SessionCost, useSessionCostChildren } from "./cost"
 import { homeInputHeight } from "../../startup/presentation"
 import { cacheStartupPresentation } from "../../startup/cache"
 import type { StartupSlashDraft } from "../../startup/slashes"
+import { gatherHerdrSessions, parseHerdrCommand, type HerdrScope } from "../../util/herdr-sessions"
+import { DialogSelect } from "../../ui/dialog-select"
 
 registerOpencodeSpinner()
 
@@ -119,6 +121,7 @@ function pastedFilepath(value: string, platform: string) {
 
 export type PromptRef = {
   focused: boolean
+  readonly gatheringHerdr?: boolean
   current: PromptInfo
   set(prompt: PromptInfo): void
   reset(): void
@@ -170,6 +173,8 @@ let stashed: { prompt: PromptInfo; cursor: number } | undefined
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
+  let herdrRequest = 0
+  const [herdrGathering, setHerdrGathering] = createSignal(0)
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
 
   const leader = useLeaderActive()
@@ -468,7 +473,7 @@ export function Prompt(props: PromptProps) {
             return
           }
           const handled = await submit()
-          if (!handled) return
+          if (handled !== true) return
 
           dialog.clear()
         },
@@ -480,7 +485,7 @@ export function Prompt(props: PromptProps) {
         category: "Prompt",
         enabled: !props.disabled && (!!store.prompt.input || hasPendingMessages()),
         run: async () => {
-          if (await submit(true)) dialog.clear()
+          if ((await submit(true)) === true) dialog.clear()
         },
       },
       {
@@ -648,6 +653,15 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Gather Herdr sessions",
+        desc: "Add session, status, and tab context from Herdr panes",
+        name: "prompt.herdr",
+        category: "Prompt",
+        slashName: "herdr",
+        enabled: process.env.HERDR_ENV === "1",
+        run: () => openHerdrScopes(),
+      },
+      {
         title: "Warp",
         desc: "Change the workspace for the session",
         name: "workspace.set",
@@ -730,6 +744,9 @@ export function Prompt(props: PromptProps) {
     get current() {
       return store.prompt
     },
+    get gatheringHerdr() {
+      return herdrGathering() !== 0
+    },
     focus() {
       input.focus()
     },
@@ -737,12 +754,14 @@ export function Prompt(props: PromptProps) {
       input.blur()
     },
     set(prompt) {
+      herdrRequest++
       input.setText(prompt.input)
       setStore("prompt", prompt)
       restoreExtmarksFromParts(prompt.parts)
       input.gotoBufferEnd()
     },
     reset() {
+      herdrRequest++
       input.clear()
       input.extmarks.clear()
       setStore("prompt", {
@@ -815,6 +834,7 @@ export function Prompt(props: PromptProps) {
   })
 
   onCleanup(() => {
+    herdrRequest++
     if (store.prompt.input) {
       stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
     }
@@ -1131,6 +1151,71 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
+  createEffect(
+    on(
+      () => [props.sessionID, props.visible, props.disabled, store.mode, dialog.stack.length],
+      () => herdrRequest++,
+    ),
+  )
+  function openHerdrScopes() {
+    if (process.env.HERDR_ENV !== "1") {
+      toast.show({ message: "/herdr requires a Herdr pane", variant: "error" })
+      return
+    }
+    dialog.replace(() => (
+      <DialogSelect<HerdrScope>
+        title="Gather Herdr sessions"
+        current="workspace"
+        options={[
+          { title: "Current workspace", value: "workspace", description: "Across all tabs in this workspace" },
+          { title: "Current tab", value: "tab", description: "All OpenCode panes in this tab" },
+          { title: "All workspaces", value: "all", description: "All OpenCode panes on the connected Herdr server" },
+        ]}
+        onSelect={(option) => {
+          dialog.clear()
+          void addHerdrContext(option.value)
+        }}
+      />
+    ))
+  }
+
+  async function addHerdrContext(scope: HerdrScope, command = false) {
+    const request = ++herdrRequest
+    const sessionID = props.sessionID
+    const original = input.plainText
+    const draft = JSON.stringify(unwrap(store.prompt))
+    const ownsDraft = () =>
+      request === herdrRequest &&
+      !input.isDestroyed &&
+      props.sessionID === sessionID &&
+      input.plainText === original &&
+      JSON.stringify(unwrap(store.prompt)) === draft &&
+      props.visible !== false &&
+      !props.disabled &&
+      store.mode === "normal" &&
+      dialog.stack.length === 0
+    setHerdrGathering(request)
+    const snapshot = await gatherHerdrSessions(scope, sessionID).catch((error) => {
+      if (ownsDraft())
+        toast.show({ title: "Could not gather Herdr sessions", message: errorMessage(error), variant: "error" })
+      return undefined
+    })
+    if (herdrGathering() === request) setHerdrGathering(0)
+    if (!snapshot || !ownsDraft()) return false
+    if (command) {
+      history.append({ ...store.prompt, mode: store.mode })
+      input.extmarks.clear()
+      input.clear()
+      setStore("prompt", { input: "", parts: [] })
+      setStore("extmarkToPartIndex", new Map())
+    }
+    input.gotoBufferEnd()
+    if (input.plainText && !/\s$/.test(input.plainText)) input.insertText("\n")
+    pasteText(snapshot.text, `[Herdr ${scope}: ${snapshot.count} OpenCode panes]`)
+    input.focus()
+    return true
+  }
+
   async function submit(sendNow = false) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -1148,6 +1233,7 @@ export function Prompt(props: PromptProps) {
   }
 
   async function submitInner(sendNow: boolean) {
+    herdrRequest++
     workspace.clearNotice()
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1162,6 +1248,26 @@ export function Prompt(props: PromptProps) {
     if (auto()?.visible) return false
     if (!store.prompt.input && !(sendNow && hasPendingMessages())) return false
     const trimmed = store.prompt.input.trim()
+    if (store.mode === "normal" && /^\/herdr(?:\s|$)/.test(trimmed)) {
+      if (process.env.HERDR_ENV !== "1") {
+        toast.show({ message: "/herdr requires a Herdr pane", variant: "error" })
+        return false
+      }
+      const parsed = parseHerdrCommand(trimmed)
+      if (!parsed) return false
+      if (parsed.error) {
+        toast.show({ message: parsed.error, variant: "error" })
+        return false
+      }
+      if (parsed.scope) return addHerdrContext(parsed.scope, true)
+      history.append({ ...store.prompt, mode: store.mode })
+      input.extmarks.clear()
+      input.clear()
+      setStore("prompt", { input: "", parts: [] })
+      setStore("extmarkToPartIndex", new Map())
+      openHerdrScopes()
+      return "dialog" as const
+    }
     if (store.mode === "normal" && reminders && /^\/(remind|reminders|notifications)(?:\s|$)/.test(trimmed)) {
       const text = trimmed.replace(/^\/(?:remind|reminders|notifications)\s*/, "")
       const list = /^\/(?:reminders|notifications)(?:\s|$)/.test(trimmed)
@@ -1536,6 +1642,7 @@ export function Prompt(props: PromptProps) {
   }
 
   function clearPrompt() {
+    herdrRequest++
     if (store.prompt.input.trim().length >= DRAFT_RETENTION_MIN_CHARS || store.prompt.parts.length > 0) {
       history.append({
         ...store.prompt,
@@ -1679,6 +1786,9 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
+            <Show when={herdrGathering()}>
+              <text fg={theme.textMuted}>Gathering Herdr sessions…</text>
+            </Show>
             <textarea
               width="100%"
               placeholder={placeholderText()}
@@ -1690,6 +1800,7 @@ export function Prompt(props: PromptProps) {
               onContentChange={() => {
                 setTaskSelection(undefined)
                 const value = input.plainText
+                if (value !== store.prompt.input) herdrRequest++
                 setStore("prompt", "input", value)
                 auto()?.onInput(value)
                 syncExtmarksWithPromptParts()

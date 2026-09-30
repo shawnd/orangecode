@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
-import { MouseButton } from "@opentui/core"
+import { MouseButton, TextareaRenderable, type Renderable } from "@opentui/core"
 import { testRender, useRenderer } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { onCleanup, Show } from "solid-js"
+import { createSignal, onCleanup, Show } from "solid-js"
 import { Shell } from "../../../src/routes/shell"
 import { Prompt, type PromptRef } from "../../../src/component/prompt"
 import { FrecencyProvider } from "../../../src/component/prompt/frecency"
@@ -25,7 +25,7 @@ import { RouteProvider, useRoute } from "../../../src/context/route"
 import { SDKProvider } from "../../../src/context/sdk"
 import { SyncProvider, useSync } from "../../../src/context/sync"
 import { ThemeProvider } from "../../../src/context/theme"
-import { OpencodeKeymapProvider, registerOpencodeKeymap, useBindings } from "../../../src/keymap"
+import { OpencodeKeymapProvider, registerOpencodeKeymap, useBindings, useOpencodeKeymap } from "../../../src/keymap"
 import { PromptHistoryProvider, usePromptHistory } from "../../../src/prompt/history"
 import { PromptStashProvider } from "../../../src/prompt/stash"
 import { useDialog } from "../../../src/ui/dialog"
@@ -42,6 +42,7 @@ import { NativeReminders } from "@opencode-ai/core/native/reminders"
 import { TuiStartupProvider, type EarlyInput } from "../../../src/context/runtime"
 import { useStartupModelDialog } from "../../../src/component/startup-model-dialog"
 import type { StartupSlashDraft } from "../../../src/startup/slashes"
+import { chmod } from "node:fs/promises"
 
 async function mount(
   root: string,
@@ -49,7 +50,9 @@ async function mount(
   variants = true,
   startup?: { input: EarlyInput; load: Promise<void> },
   submission?: { abort: Promise<Response> },
+  options: { submitKey?: string } = {},
 ) {
+  const [activeSession, setSession] = createSignal(sessionID)
   const events = createEventSource()
   const aborted: string[] = []
   const submitted: { path: string; body?: unknown }[] = []
@@ -118,6 +121,7 @@ async function mount(
         history: ReturnType<typeof usePromptHistory>
         kv: ReturnType<typeof useKV>
         toast: ReturnType<typeof useToast>
+        keymap: ReturnType<typeof useOpencodeKeymap>
       }
     | undefined
   let prompt: PromptRef | undefined
@@ -126,7 +130,16 @@ async function mount(
     const dialog = useDialog()
     const sync = useSync()
     const route = useRoute()
-    context = { local, dialog, route, sync, history: usePromptHistory(), kv: useKV(), toast: useToast() }
+    context = {
+      local,
+      dialog,
+      route,
+      sync,
+      history: usePromptHistory(),
+      kv: useKV(),
+      toast: useToast(),
+      keymap: useOpencodeKeymap(),
+    }
     useStartupModelDialog()
     // Register app-level commands so clicks exercise real keymap dispatch and picker components.
     useBindings(() => ({
@@ -155,7 +168,7 @@ async function mount(
         fallback={
           <box paddingTop={10}>
             <Prompt
-              sessionID={sessionID}
+              sessionID={activeSession()}
               visible={sync.ready}
               ref={(ref) => {
                 prompt = ref
@@ -171,7 +184,10 @@ async function mount(
   function Harness() {
     const renderer = useRenderer()
     const keymap = createDefaultOpenTuiKeymap(renderer)
-    const config = createTuiResolvedConfig({ theme: "opencode" })
+    const config = createTuiResolvedConfig({
+      theme: "opencode",
+      ...(options.submitKey ? { keybinds: { prompt_submit: options.submitKey } } : {}),
+    })
     onCleanup(registerOpencodeKeymap(keymap, renderer, config))
     return (
       <TestTuiContexts
@@ -256,6 +272,7 @@ async function mount(
     events,
     aborted,
     submitted,
+    setSession,
     sessionRequests: calls.session,
     prompt() {
       if (!prompt) throw new Error("Prompt not ready")
@@ -1174,6 +1191,219 @@ for (const sessionID of [undefined, "metadata-session"]) {
   })
 }
 
+async function herdrFixture(root: string, delayed = false) {
+  const env = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV }
+  if (delayed) await Bun.write(`${root}/hold`, "1")
+  await Bun.write(
+    `${root}/herdr`,
+    `#!${process.execPath}
+import { appendFileSync } from "node:fs"
+const root = import.meta.dir
+appendFileSync(root + "/started", "started\\n")
+if (await Bun.file(root + "/hold").exists()) {
+  while (!await Bun.file(root + "/release").exists()) await Bun.sleep(5)
+}
+
+const pane = { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", agent: "opencode", agent_status: "working", terminal_title_stripped: "OC | Test task", cwd: "/test/repo", agent_session: { agent: "opencode", kind: "id", value: "metadata-session" } }
+const args = process.argv.slice(2)
+const result = args[1] === "current" ? { pane } : args[0] === "pane" ? { panes: [pane] } : args[0] === "tab" ? { tabs: [{ tab_id: "w1:t1", label: "Test tab" }] } : { workspaces: [{ workspace_id: "w1", label: "Test workspace" }] }
+console.log(JSON.stringify({ result }))
+appendFileSync(root + "/completed", "completed\\n")
+`,
+  )
+  await chmod(`${root}/herdr`, 0o755)
+  process.env.PATH = `${root}:${env.PATH}`
+  process.env.HERDR_ENV = "1"
+  return {
+    async wait(state: "started" | "completed") {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline) {
+        if (
+          (
+            await Bun.file(`${root}/${state}`)
+              .text()
+              .catch(() => "")
+          )
+            .trim()
+            .split("\n").length === 4
+        )
+          return
+        await Bun.sleep(5)
+      }
+      throw new Error(`Herdr fixture did not reach ${state}`)
+    },
+    release: () => Bun.write(`${root}/release`, "1"),
+    async [Symbol.asyncDispose]() {
+      await Bun.write(`${root}/release`, "1")
+      if (await Bun.file(`${root}/started`).exists()) await this.wait("completed")
+      Object.entries(env).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key]
+          return
+        }
+        process.env[key] = value
+      })
+    },
+  }
+}
+
+function textarea(item: Renderable, text: string): TextareaRenderable | undefined {
+  if (item instanceof TextareaRenderable && item.plainText === text) return item
+  return item
+    .getChildren()
+    .map((child) => textarea(child, text))
+    .find((input) => input !== undefined)
+}
+
+for (const binding of ["send now", "rebound submit"]) {
+  test(`bare /herdr keeps its scope picker open through ${binding}`, async () => {
+    await using tmp = await tmpdir()
+    await using fixture = await herdrFixture(tmp.path)
+    await using view = await mount(
+      tmp.path,
+      "metadata-session",
+      true,
+      undefined,
+      undefined,
+      binding === "rebound submit" ? { submitKey: "ctrl+y" } : {},
+    )
+    await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+    view.prompt().set({ input: "/herdr ", parts: [] })
+    view.app.mockInput.pressKey(binding === "send now" ? "RETURN" : "y", { ctrl: true })
+    await view.waitForFrame((frame) => frame.includes("Gather Herdr sessions"))
+    await view.app.renderOnce()
+    expect(view.ctx().dialog.stack).toHaveLength(1)
+    expect(view.submitted).toHaveLength(0)
+    view.app.mockInput.pressEnter()
+    await view.waitForFrame((frame) => frame.includes("[Herdr workspace: 1 OpenCode panes]"))
+    expect(view.prompt().current.parts).toHaveLength(1)
+    expect(view.submitted).toHaveLength(0)
+  })
+}
+
+for (const change of ["reset", "submit", "session", "dialog", "edit", "restore"] as const) {
+  test(`late Herdr context is discarded after ${change}`, async () => {
+    await using tmp = await tmpdir()
+    await using fixture = await herdrFixture(tmp.path, true)
+    await using view = await mount(tmp.path, "metadata-session")
+    await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+    view.prompt().set({ input: change === "edit" ? "/herdr workspace" : "Original draft", parts: [] })
+    if (change === "edit") view.app.mockInput.pressEnter()
+    if (change !== "edit") {
+      view.ctx().keymap.dispatchCommand("prompt.herdr")
+      await view.waitForFrame((frame) => frame.includes("Gather Herdr sessions"))
+      view.app.mockInput.pressEnter()
+    }
+    await fixture.wait("started")
+    expect(view.prompt().gatheringHerdr).toBe(true)
+    if (change === "reset") {
+      view.prompt().reset()
+      view.prompt().set({ input: "New draft", parts: [] })
+    }
+    if (change === "submit") {
+      view.app.mockInput.pressEnter()
+      await view.waitForFrame(() => view.submitted.length === 1)
+      view.prompt().set({ input: "Next draft", parts: [] })
+    }
+    if (change === "session") view.setSession("other-session")
+    if (change === "dialog") {
+      view.ctx().keymap.dispatchCommand("model.list")
+      await view.waitForFrame((frame) => frame.includes("Select model"))
+    }
+    if (change === "edit") {
+      view.prompt().set({
+        input: "/herdr workspace question [Image 1]",
+        parts: [
+          {
+            type: "file",
+            mime: "image/png",
+            url: "data:image/png;base64,aGVsbG8=",
+            source: { type: "file", path: "image.png", text: { value: "[Image 1]", start: 26, end: 35 } },
+          },
+        ],
+      })
+    }
+    if (change === "restore") {
+      const input = textarea(view.app.renderer.root, "Original draft")
+      if (!input) throw new Error("Prompt textarea not found")
+      input.insertText("x")
+      expect(input.plainText).not.toBe("Original draft")
+      await view.waitForFrame(() => view.prompt().current.input !== "Original draft")
+      expect(view.prompt().current.input).not.toBe("Original draft")
+      input.setText("Original draft")
+      await view.waitForFrame(() => view.prompt().current.input === "Original draft")
+      expect(input.plainText).toBe("Original draft")
+      expect(view.prompt().current.input).toBe("Original draft")
+    }
+    await fixture.release()
+    await fixture.wait("completed")
+    await view.waitForFrame(() => !view.prompt().gatheringHerdr)
+    expect(view.prompt().current.input).toBe(
+      change === "reset"
+        ? "New draft"
+        : change === "submit"
+          ? "Next draft"
+          : change === "edit"
+            ? "/herdr workspace question [Image 1]"
+            : "Original draft",
+    )
+    expect(view.prompt().current.parts.filter((part) => part.type === "text")).toHaveLength(0)
+    if (change === "edit") expect(view.prompt().current.parts).toHaveLength(1)
+    if (change === "dialog") {
+      expect(view.ctx().dialog.stack).toHaveLength(1)
+      expect(view.prompt().focused).toBe(false)
+    }
+    expect(view.submitted).toHaveLength(change === "submit" ? 1 : 0)
+  })
+}
+
+test("Herdr palette gathering and cancellation preserve prose, folded text, and image extmarks", async () => {
+  await using tmp = await tmpdir()
+  await using fixture = await herdrFixture(tmp.path)
+  await using view = await mount(tmp.path, "metadata-session")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  const draft = {
+    input: "Review [Pasted text] [Image 1]",
+    parts: [
+      {
+        type: "text" as const,
+        text: "Existing folded context",
+        source: { text: { value: "[Pasted text]", start: 7, end: 20 } },
+      },
+      {
+        type: "file" as const,
+        mime: "image/png",
+        url: "data:image/png;base64,aGVsbG8=",
+        source: { type: "file" as const, path: "image.png", text: { value: "[Image 1]", start: 21, end: 30 } },
+      },
+    ],
+  }
+  view.prompt().set(draft)
+  view.ctx().keymap.dispatchCommand("prompt.herdr")
+  await view.waitForFrame((frame) => frame.includes("Gather Herdr sessions"))
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame(() => view.ctx().dialog.stack.length === 0)
+  expect(view.prompt().current).toEqual(draft)
+  view.ctx().keymap.dispatchCommand("prompt.herdr")
+  await view.waitForFrame((frame) => frame.includes("Gather Herdr sessions"))
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("[Herdr workspace: 1 OpenCode panes]"))
+  expect(view.prompt().current.parts).toHaveLength(3)
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame(() => view.submitted.length === 1)
+  expect(view.submitted[0].body).toEqual(
+    expect.objectContaining({
+      parts: expect.arrayContaining([
+        expect.objectContaining({ type: "text", text: expect.stringContaining("Existing folded context") }),
+        expect.objectContaining({ type: "file", mime: "image/png", url: draft.parts[1].url }),
+      ]),
+    }),
+  )
+  expect(JSON.stringify(view.submitted[0].body)).toContain("Session: metadata-session")
+  expect(JSON.stringify(view.submitted[0].body)).not.toContain("[Pasted text]")
+  expect(JSON.stringify(view.submitted[0].body)).not.toContain("[Herdr workspace:")
+})
+
 test("chat session displays default variant for a model with no variants", async () => {
   await using tmp = await tmpdir()
   using view = await mount(tmp.path, "metadata-session", false)
@@ -1235,3 +1465,83 @@ test("submitting reminder slash commands keeps their dialog open and clears the 
     expect(frame).not.toContain(command.trim())
   }
 })
+
+for (const sessionID of [undefined, "metadata-session"]) {
+  test(`Herdr commands attach context on ${sessionID ? "chat session" : "home"} without sending a prompt`, async () => {
+    await using tmp = await tmpdir()
+    const env = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV }
+    await Bun.write(
+      `${tmp.path}/herdr`,
+      `#!${process.execPath}
+if (await Bun.file(import.meta.dir + "/failure").text().catch(() => "") === "1") { console.error("Herdr unavailable"); process.exit(1) }
+const pane = { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1", agent: "opencode", agent_status: "working", terminal_title_stripped: "OC | Test task", cwd: "/test/repo", agent_session: { agent: "opencode", kind: "id", value: "metadata-session" } }
+const args = process.argv.slice(2)
+const result = args[1] === "current" ? { pane } : args[0] === "pane" ? { panes: [pane] } : args[0] === "tab" ? { tabs: [{ tab_id: "w1:t1", label: "Test tab" }] } : { workspaces: [{ workspace_id: "w1", label: "Test workspace" }] }
+console.log(JSON.stringify({ result }))
+`,
+    )
+    await chmod(`${tmp.path}/herdr`, 0o755)
+    process.env.PATH = `${tmp.path}:${env.PATH}`
+    process.env.HERDR_ENV = "1"
+    try {
+      await using view = await mount(tmp.path, sessionID)
+      await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+      view.prompt().set({ input: "/herdr unsupported", parts: [] })
+      view.app.mockInput.pressEnter()
+      await view.waitForFrame(() => !!view.ctx().toast.currentToast?.message.includes("Usage: /herdr"))
+      expect(view.prompt().current.input).toBe("/herdr unsupported")
+      expect(view.submitted).toHaveLength(0)
+      await Bun.write(`${tmp.path}/failure`, "1")
+      view.prompt().set({ input: "/herdr workspace", parts: [] })
+      view.app.mockInput.pressEnter()
+      await view.waitForFrame(() => !!view.ctx().toast.currentToast?.message.includes("Herdr unavailable"))
+      expect(view.prompt().current.input).toBe("/herdr workspace")
+      expect(view.submitted).toHaveLength(0)
+      await Bun.write(`${tmp.path}/failure`, "0")
+      for (const scope of ["tab", "workspace", "all"]) {
+        view.prompt().set({ input: `/herdr ${scope}`, parts: [] })
+        view.app.mockInput.pressEnter()
+        await view.waitForFrame((frame) => frame.includes(`[Herdr ${scope}: 1 OpenCode panes]`))
+        expect(view.submitted).toHaveLength(0)
+        expect(view.prompt().current.parts).toContainEqual(
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining('Tab "Test tab" (w1:t1)'),
+          }),
+        )
+      }
+      view.prompt().set({ input: "/herdr ", parts: [] })
+      view.app.mockInput.pressEnter()
+      await view.waitForFrame((frame) => frame.includes("Gather Herdr sessions") && frame.includes("Current workspace"))
+      expect(view.prompt().current.input).toBe("")
+      view.app.mockInput.pressEnter()
+      await view.waitForFrame((frame) => frame.includes("[Herdr workspace: 1 OpenCode panes]"))
+      expect(view.submitted).toHaveLength(0)
+      if (!sessionID) return
+      const context = view.prompt().current
+      view.prompt().set({ ...context, input: `${context.input}What is working?` })
+      view.app.mockInput.pressEnter()
+      await view.waitForFrame(() => view.submitted.length > 0)
+      expect(view.submitted[0].body).toEqual(
+        expect.objectContaining({
+          parts: expect.arrayContaining([
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("Session: metadata-session"),
+            }),
+          ]),
+        }),
+      )
+      expect(JSON.stringify(view.submitted[0].body)).toContain("What is working?")
+      expect(JSON.stringify(view.submitted[0].body)).not.toContain("[Herdr workspace:")
+    } finally {
+      Object.entries(env).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key]
+          return
+        }
+        process.env[key] = value
+      })
+    }
+  })
+}
