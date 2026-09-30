@@ -121,6 +121,9 @@ function makeMcp(instructions: MCP.ServerInstructions[] = []) {
       resources: () => Effect.succeed({}),
       resourceTemplates: () => Effect.succeed({}),
       add: () => Effect.succeed({ status: { status: "disabled" as const } }),
+      configured: () => Effect.succeed({}),
+      configure: () => Effect.die("unexpected MCP configure"),
+      remove: () => Effect.die("unexpected MCP remove"),
       connect: () => Effect.void,
       disconnect: () => Effect.void,
       getPrompt: () => Effect.succeed(undefined),
@@ -819,6 +822,55 @@ it.instance("static loop consumes queued replies across turns", () =>
 
     expect(yield* llm.hits).toHaveLength(2)
     expect(yield* llm.pending).toBe(0)
+  }),
+)
+
+it.instance("loads MCP management tools after discovery and resets them for the next user request", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "MCP discovery",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "List my MCP servers" }],
+    })
+    yield* llm.tool("mcp_tools", {})
+    yield* llm.tool("mcp_list", {})
+    yield* llm.text("Done")
+    yield* prompt.loop({ sessionID: session.id })
+
+    const hits = yield* llm.hits
+    expect(hits).toHaveLength(3)
+    expect(JSON.stringify(hits[0].body.tools)).toContain('"name":"mcp_tools"')
+    expect(JSON.stringify(hits[0].body.tools)).not.toContain('"name":"mcp_add"')
+    expect(JSON.stringify(hits[0].body.tools)).not.toContain('"name":"mcp_list"')
+    expect(JSON.stringify(hits[1].body.tools)).toContain('"name":"mcp_add"')
+    expect(JSON.stringify(hits[1].body.tools)).toContain('"name":"mcp_list"')
+    expect(JSON.stringify(hits[2].body.tools)).toContain('"name":"mcp_logout"')
+    const messages = yield* sessions.messages({ sessionID: session.id })
+    const listed = messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.type === "tool" && part.tool === "mcp_list")
+    expect(listed?.type === "tool" && listed.state.status).toBe("completed")
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "Now help with a code question" }],
+    })
+    yield* llm.text("Sure")
+    yield* prompt.loop({ sessionID: session.id })
+    const next = (yield* llm.hits).at(-1)
+    expect(JSON.stringify(next?.body.tools)).toContain('"name":"mcp_tools"')
+    expect(JSON.stringify(next?.body.tools)).not.toContain('"name":"mcp_add"')
+    expect(JSON.stringify(next?.body.tools)).not.toContain('"name":"mcp_list"')
   }),
 )
 

@@ -8476,6 +8476,7 @@ export type McpAddData = {
   body?: {
     name: string
     config: McpLocalConfig | McpRemoteConfig
+    scope?: "project" | "global" | "runtime"
   }
   path?: never
   query?: {

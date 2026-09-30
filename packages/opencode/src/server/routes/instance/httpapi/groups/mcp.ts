@@ -11,6 +11,7 @@ import { described } from "./metadata"
 export const AddPayload = Schema.Struct({
   name: Schema.String,
   config: ConfigMCPV1.Info,
+  scope: Schema.optional(Schema.Literals(["project", "global", "runtime"])),
 })
 
 export const StatusMap = Schema.Record(Schema.String, MCP.Status)
@@ -61,7 +62,8 @@ export const McpApi = HttpApi.make("mcp")
           OpenApi.annotations({
             identifier: "mcp.add",
             summary: "Add MCP server",
-            description: "Dynamically add a new Model Context Protocol (MCP) server to the system.",
+            description:
+              "Add or replace an MCP server. Optional project/global scope persists configuration; default runtime scope applies only to this instance.",
           }),
         ),
         HttpApiEndpoint.post("authStart", McpPaths.auth, {

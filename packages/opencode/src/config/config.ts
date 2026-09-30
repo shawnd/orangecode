@@ -23,6 +23,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { ConfigMCPV1 } from "@opencode-ai/core/v1/config/mcp"
 import { RemoteAuthError } from "@opencode-ai/core/v1/config/error"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
@@ -128,6 +129,11 @@ export interface Interface {
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
   readonly update: (config: Info) => Effect.Effect<void>
   readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly patchMcp: (
+    name: string,
+    config: ConfigMCPV1.Info | undefined,
+    scope: "project" | "global",
+  ) => Effect.Effect<string>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
@@ -214,6 +220,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
+    const locks = yield* EffectFlock.Service
     const authSvc = yield* Auth.Service
     const accountSvc = yield* Account.Service
     const env = yield* Env.Service
@@ -694,6 +701,36 @@ const layer = Layer.effect(
       yield* invalidateGlobal
     })
 
+    const patchMcp = Effect.fn("Config.patchMcp")(
+      function* (name: string, config: ConfigMCPV1.Info | undefined, scope: "project" | "global") {
+        const ctx = yield* InstanceState.context
+        const candidates = [
+          "opencode.jsonc",
+          "opencode.json",
+          ".opencode/opencode.jsonc",
+          ".opencode/opencode.json",
+        ].map((file) => path.join(ctx.directory, file))
+        const file = scope === "global" ? globalConfigFile() : (candidates.find(existsSync) ?? candidates[1])
+        const before = (yield* readConfigFile(file)) ?? "{}"
+        ConfigParse.jsonc(before, file)
+        const after = applyEdits(
+          before,
+          modify(before, ["mcp", name], config, {
+            formattingOptions: { insertSpaces: true, tabSize: 2 },
+          }),
+        )
+        yield* decodeConfig(ConfigParse.jsonc(after, file), file)
+        yield* fs.writeWithDirs(file, after).pipe(Effect.orDie)
+        yield* invalidate()
+        // Reload the effective layered config without disposing running sessions or MCP clients.
+        const s = yield* InstanceState.get(state)
+        s.config = (yield* loadInstanceState(ctx).pipe(Effect.orDie)).config
+        return file
+      },
+      locks.withLock("config:mcp"),
+      Effect.orDie,
+    )
+
     const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
       const file = globalConfigFile()
       const before = (yield* readConfigFile(file)) ?? "{}"
@@ -727,6 +764,7 @@ const layer = Layer.effect(
       getConsoleState,
       update,
       updateGlobal,
+      patchMcp,
       invalidate,
       directories,
       waitForDependencies,
@@ -737,7 +775,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Auth.node, Account.node, Env.node, Npm.node, httpClient],
+  deps: [FSUtil.node, Auth.node, Account.node, Env.node, Npm.node, httpClient, EffectFlock.node],
 })
 
 export * as Config from "./config"

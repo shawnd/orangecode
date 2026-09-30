@@ -70,6 +70,10 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("MCP
   name: Schema.String,
 }) {}
 
+export class InvalidConfigError extends Schema.TaggedErrorClass<InvalidConfigError>()("MCP.InvalidConfigError", {
+  message: Schema.String,
+}) {}
+
 type MCPClient = Client
 
 function createClient(directory: string) {
@@ -172,6 +176,16 @@ export interface Interface {
     clientName?: string,
   ) => Effect.Effect<Record<string, ResourceTemplateInfo & { client: string }>>
   readonly add: (name: string, mcp: ConfigMCPV1.Info) => Effect.Effect<{ status: Record<string, Status> | Status }>
+  readonly configured: () => Effect.Effect<Record<string, ConfigMCPV1.Info>>
+  readonly configure: (
+    name: string,
+    mcp: ConfigMCPV1.Info,
+    scope: "project" | "global" | "runtime",
+  ) => Effect.Effect<{ status: Status; file?: string }, InvalidConfigError>
+  readonly remove: (
+    name: string,
+    scope: "project" | "global" | "runtime",
+  ) => Effect.Effect<{ file?: string }, NotFoundError>
   readonly connect: (name: string) => Effect.Effect<void, NotFoundError>
   readonly disconnect: (name: string) => Effect.Effect<void, NotFoundError>
   readonly getPrompt: (
@@ -314,7 +328,7 @@ const layer = Layer.effect(
                 return events
                   .publish(TuiEvent.ToastShow, {
                     title: "MCP Authentication Required",
-                    message: `Server "${key}" requires authentication. Run: opencode mcp auth ${key}`,
+                    message: `Server "${key}" requires authentication. Open /mcp or ask the agent to authenticate it.`,
                     variant: "warning",
                     duration: 8000,
                   })
@@ -643,13 +657,65 @@ const layer = Layer.effect(
     const add = Effect.fn("MCP.add")(function* (name: string, mcp: ConfigMCPV1.Info) {
       const s = yield* InstanceState.get(state)
       s.config[name] = mcp
-      yield* createAndStore(name, mcp)
+      if (mcp.enabled === false) {
+        yield* closeClient(s, name)
+        s.status[name] = { status: "disabled" }
+      }
+      if (mcp.enabled !== false) yield* createAndStore(name, mcp)
+      yield* events.publish(ToolsChanged, { server: name })
       return { status: s.status }
+    })
+
+    const configured = Effect.fn("MCP.configured")(function* () {
+      const s = yield* InstanceState.get(state)
+      return Object.fromEntries(
+        Object.entries({ ...(yield* cfgSvc.get()).mcp, ...s.config }).filter(
+          (entry): entry is [string, ConfigMCPV1.Info] => isMcpConfigured(entry[1]),
+        ),
+      )
+    })
+
+    const configure = Effect.fn("MCP.configure")(function* (
+      name: string,
+      mcp: ConfigMCPV1.Info,
+      scope: "project" | "global" | "runtime",
+    ) {
+      if (!name.trim()) return yield* new InvalidConfigError({ message: "MCP server name is required" })
+      if (mcp.type === "local" && !mcp.command[0]?.trim())
+        return yield* new InvalidConfigError({ message: "MCP command is required" })
+      if (mcp.type === "remote") {
+        const url = remoteURL(mcp.url)
+        if (!url || !["http:", "https:"].includes(url.protocol))
+          return yield* new InvalidConfigError({ message: "MCP URL must use HTTP or HTTPS" })
+      }
+      // Initialize from the old config so persisting a new entry doesn't launch it twice.
+      yield* InstanceState.get(state)
+      const file = scope === "runtime" ? undefined : yield* cfgSvc.patchMcp(name, mcp, scope)
+      const effective = scope === "runtime" ? mcp : (yield* cfgSvc.get()).mcp?.[name]
+      if (!effective || !isMcpConfigured(effective))
+        return yield* new InvalidConfigError({ message: `Invalid MCP configuration: ${name}` })
+      yield* add(name, effective)
+      return { status: (yield* status())[name], ...(file ? { file } : {}) }
+    })
+
+    const remove = Effect.fn("MCP.remove")(function* (name: string, scope: "project" | "global" | "runtime") {
+      yield* requireMcpConfig(name)
+      const file = scope === "runtime" ? undefined : yield* cfgSvc.patchMcp(name, undefined, scope)
+      const s = yield* InstanceState.get(state)
+      yield* closeClient(s, name)
+      delete s.config[name]
+      delete s.status[name]
+      // Removing an override can reveal an inherited server; keep it disabled in this instance.
+      if ((yield* cfgSvc.get()).mcp?.[name]) s.status[name] = { status: "disabled" }
+      yield* removeAuth(name)
+      yield* events.publish(ToolsChanged, { server: name })
+      return file ? { file } : {}
     })
 
     const connect = Effect.fn("MCP.connect")(function* (name: string) {
       const mcp = yield* requireMcpConfig(name)
       yield* createAndStore(name, { ...mcp, enabled: true })
+      yield* events.publish(ToolsChanged, { server: name })
     })
 
     const disconnect = Effect.fn("MCP.disconnect")(function* (name: string) {
@@ -658,6 +724,7 @@ const layer = Layer.effect(
       yield* closeClient(s, name)
       delete s.clients[name]
       s.status[name] = { status: "disabled" }
+      yield* events.publish(ToolsChanged, { server: name })
     })
 
     function requestTimeout(s: State, name: string, configured: McpEntry | undefined, fallback?: number) {
@@ -894,7 +961,16 @@ const layer = Layer.effect(
 
         const s = yield* InstanceState.get(state)
         yield* auth.clearOAuthState(mcpName)
-        return yield* storeClient(s, mcpName, client, listed, client.getInstructions()?.trim(), mcpConfig.timeout)
+        const status = yield* storeClient(
+          s,
+          mcpName,
+          client,
+          listed,
+          client.getInstructions()?.trim(),
+          mcpConfig.timeout,
+        )
+        yield* events.publish(ToolsChanged, { server: mcpName })
+        return status
       }
 
       const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState, mcpName)
@@ -940,7 +1016,9 @@ const layer = Layer.effect(
 
       const mcpConfig = yield* requireMcpConfig(mcpName)
 
-      return yield* createAndStore(mcpName, { ...mcpConfig, enabled: true })
+      const status = yield* createAndStore(mcpName, { ...mcpConfig, enabled: true })
+      yield* events.publish(ToolsChanged, { server: mcpName })
+      return status
     })
 
     const removeAuth = Effect.fn("MCP.removeAuth")(function* (mcpName: string) {
@@ -980,6 +1058,9 @@ const layer = Layer.effect(
       resources,
       resourceTemplates,
       add,
+      configured,
+      configure,
+      remove,
       connect,
       disconnect,
       getPrompt,

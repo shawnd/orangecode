@@ -19,6 +19,8 @@ import { SkillTool } from "./skill"
 import { ModelsSearchTool, ModelsTool } from "./models"
 import { CompactTool } from "./compact"
 import { ContextUsageTool } from "./context-usage"
+import { McpManagementTools, managementRequested } from "./mcp-manage"
+import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -86,6 +88,7 @@ export interface Interface {
     modelID: ModelV2.ID
     agent: Agent.Info
     permission?: PermissionV1.Ruleset
+    messages?: SessionV1.WithParts[]
   }) => Effect.Effect<Tool.Def[]>
 }
 
@@ -121,6 +124,7 @@ const layer = Layer.effect(
     const modelsSearch = yield* ModelsSearchTool
     const compact = yield* CompactTool
     const contextUsage = yield* ContextUsageTool
+    const mcpManagement = yield* McpManagementTools
     const agent = yield* Agent.Service
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
     const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
@@ -236,6 +240,7 @@ const layer = Layer.effect(
           plan: Tool.init(plan),
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
+        const management = yield* Effect.forEach(mcpManagement, (tool) => Tool.init(tool))
 
         return {
           custom,
@@ -257,6 +262,7 @@ const layer = Layer.effect(
             tool.modelsSearch,
             tool.compact,
             tool.contextUsage,
+            ...management,
             tool.patch,
             ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
@@ -304,7 +310,9 @@ const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
+      const management = managementRequested(input.messages ?? [])
       const filtered = (yield* all()).filter((tool) => {
+        if (tool.id !== "mcp_tools" && mcpManagement.some((item) => item.id === tool.id)) return management
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }

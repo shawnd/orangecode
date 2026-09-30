@@ -1,85 +1,154 @@
 import { createMemo, createSignal } from "solid-js"
-import { useLocal } from "../context/local"
+import { Schema } from "effect"
+import { ConfigMCPV1 } from "@opencode-ai/core/v1/config/mcp"
 import { useSync } from "../context/sync"
-import { map, pipe, entries, sortBy } from "remeda"
-import { DialogSelect, type DialogSelectRef, type DialogSelectOption } from "../ui/dialog-select"
-import { useTheme } from "../context/theme"
-import { TextAttributes } from "@opentui/core"
+import { DialogSelect } from "../ui/dialog-select"
+import { DialogPrompt } from "../ui/dialog-prompt"
+import { useDialog } from "../ui/dialog"
+import { useToast } from "../ui/toast"
 import { useSDK } from "../context/sdk"
 
-function Status(props: { enabled: boolean; loading: boolean }) {
-  const { theme } = useTheme()
-  if (props.loading) {
-    return <span style={{ fg: theme.textMuted }}>⋯ Loading</span>
-  }
-  if (props.enabled) {
-    return <span style={{ fg: theme.success, attributes: TextAttributes.BOLD }}>✓ Enabled</span>
-  }
-  return <span style={{ fg: theme.textMuted }}>○ Disabled</span>
-}
+const AddInput = Schema.Struct({
+  name: Schema.String.check(Schema.isMinLength(1)),
+  config: ConfigMCPV1.Info,
+  scope: Schema.Literals(["project", "global", "runtime"]),
+})
 
 export function DialogMcp() {
-  const local = useLocal()
   const sync = useSync()
   const sdk = useSDK()
-  const [, setRef] = createSignal<DialogSelectRef<unknown>>()
-  const [loading, setLoading] = createSignal<string | null>(null)
-
-  const options = createMemo(() => {
-    // Track sync data and loading state to trigger re-render when they change
-    const mcpData = sync.data.mcp
-    const loadingMcp = loading()
-
-    return pipe(
-      mcpData ?? {},
-      entries(),
-      sortBy(([name]) => name),
-      map(([name, status]) => ({
+  const dialog = useDialog()
+  const toast = useToast()
+  const [loading, setLoading] = createSignal<string>()
+  const options = createMemo(() => [
+    { value: "", title: "Add MCP server…", description: "local command or remote URL", category: "Manage" },
+    ...Object.entries(sync.data.mcp ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, status]) => ({
         value: name,
         title: name,
-        description: status.status === "failed" ? "failed" : status.status,
-        footer: <Status enabled={local.mcp.isEnabled(name)} loading={loadingMcp === name} />,
-        category: undefined,
+        description:
+          status.status === "failed" || status.status === "needs_client_registration"
+            ? `${status.status}: ${status.error}`
+            : status.status,
+        footer: loading() === name ? "⋯ Working" : status.status === "connected" ? "✓ Connected" : "○ Disconnected",
+        category: "Servers",
       })),
-    )
-  })
-
-  const actions = createMemo(() => [
-    {
-      command: "dialog.mcp.toggle",
-      title: "toggle",
-      onTrigger: async (option: DialogSelectOption<string>) => {
-        // Prevent toggling while an operation is already in progress
-        if (loading() !== null) return
-
-        setLoading(option.value)
-        try {
-          await local.mcp.toggle(option.value)
-          // Refresh MCP status from server
-          const status = await sdk.client.mcp.status()
-          if (status.data) {
-            sync.set("mcp", status.data)
-          } else {
-            console.error("Failed to refresh MCP status: no data returned")
-          }
-        } catch (error) {
-          console.error("Failed to toggle MCP:", error)
-        } finally {
-          setLoading(null)
-        }
-      },
-    },
   ])
+
+  async function run(name: string, operation: () => Promise<unknown>) {
+    if (loading() !== undefined) return
+    setLoading(name)
+    try {
+      await operation()
+      const status = await sdk.client.mcp.status({}, { throwOnError: true })
+      if (status.data) sync.set("mcp", status.data)
+      const result = status.data?.[name]
+      if (result?.status === "failed" || result?.status === "needs_client_registration") throw new Error(result.error)
+      toast.show({ variant: "info", message: `${name}: ${result?.status ?? "updated"}` })
+    } catch (error) {
+      toast.show({ variant: "error", message: error instanceof Error ? error.message : JSON.stringify(error) })
+    } finally {
+      setLoading(undefined)
+    }
+  }
+
+  function add() {
+    dialog.replace(() => (
+      <DialogPrompt
+        title="Add MCP server (JSON)"
+        value={'{"name":"my-server","config":{"type":"remote","url":"https://example.com/mcp"},"scope":"project"}'}
+        description={() => (
+          <text>
+            Use project/global to save, or runtime until restart. Local config:{" "}
+            {`{"type":"local","command":["bun","x","server-package"]}`}
+          </text>
+        )}
+        busy={loading() !== undefined}
+        onConfirm={async (value) => {
+          if (loading() !== undefined) return
+          setLoading("")
+          try {
+            const input = Schema.decodeUnknownSync(Schema.fromJsonString(AddInput))(value)
+            await sdk.client.mcp.add(input, { throwOnError: true })
+            const status = await sdk.client.mcp.status({}, { throwOnError: true })
+            if (status.data) sync.set("mcp", status.data)
+            toast.show({ variant: "info", message: `${input.name}: ${status.data?.[input.name]?.status ?? "added"}` })
+            dialog.replace(() => <DialogMcp />)
+          } catch (error) {
+            toast.show({ variant: "error", message: error instanceof Error ? error.message : JSON.stringify(error) })
+          } finally {
+            setLoading(undefined)
+          }
+        }}
+      />
+    ))
+  }
+
+  function manage(name: string) {
+    dialog.replace(() => (
+      <DialogSelect
+        title={loading() === name ? `MCP: ${name} — working…` : `MCP: ${name}`}
+        locked={loading() !== undefined}
+        options={[
+          {
+            value: "connect",
+            title: "Connect / retry",
+            onSelect: () => void run(name, () => sdk.client.mcp.connect({ name }, { throwOnError: true })),
+          },
+          {
+            value: "disconnect",
+            title: "Disconnect",
+            onSelect: () => void run(name, () => sdk.client.mcp.disconnect({ name }, { throwOnError: true })),
+          },
+          {
+            value: "reconnect",
+            title: "Reconnect / restart",
+            onSelect: () =>
+              void run(name, async () => {
+                await sdk.client.mcp.disconnect({ name }, { throwOnError: true })
+                await sdk.client.mcp.connect({ name }, { throwOnError: true })
+              }),
+          },
+          {
+            value: "auth",
+            title: "Authenticate (OAuth)",
+            description: "opens browser and waits for authorization",
+            onSelect: () => void run(name, () => sdk.client.mcp.auth.authenticate({ name }, { throwOnError: true })),
+          },
+          {
+            value: "logout",
+            title: "Log out / clear credentials",
+            onSelect: () =>
+              void run(name, async () => {
+                await sdk.client.mcp.disconnect({ name }, { throwOnError: true })
+                await sdk.client.mcp.auth.remove({ name }, { throwOnError: true })
+              }),
+          },
+          { value: "back", title: "Back to servers", onSelect: () => dialog.replace(() => <DialogMcp />) },
+        ]}
+      />
+    ))
+  }
 
   return (
     <DialogSelect
-      ref={setRef}
-      title="MCPs"
+      title="MCP servers"
       options={options()}
-      actions={actions()}
-      onSelect={(_option) => {
-        // Don't close on select, only on escape
-      }}
+      actions={[
+        {
+          command: "dialog.mcp.toggle",
+          title: "toggle",
+          disabled: (option) => !option?.value || loading() !== undefined,
+          onTrigger: (option) =>
+            void run(option.value, () =>
+              sync.data.mcp[option.value]?.status === "connected"
+                ? sdk.client.mcp.disconnect({ name: option.value }, { throwOnError: true })
+                : sdk.client.mcp.connect({ name: option.value }, { throwOnError: true }),
+            ),
+        },
+      ]}
+      onSelect={(option) => (option.value ? manage(option.value) : void add())}
     />
   )
 }

@@ -100,7 +100,7 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
-  it.instance("exposes compact and context_usage to the build agent", () =>
+  it.instance("exposes MCP discovery without management schemas by default", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const agents = yield* Agent.Service
@@ -109,7 +109,8 @@ describe("tool.registry", () => {
         modelID: ModelV2.ID.make("test"),
         agent: yield* agents.get("build"),
       })
-      expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(["compact", "context_usage"]))
+      expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(["compact", "context_usage", "mcp_tools"]))
+      expect(tools.filter((tool) => tool.id.startsWith("mcp_")).map((tool) => tool.id)).toEqual(["mcp_tools"])
     }),
   )
   it.instance("does not expose task_status", () =>

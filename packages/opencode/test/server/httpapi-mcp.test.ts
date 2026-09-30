@@ -6,6 +6,7 @@ import { Server } from "../../src/server/server"
 import { resetDatabase } from "../fixture/db"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import path from "node:path"
 
 const context = Context.empty() as Context.Context<unknown>
 const testStateLayer = Layer.effectDiscard(
@@ -56,6 +57,32 @@ const readResponse = Effect.fnUntraced(function* (input: { app: TestApp; path: s
 })
 
 describe("mcp HttpApi", () => {
+  it.instance("persists explicitly scoped additions and rejects invalid configuration", () =>
+    Effect.gen(function* () {
+      const tmp = yield* TestInstance
+      const handler = HttpApiApp.webHandler()
+      const added = yield* request(handler, McpPaths.status, tmp.directory, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "saved",
+          config: { type: "local", command: ["unused"], enabled: false },
+          scope: "project",
+        }),
+      })
+      expect(added.status).toBe(200)
+      expect(yield* json(added)).toEqual({ saved: { status: "disabled" } })
+      const persisted = yield* Effect.promise(() => Bun.file(path.join(tmp.directory, "opencode.json")).json())
+      expect(persisted.mcp.saved).toEqual({ type: "local", command: ["unused"], enabled: false })
+      const invalid = yield* request(handler, McpPaths.status, tmp.directory, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "invalid", config: { type: "remote", url: "file:///tmp/mcp" }, scope: "project" }),
+      })
+      expect(invalid.status).toBe(400)
+    }),
+  )
+
   it.instance(
     "serves status endpoint",
     () =>

@@ -14,7 +14,11 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
     })
 
     const add = Effect.fn("McpHttpApi.add")(function* (ctx: { payload: typeof AddPayload.Type }) {
-      const result = (yield* mcp.add(ctx.payload.name, ctx.payload.config)).status
+      const result = ctx.payload.scope
+        ? (yield* mcp
+            .configure(ctx.payload.name, ctx.payload.config, ctx.payload.scope)
+            .pipe(Effect.catchTag("MCP.InvalidConfigError", () => Effect.fail(new HttpApiError.BadRequest({}))))).status
+        : (yield* mcp.add(ctx.payload.name, ctx.payload.config)).status
       return yield* Schema.decodeUnknownEffect(StatusMap)(
         "status" in result ? { [ctx.payload.name]: result } : result,
       ).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))

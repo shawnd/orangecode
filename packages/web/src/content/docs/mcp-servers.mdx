@@ -7,6 +7,31 @@ You can add external tools to OpenCode using the _Model Context Protocol_, or MC
 
 Once added, MCP tools are automatically available to the LLM alongside built-in tools.
 
+## Manage from a session
+
+Open `/mcp` in the terminal UI and select a server to connect, disconnect, reconnect,
+authenticate in your browser, or log out. Space still toggles the selected server.
+Choose **Add MCP server** to enter a JSON object with `name`, `config`, and `scope`:
+
+```json
+{ "name": "my-server", "config": { "type": "remote", "url": "https://example.com/mcp" }, "scope": "project" }
+```
+
+`project` and `global` save the configuration across restarts. `runtime` applies only
+to the running instance. Local server configs use `"type":"local"` and a `command`
+array; the same environment, headers, OAuth, timeout, and enabled settings documented
+below are supported.
+
+You can also ask the agent to manage servers for you. Its lightweight `mcp_tools`
+discovery tool loads the management tools on demand for the current user request:
+`mcp_list`, `mcp_add`
+(add or replace), `mcp_remove`, `mcp_connect`, `mcp_disconnect`, `mcp_reconnect`,
+`mcp_auth`, and `mcp_logout` tools. Add and remove default to project scope; specify
+global or runtime scope when needed. Connection changes take effect immediately,
+and the agent's tool catalog refreshes on its next model turn. OAuth login and consent
+are completed by you in the browser. Later user requests start with only `mcp_tools`
+exposed again, so management schemas do not occupy every request's context.
+
 ---
 
 #### Caveats

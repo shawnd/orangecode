@@ -2427,7 +2427,7 @@ export class Mcp extends HeyApiClient {
   /**
    * Add MCP server
    *
-   * Dynamically add a new Model Context Protocol (MCP) server to the system.
+   * Add or replace an MCP server. Optional project/global scope persists configuration; default runtime scope applies only to this instance.
    */
   public add<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -2435,6 +2435,7 @@ export class Mcp extends HeyApiClient {
       workspace?: string
       name?: string
       config?: McpLocalConfig | McpRemoteConfig
+      scope?: "project" | "global" | "runtime"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2447,6 +2448,7 @@ export class Mcp extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "name" },
             { in: "body", key: "config" },
+            { in: "body", key: "scope" },
           ],
         },
       ],

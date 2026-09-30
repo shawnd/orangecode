@@ -178,6 +178,14 @@ export const {
         case "server.instance.disposed":
           void bootstrap()
           break
+        case "mcp.tools.changed":
+          void sdk.client.mcp
+            .status({ directory, workspace }, { throwOnError: true })
+            .then((result) => {
+              if (result.data) setStore("mcp", reconcile(result.data))
+            })
+            .catch((error) => console.error("Failed to refresh MCP status:", error))
+          break
         case "permission.replied": {
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
