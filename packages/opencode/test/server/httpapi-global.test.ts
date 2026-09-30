@@ -55,6 +55,7 @@ describe("global HttpApi", () => {
         HttpClientRequest.setHeader("x-opencode-event-buffer", "bounded-v1"),
         HttpClient.execute,
       )
+      expect(response.status).toBe(200)
       expect(response.headers["x-opencode-event-buffer"]).toBe("bounded-v1")
       const frames = yield* response.stream.pipe(
         Stream.decodeText,
@@ -94,6 +95,7 @@ describe("global HttpApi", () => {
         HttpClientRequest.setHeader("x-opencode-event-buffer", "unknown"),
         HttpClient.execute,
       )
+      expect(response.status).toBe(200)
       expect(response.headers["x-opencode-event-buffer"]).toBeUndefined()
       const frames = yield* response.stream.pipe(
         Stream.decodeText,

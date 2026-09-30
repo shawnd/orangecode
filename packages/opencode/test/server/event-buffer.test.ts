@@ -153,4 +153,28 @@ describe("bounded event buffer", () => {
       expect(state).toEqual({ cleanup: 1, bytes: 0, events: 0 })
     }),
   )
+
+  it.effect("cancellation during effectful subscription releases its acquired listener", () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>()
+      const state = { cleanup: 0 }
+      const reader = yield* EventBuffer.bufferedEvents<string>({
+        encode: String,
+        terminal: (reason) => reason,
+        subscribe() {
+          return Effect.gen(function* () {
+            yield* Effect.acquireRelease(
+              Effect.sync(() => Deferred.doneUnsafe(ready, Effect.void)),
+              () => Effect.sync(() => state.cleanup++),
+            )
+            yield* Effect.never
+            return () => {}
+          })
+        },
+      }).pipe(Stream.runDrain, Effect.forkScoped)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(reader)
+      expect(state.cleanup).toBe(1)
+    }),
+  )
 })

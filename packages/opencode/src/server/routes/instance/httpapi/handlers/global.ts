@@ -69,17 +69,52 @@ export function eventResponse(
     const boundedStream = EventBuffer.bufferedEvents<GlobalBusEvent>({
       encode: JSON.stringify,
       observe,
-      subscribe(offer) {
-        GlobalBus.on("event", offer)
-        // Install the source before advertising readiness to the client.
-        offer({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } })
-        const timer = setInterval(() => {
-          offer({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })
-        }, 10_000)
-        return () => {
-          clearInterval(timer)
-          GlobalBus.off("event", offer)
-        }
+      subscribe(offer, stop) {
+        return Effect.gen(function* () {
+          let seeding = true
+          let bytes = 0
+          const pending: GlobalBusEvent[] = []
+          const handler = (event: GlobalBusEvent) => {
+            if (!seeding) {
+              if (!interest || interest.accepts(event)) offer(event)
+              return
+            }
+            // Database seeding must not create an unbounded secondary backlog.
+            bytes += Buffer.byteLength(JSON.stringify(event))
+            if (bytes > EventBuffer.eventBufferBudget.bytes || pending.length >= EventBuffer.eventBufferBudget.events) {
+              GlobalBus.off("event", handler)
+              pending.length = 0
+              stop("overflow")
+              return
+            }
+            pending.push(event)
+          }
+          const cleanup = yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              GlobalBus.on("event", handler)
+              const timer = setInterval(() => {
+                handler({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })
+              }, 10_000)
+              return () => {
+                clearInterval(timer)
+                GlobalBus.off("event", handler)
+              }
+            }),
+            (cleanup) => Effect.sync(cleanup),
+          )
+          const sessions = interest && db ? yield* interest.seed(db) : undefined
+          offer({
+            payload: {
+              id: EventV2.ID.create(),
+              type: "server.connected",
+              properties: { ...(sessions ? { sessions } : {}) },
+            },
+          })
+          seeding = false
+          pending.forEach(handler)
+          pending.length = 0
+          return cleanup
+        })
       },
       terminal: (reason) => JSON.stringify({ resync: true, reason }),
     }).pipe(
@@ -96,10 +131,7 @@ export function eventResponse(
     return HttpServerResponse.stream(
       (bounded
         ? boundedStream
-        : events.pipe(
-            Stream.merge(heartbeat, { haltStrategy: "left" }),
-            Stream.map(eventData),
-          )
+        : events.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }), Stream.map(eventData))
       ).pipe(
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,
@@ -136,7 +168,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         ctx.request.headers["x-opencode-event-buffer"] === "bounded-v1",
         undefined,
         ctx.query.sessions === undefined ? undefined : makeEventInterest(ctx.query.sessions),
-        database.db,
+        ctx.query.sessions === undefined ? undefined : database.db,
       )
     })
 

@@ -1,4 +1,4 @@
-import { Cause, Effect, Pull, Queue, Stream } from "effect"
+import { Cause, Effect, Pull, Queue, Scope, Stream } from "effect"
 
 export const eventBufferBudget = { bytes: 4 * 1024 * 1024, events: 4096 }
 
@@ -7,7 +7,10 @@ type BufferedEvent = { data: string; terminal: boolean }
 // Retain serialized payloads, not mutable bus objects. A failed offer ends the
 // subscription; it must never be interpreted as a successful, dropped event.
 export function bufferedEvents<A>(input: {
-  subscribe: (offer: (event: A) => void) => () => void
+  subscribe: (
+    offer: (event: A) => void,
+    stop: (reason: "overflow" | "offer-failed") => void,
+  ) => (() => void) | Effect.Effect<() => void, never, Scope.Scope>
   encode: (event: A) => string
   terminal: (reason: "overflow" | "offer-failed") => string
   budget?: typeof eventBufferBudget
@@ -58,8 +61,9 @@ export function bufferedEvents<A>(input: {
         input.observe?.(state)
       }
       yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          const cleanup = input.subscribe(offer)
+        Effect.gen(function* () {
+          const subscription = input.subscribe(offer, stop)
+          const cleanup = Effect.isEffect(subscription) ? yield* Effect.interruptible(subscription) : subscription
           // A synchronous source can overflow before subscribe returns.
           if (state.reason) cleanup()
           if (!state.reason) unsubscribe = cleanup

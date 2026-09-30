@@ -59,33 +59,38 @@ test("opt-in filtering preserves global metadata and legacy delivery", () => {
   expect(makeEventInterest("").accepts(event("message.part.delta", { sessionID: "root" }))).toBe(false)
 })
 
-test("production SSE drops unrelated transcripts before JSON and installs listener before connected", async () => {
-  const before = GlobalBus.listenerCount("event")
-  const response = HttpServerResponse.toWeb(await Effect.runPromise(eventResponse(makeEventInterest("root"))))
-  const reader = response.body!.getReader()
-  expect(new TextDecoder().decode((await reader.read()).value)).toContain("server.connected")
-  expect(GlobalBus.listenerCount("event")).toBe(before + 1)
-  let serialized = 0
-  GlobalBus.emit("event", {
-    payload: {
-      type: "message.part.delta",
-      properties: {
-        sessionID: "other",
-        get delta() {
-          serialized++
-          throw new Error("Unrelated event serialized")
+test.each([false, true])(
+  "production SSE bounded=%s drops unrelated transcripts before JSON and installs listener before connected",
+  async (bounded) => {
+    const before = GlobalBus.listenerCount("event")
+    const response = HttpServerResponse.toWeb(
+      await Effect.runPromise(eventResponse(bounded, undefined, makeEventInterest("root"))),
+    )
+    const reader = response.body!.getReader()
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("server.connected")
+    expect(GlobalBus.listenerCount("event")).toBe(before + 1)
+    let serialized = 0
+    GlobalBus.emit("event", {
+      payload: {
+        type: "message.part.delta",
+        properties: {
+          sessionID: "other",
+          get delta() {
+            serialized++
+            throw new Error("Unrelated event serialized")
+          },
         },
       },
-    },
-  })
-  GlobalBus.emit("event", {
-    payload: { type: "session.status", properties: { sessionID: "other", status: { type: "busy" } } },
-  })
-  expect(new TextDecoder().decode((await reader.read()).value)).toContain("session.status")
-  expect(serialized).toBe(0)
-  await reader.cancel()
-  expect(GlobalBus.listenerCount("event")).toBe(before)
-})
+    })
+    GlobalBus.emit("event", {
+      payload: { type: "session.status", properties: { sessionID: "other", status: { type: "busy" } } },
+    })
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("session.status")
+    expect(serialized).toBe(0)
+    await reader.cancel()
+    expect(GlobalBus.listenerCount("event")).toBe(before)
+  },
+)
 
 it.live("connected seeds persisted descendants before their first transcript event", () =>
   Effect.gen(function* () {
@@ -101,7 +106,9 @@ it.live("connected seeds persisted descendants before their first transcript eve
     ('ses_grandchild', 'proj_interest', 'ses_child', 'grandchild', '/tmp/opencode-interest', 'grandchild', 'test', 0, 0),
     ('ses_unrelated', 'proj_interest', NULL, 'unrelated', '/tmp/opencode-interest', 'unrelated', 'test', 0, 0)`)
     const before = GlobalBus.listenerCount("event")
-    const response = HttpServerResponse.toWeb(yield* eventResponse(makeEventInterest("ses_root"), database.db))
+    const response = HttpServerResponse.toWeb(
+      yield* eventResponse(true, undefined, makeEventInterest("ses_root"), database.db),
+    )
     const reader = response.body!.getReader()
     yield* Effect.addFinalizer(() => Effect.promise(() => reader.cancel()))
     const connected = new TextDecoder().decode((yield* Effect.promise(() => reader.read())).value)

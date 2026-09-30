@@ -288,7 +288,14 @@ test("legacy hydration retains live part updates and removals over an older snap
       type: "text",
       text: "fresh",
     } as const
-    client.emit({ directory, payload: { id: "evt_part", type: "message.part.updated", properties: { part } } })
+    client.emit({
+      directory,
+      payload: {
+        id: "evt_part",
+        type: "message.part.updated",
+        properties: { sessionID: part.sessionID, part, time: 1 },
+      },
+    })
     client.emit({
       directory,
       payload: {
