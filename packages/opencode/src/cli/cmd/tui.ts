@@ -14,6 +14,7 @@ import { writeHeapSnapshot } from "v8"
 import { ServerAuth } from "@/server/auth"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
+import { restartArgs, restartProcess } from "../restart"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -187,6 +188,7 @@ export const TuiThreadCommand = cmd({
     }
 
     const unguard = win32InstallCtrlCGuard()
+    let restart: string[] | undefined
     try {
       const { TuiConfig } = await import("@/config/tui")
       if (args.fork && !args.continue && !args.session) {
@@ -273,7 +275,7 @@ export const TuiThreadCommand = cmd({
         const { Effect } = await import("effect")
         const { run } = await import("../tui/layer")
         const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
-        await Effect.runPromise(
+        const requested = await Effect.runPromise(
           run({
             url: transport.url,
             async onAttach() {
@@ -308,6 +310,12 @@ export const TuiThreadCommand = cmd({
             },
           }),
         )
+        if (requested) {
+          restart = restartArgs(requested, {
+            auto: args.auto || args.yolo || args["dangerously-skip-permissions"],
+            network: external ? network : undefined,
+          })
+        }
       } finally {
         await stop()
       }
@@ -316,6 +324,7 @@ export const TuiThreadCommand = cmd({
         unguard?.()
       } catch {}
     }
+    if (restart) await restartProcess(restart)
     process.exit()
   },
 })

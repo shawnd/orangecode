@@ -6,7 +6,7 @@ import { Global } from "@opencode-ai/core/global"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
-import { ExitProvider, useExit } from "./context/exit"
+import { ExitProvider, useExit, type Restart } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import * as Selection from "./util/selection"
 import { createCliRenderer, MouseButton } from "@opentui/core"
@@ -128,6 +128,7 @@ const appBindingCommands = [
   "theme.mode.lock",
   "help.show",
   "docs.open",
+  "app.restart",
   "diff.open",
   "workspace.list",
   "app.debug",
@@ -189,7 +190,11 @@ function isVersionGreater(left: string, right: string) {
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const global = yield* Global.Service
-  const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
+  const exit = {
+    epilogue: undefined as string | undefined,
+    reason: undefined as unknown,
+    restart: undefined as Restart | undefined,
+  }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
       const renderer = yield* Effect.acquireRelease(
@@ -249,9 +254,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         await render(() => {
           return (
             <ExitProvider
-              exit={(reason) => {
+              exit={(reason, restart) => {
                 if (renderer.isDestroyed) return
                 exit.reason = reason
+                exit.restart = restart
                 destroyRenderer(renderer)
               }}
             >
@@ -358,17 +364,19 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         }, renderer)
       })
       yield* Deferred.await(shutdown)
-      return { epilogue: exit.epilogue, reason: exit.reason }
+      return { epilogue: exit.epilogue, reason: exit.reason, restart: exit.restart }
     }),
   )
   yield* Effect.sync(() => {
     win32FlushInputBuffer()
+    if (result.restart) return
     if (result.reason !== undefined) {
       process.stderr.write((cliErrorMessage(result.reason) ?? errorFormat(result.reason)) + "\n")
       process.exitCode = 1
     }
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
+  return result.restart
 })
 
 function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
@@ -856,6 +864,19 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         run: () => {
           openUrl("https://opencode.ai/docs").catch(() => {})
           dialog.clear()
+        },
+        category: "System",
+      },
+      {
+        name: "app.restart",
+        title: "Restart OpenCode",
+        slashName: "restart",
+        run: () => {
+          const session = route.data.type === "session" ? sync.session.get(route.data.sessionID) : undefined
+          exit(undefined, {
+            sessionID: route.data.type === "session" ? route.data.sessionID : undefined,
+            directory: session?.directory ?? project.instance.directory(),
+          })
         },
         category: "System",
       },

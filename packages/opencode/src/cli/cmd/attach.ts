@@ -3,6 +3,7 @@ import { UI } from "@/cli/ui"
 import { errorMessage } from "@opencode-ai/tui/util/error"
 import { validateSession } from "../tui/validate-session"
 import { ServerAuth } from "@/server/auth"
+import { restartArgs, restartProcess } from "../restart"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -130,7 +131,7 @@ export const AttachCommand = cmd({
     const { Effect } = await import("effect")
     const { run } = await import("../tui/layer")
     const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
-    await Effect.runPromise(
+    const requested = await Effect.runPromise(
       run({
         url: args.url,
         config,
@@ -144,5 +145,10 @@ export const AttachCommand = cmd({
         headers,
       }),
     )
+    if (requested) {
+      await restartProcess(
+        restartArgs(requested, { attach: { url: args.url, username: args.username, password: args.password } }),
+      )
+    }
   },
 })
