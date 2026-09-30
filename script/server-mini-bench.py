@@ -85,7 +85,7 @@ def environment(root, port):
 
 
 class Terminal:
-    def __init__(self, binary, args, env, log):
+    def __init__(self, binary, args, env, log, full=False):
         self.fd, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
         def setup():
@@ -97,6 +97,7 @@ class Terminal:
         self.output = bytearray()
         self.log = log
         self.ready_ms = None
+        self.full = full
 
     def drain(self, timeout=0.02):
         if select.select([self.fd], [], [], timeout)[0]:
@@ -112,7 +113,7 @@ class Terminal:
                 os.write(self.fd, b"\x1b]10;rgb:dddd/dddd/dddd\x07")
             if b"]11;?" in data:
                 os.write(self.fd, b"\x1b]11;rgb:1111/1111/1111\x07")
-            if self.ready_ms is None and b"Ask anything" in self.output and b"BUILD" in self.output:
+            if self.ready_ms is None and b"Ask anything" in self.output and (self.full or b"BUILD" in self.output):
                 self.ready_ms = (time.monotonic() - self.start) * 1000
 
     def send(self, text):
@@ -183,7 +184,7 @@ def drain_until(clients, condition, timeout=30):
     raise TimeoutError("PTY readiness/flow deadline")
 
 
-def sample(binary, root, port, n, settle, trace=False):
+def sample(binary, root, port, n, settle, trace=False, full=False):
     env = environment(root, port)
     clients = []
     daemon = None
@@ -203,12 +204,12 @@ def sample(binary, root, port, n, settle, trace=False):
         api(endpoint, env, "/config/providers")
         before = metrics(daemon)
         for i in range(n):
-            args = ["attach", endpoint["url"], "--mini", "--dir", env["PWD"], "--password", endpoint["password"]]
+            args = ["attach", endpoint["url"], *([] if full else ["--mini"]), "--dir", env["PWD"], "--password", endpoint["password"]]
             cmd = binary
             if trace:
                 args = ["-ff", "-tt", "-e", "trace=file", "-o", str(root / "syscalls"), binary, *args]
                 cmd = "/usr/bin/strace"
-            clients.append(Terminal(cmd, args, env, root / f"client-{i}.pty"))
+            clients.append(Terminal(cmd, args, env, root / f"client-{i}.pty", full=full))
         drain_until(clients, lambda: all(c.ready_ms is not None for c in clients))
         startup = [metrics(c.process.pid) for c in clients]
         end = time.monotonic() + settle
@@ -217,7 +218,7 @@ def sample(binary, root, port, n, settle, trace=False):
                 c.drain()
         ids = set.union(descendants(daemon), *(descendants(c.process.pid) for c in clients))
         processes = [metrics(pid) for pid in sorted(ids)]
-        record = {"binary": binary, "sha256": sha(binary), "n": n, "settle_s": settle, "readiness_ms": [c.ready_ms for c in clients], "startup_clients": startup, "daemon_before": before, "processes": processes,
+        record = {"binary": binary, "sha256": sha(binary), "mode": "full" if full else "mini", "n": n, "settle_s": settle, "readiness_ms": [c.ready_ms for c in clients], "startup_clients": startup, "daemon_before": before, "processes": processes,
                   "fleet_pss_kib": sum(p["pss_kib"] for p in processes), "clients_pss_kib": sum(p["pss_kib"] for p in processes if p["pid"] != daemon)}
         (root / "sample.json").write_text(json.dumps(record, indent=2))
         print(json.dumps(record), flush=True)
@@ -237,6 +238,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--settle", type=float, default=5)
     parser.add_argument("--trace", action="store_true")
+    parser.add_argument("--full", action="store_true")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
@@ -253,7 +255,7 @@ def main():
                     order.reverse()
                 for name, binary in order:
                     assert sha(binary) == hashes[name]
-                    record = sample(binary, args.out / f"r{repeat}-n{n}-{name}", provider.server_port, n, args.settle, args.trace)
+                    record = sample(binary, args.out / f"r{repeat}-n{n}-{name}", provider.server_port, n, args.settle, args.trace, args.full)
                     samples.append({"arm": name, "repeat": repeat, **record})
         (args.out / "samples.json").write_text(json.dumps(samples, indent=2))
         (args.out / "provider-requests.json").write_text(json.dumps(Provider.calls, indent=2))

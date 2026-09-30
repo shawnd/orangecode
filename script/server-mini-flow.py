@@ -15,9 +15,13 @@ bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
 
 
-def run(binary, root, port):
+def run(binary, root, port, full=False, policies=False):
     env = bench.environment(root, port)
     env["OPENCODE_DIRECT_TRACE"] = "1"
+    if policies:
+        env.update({"OPENCODE_EXPERIMENTAL_FFF_WORKER": "1", "OPENCODE_FFF_WORKERS": "2",
+                    "OPENCODE_EXPERIMENTAL_SEARCH_IDLE_MS": "200", "OPENCODE_EXPERIMENTAL_JOB_OUTPUT_RELEASE": "1"})
+        (root / "project" / "combined-native-marker.txt").write_text("native policy fixture\n")
     clients = []
     endpoint = None
     try:
@@ -28,19 +32,38 @@ def run(binary, root, port):
         endpoint = json.loads((root / "daemon/server.json").read_text())
         endpoint = bench.api(endpoint, env, "/__daemon/listen", {})
 
+        if policies:
+            def indexed():
+                deadline = bench.time.monotonic() + 15
+                while "combined-native-marker.txt" not in bench.api(endpoint, env, "/find/file?query=combined-native-marker"):
+                    if bench.time.monotonic() >= deadline:
+                        raise TimeoutError("Compiled worker search never indexed its fixture")
+                    bench.time.sleep(0.01)
+            indexed()
+            # Deliberately cross the configured retirement boundary before reopening.
+            bench.time.sleep(0.4)
+            indexed()
+
         def attach(name, extra=()):
-            client = bench.Terminal(binary, ["attach", endpoint["url"], "--mini", "--dir", env["PWD"],
-                                            "--password", endpoint["password"], *extra], env, root / f"{name}.pty")
+            client = bench.Terminal(binary, ["attach", endpoint["url"], *([] if full else ["--mini"]), "--dir", env["PWD"],
+                                            "--password", endpoint["password"], *extra], env, root / f"{name}.pty", full=full)
             clients.append(client)
             bench.drain_until([client], lambda: client.ready_ms is not None if not extra
-                              else b"BUILD" in client.output and b"ctrl+p" in client.output)
+                              else b"BUILD" in client.output.upper() and b"ctrl+p" in client.output)
             return client
 
         client = attach("fresh")
+        # First paint precedes MINI's async transport/queue wiring. This is an
+        # untimed interaction check; benchmark readiness remains first paint.
+        ready = bench.time.monotonic() + 1
+        while bench.time.monotonic() < ready:
+            client.drain()
+        client.send("mini-tool\r")
+        # Full TUI creates its first Session on submission; MINI creates it on mount.
+        bench.drain_until([client], lambda: len(bench.api(endpoint, env, "/session")) == 1)
         sessions = bench.api(endpoint, env, "/session")
         assert len(sessions) == 1, sessions
         session = sessions[0]["id"]
-        client.send("mini-tool\r")
         bench.drain_until([client], lambda: b"Permission required" in client.output)
         requests = bench.api(endpoint, env, "/permission")
         assert any(request["sessionID"] == session for request in requests), requests
@@ -90,7 +113,7 @@ def run(binary, root, port):
                 bench.drain_until([forked], headless_complete, timeout=30)
             if not connection:
                 assert b"MINI deterministic response" in result.stdout, (name, result.stdout.decode())
-        record = {"binary": binary, "sha256": bench.sha(binary), "session": session, "fork": new,
+        record = {"binary": binary, "sha256": bench.sha(binary), "mode": "full" if full else "mini", "resource_policies": policies, "session": session, "fork": new,
                    "permission_footer": True, "tool_completed": True, "resume_replay": True, "fork_history": True,
                    "headless_attached": True, "headless_local": True,
                    "provider_calls": len(bench.Provider.calls)}
@@ -106,11 +129,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", required=True)
     parser.add_argument("--out", required=True, type=pathlib.Path)
+    parser.add_argument("--full", action="store_true")
+    parser.add_argument("--resource-policies", action="store_true")
     args = parser.parse_args()
     provider = bench.http.server.ThreadingHTTPServer(("127.0.0.1", 0), bench.Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
     try:
-        run(args.binary, args.out, provider.server_port)
+        run(args.binary, args.out, provider.server_port, args.full, args.resource_policies)
     finally:
         provider.shutdown()
 
