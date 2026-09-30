@@ -4,11 +4,12 @@ import { chmod, mkdir, open } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { createHash, randomBytes } from "node:crypto"
-import { Option, Schema } from "effect"
+import { Config, Effect, Option, Schema } from "effect"
 import { Global } from "@opencode-ai/core/global"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { workerConfig } from "@opencode-ai/core/filesystem/fff-types"
+import { Flag } from "@opencode-ai/core/flag/flag"
 
 export const Status = Schema.Struct({
   protocol: Schema.Number,
@@ -36,6 +37,10 @@ export function directory() {
   // Explicit config profiles must not borrow a daemon initialized with another
   // profile. Project directories are selected per request, not part of this key.
   const search = workerConfig(process.env)
+  const searchIdleMs = Flag.OPENCODE_EXPERIMENTAL_SEARCH_IDLE_MS
+  const jobOutputRelease = Effect.runSync(
+    Config.boolean("OPENCODE_EXPERIMENTAL_JOB_OUTPUT_RELEASE").pipe(Config.withDefault(false)),
+  )
   const profile = createHash("sha256")
     .update(
       JSON.stringify([
@@ -49,6 +54,10 @@ export function directory() {
         process.env.OPENCODE_CONFIG_CONTENT,
         process.env.OPENCODE_DB,
         ...(search.enabled ? [search] : []),
+        // Attached clients must not borrow a daemon launched with a different
+        // opt-in resource policy. Disabled policies preserve the existing key.
+        ...(searchIdleMs === undefined ? [] : [{ searchIdleMs }]),
+        ...(jobOutputRelease ? [{ jobOutputRelease }] : []),
       ]),
     )
     .digest("hex")
