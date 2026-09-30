@@ -110,7 +110,14 @@ describe("tool.registry", () => {
         agent: yield* agents.get("build"),
       })
       expect(tools.map((tool) => tool.id)).toEqual(
-        expect.arrayContaining(["compact", "context_usage", "session_active", "mcp_tools", "reminder_tools"]),
+        expect.arrayContaining([
+          "compact",
+          "context_usage",
+          "session_active",
+          "session_planning",
+          "mcp_tools",
+          "reminder_tools",
+        ]),
       )
       expect(tools.filter((tool) => tool.id.startsWith("mcp_")).map((tool) => tool.id)).toEqual(["mcp_tools"])
       expect(tools.filter((tool) => tool.id.startsWith("reminder_")).map((tool) => tool.id)).toEqual(["reminder_tools"])

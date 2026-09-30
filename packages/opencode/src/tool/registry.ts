@@ -21,6 +21,7 @@ import { ModelFavorites } from "@opencode-ai/core/model-favorites"
 import { CompactTool } from "./compact"
 import { ContextUsageTool } from "./context-usage"
 import { SessionActiveTool } from "./session-active"
+import { SessionPlanningTool } from "./session-planning"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { McpManagementTools, managementRequested } from "./mcp-manage"
 import { ReminderManagementTools, reminderManagementRequested } from "./reminder-manage"
@@ -132,6 +133,7 @@ const layer = Layer.effect(
     const compact = yield* CompactTool
     const contextUsage = yield* ContextUsageTool
     const sessionActive = yield* SessionActiveTool
+    const sessionPlanning = yield* SessionPlanningTool
     const mcpManagement = yield* McpManagementTools
     const reminderManagement = yield* ReminderManagementTools
     const shellManagement = yield* ShellManagementTools
@@ -245,6 +247,7 @@ const layer = Layer.effect(
           compact: Tool.init(compact),
           contextUsage: Tool.init(contextUsage),
           sessionActive: Tool.init(sessionActive),
+          sessionPlanning: Tool.init(sessionPlanning),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
@@ -276,6 +279,7 @@ const layer = Layer.effect(
             tool.compact,
             tool.contextUsage,
             tool.sessionActive,
+            tool.sessionPlanning,
             ...management,
             ...reminders,
             ...shells,
