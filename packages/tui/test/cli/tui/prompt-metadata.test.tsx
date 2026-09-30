@@ -28,7 +28,7 @@ import { OpencodeKeymapProvider, registerOpencodeKeymap, useBindings } from "../
 import { PromptHistoryProvider, usePromptHistory } from "../../../src/prompt/history"
 import { PromptStashProvider } from "../../../src/prompt/stash"
 import { useDialog } from "../../../src/ui/dialog"
-import { ToastProvider } from "../../../src/ui/toast"
+import { ToastProvider, useToast } from "../../../src/ui/toast"
 import { tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -37,9 +37,10 @@ import type { ToolPart } from "@opencode-ai/sdk/v2"
 import { RemindersProvider } from "../../../src/context/reminders"
 import { NativeReminders } from "@opencode-ai/core/native/reminders"
 
-async function mount(root: string, sessionID?: string, variants = true) {
+async function mount(root: string, sessionID?: string, variants = true, submission?: { abort: Promise<Response> }) {
   const events = createEventSource()
   const aborted: string[] = []
+  const submitted: { path: string; body?: unknown }[] = []
   const dialogUI = await import("../../../src/ui/dialog")
   await Bun.write(`${root}/kv.json`, JSON.stringify({ animations_enabled: false }))
   const provider = {
@@ -70,10 +71,13 @@ async function mount(root: string, sessionID?: string, variants = true) {
     ),
   )
   const other = { ...provider, id: "other-provider", name: "Other Provider" }
-  const calls = createFetch((url) => {
+  const calls = createFetch(async (url, request) => {
+    if (request?.method === "POST" && url.pathname.startsWith("/session/")) {
+      submitted.push({ path: url.pathname, body: request.body ? await request.clone().json() : undefined })
+    }
     if (url.pathname.endsWith("/abort")) {
       aborted.push(url.pathname)
-      return json(true)
+      return submission?.abort ?? json(true)
     }
     if (url.pathname === "/config") return json({ model: "metadata-provider/metadata-model" })
     if (url.pathname === "/config/providers")
@@ -95,6 +99,7 @@ async function mount(root: string, sessionID?: string, variants = true) {
         route: ReturnType<typeof useRoute>
         history: ReturnType<typeof usePromptHistory>
         kv: ReturnType<typeof useKV>
+        toast: ReturnType<typeof useToast>
       }
     | undefined
   let prompt: PromptRef | undefined
@@ -102,7 +107,7 @@ async function mount(root: string, sessionID?: string, variants = true) {
     const local = useLocal()
     const dialog = useDialog()
     const sync = useSync()
-    context = { local, dialog, route: useRoute(), history: usePromptHistory(), kv: useKV() }
+    context = { local, dialog, route: useRoute(), history: usePromptHistory(), kv: useKV(), toast: useToast() }
     // Register app-level commands so clicks exercise real keymap dispatch and picker components.
     useBindings(() => ({
       commands: [
@@ -195,7 +200,7 @@ async function mount(root: string, sessionID?: string, variants = true) {
       </TestTuiContexts>
     )
   }
-  const app = await testRender(() => <Harness />, { width: 120, height: 30 })
+  const app = await testRender(() => <Harness />, { width: 120, height: 30, kittyKeyboard: true })
   const waitForFrame = async (predicate: (frame: string) => boolean) => {
     const deadline = Date.now() + 2000
     while (true) {
@@ -210,6 +215,7 @@ async function mount(root: string, sessionID?: string, variants = true) {
     app,
     events,
     aborted,
+    submitted,
     prompt() {
       if (!prompt) throw new Error("Prompt not ready")
       return prompt
@@ -230,6 +236,113 @@ async function mount(root: string, sessionID?: string, variants = true) {
     },
   }
 }
+
+test("Ctrl+Enter waits for interruption before sending the draft and attachments once", async () => {
+  await using tmp = await tmpdir()
+  const gate = Promise.withResolvers<Response>()
+  using view = await mount(tmp.path, "parent", true, { abort: gate.promise })
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.events.emit({
+    directory,
+    payload: { id: "busy", type: "session.status", properties: { sessionID: "parent", status: { type: "busy" } } },
+  })
+  view
+    .prompt()
+    .set({
+      input: "Use this new context [Image 1]",
+      parts: [
+        {
+          type: "file",
+          mime: "image/png",
+          url: "data:image/png;base64,aGVsbG8=",
+          source: { type: "file", path: "image.png", text: { value: "[Image 1]", start: 21, end: 30 } },
+        },
+      ],
+    })
+  await view.waitForFrame((frame) => frame.includes("send now"))
+  view.app.mockInput.pressKey("RETURN", { ctrl: true })
+  await view.waitForFrame(() => view.aborted.length === 1)
+  view.app.mockInput.pressKey("RETURN", { ctrl: true })
+  await view.app.renderOnce()
+  expect(view.submitted.map((call) => call.path)).toEqual(["/session/parent/abort"])
+  expect(view.prompt().current.input).toBe("Use this new context [Image 1]")
+  gate.resolve(json(true))
+  await view.waitForFrame(() => view.submitted.length === 2 && view.prompt().current.input === "")
+  expect(view.submitted[1]).toMatchObject({
+    path: "/session/parent/message",
+    body: {
+      parts: [
+        { type: "text", text: "Use this new context [Image 1]" },
+        { type: "file", mime: "image/png" },
+      ],
+    },
+  })
+})
+
+test("Ctrl+Enter with an empty draft resumes pending messages without adding a message", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.events.emit({
+    directory,
+    payload: {
+      id: "pending-user",
+      type: "message.updated",
+      properties: {
+        sessionID: "parent",
+        info: {
+          id: "msg_pending",
+          sessionID: "parent",
+          role: "user",
+          time: { created: 1 },
+          agent: "build",
+          model: { providerID: "metadata-provider", modelID: "metadata-model" },
+        },
+      },
+    },
+  })
+  view.events.emit({
+    directory,
+    payload: { id: "busy", type: "session.status", properties: { sessionID: "parent", status: { type: "busy" } } },
+  })
+  await view.waitForFrame((frame) => frame.includes("send now"))
+  view.app.mockInput.pressKey("RETURN", { ctrl: true })
+  await view.waitForFrame(() => view.submitted.length === 2)
+  expect(view.submitted.map((call) => call.path)).toEqual(["/session/parent/abort", "/session/parent/resume"])
+  expect(view.prompt().current.input).toBe("")
+})
+
+test("send now keeps the draft when interruption fails", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path, "parent", true, {
+    abort: Promise.resolve(json({}, { status: 500 })),
+  })
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.events.emit({
+    directory,
+    payload: { id: "busy", type: "session.status", properties: { sessionID: "parent", status: { type: "busy" } } },
+  })
+  view.prompt().set({ input: "Keep this correction", parts: [] })
+  await view.waitForFrame((frame) => frame.includes("send now"))
+  view.app.mockInput.pressKey("RETURN", { ctrl: true })
+  await view.waitForFrame(() => view.ctx().toast.currentToast?.title === "Failed to interrupt session")
+  expect(view.prompt().current.input).toBe("Keep this correction")
+  expect(view.submitted.map((call) => call.path)).toEqual(["/session/parent/abort"])
+})
+
+test("Enter submits normally and Shift+Enter still inserts a newline", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.prompt().set({ input: "Normal input", parts: [] })
+  view.app.mockInput.pressKey("RETURN", { shift: true })
+  await view.waitForFrame(() => view.prompt().current.input.includes("\n"))
+  expect(view.submitted).toHaveLength(0)
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame(() => view.submitted.length === 1)
+  expect(view.submitted[0]?.path).toBe("/session/parent/message")
+  expect(view.aborted).toHaveLength(0)
+})
 
 function runningTask(view: Awaited<ReturnType<typeof mount>>) {
   view.events.emit({

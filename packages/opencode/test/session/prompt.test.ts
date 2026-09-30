@@ -1302,6 +1302,53 @@ it.instance("cancel interrupts loop and resolves with an assistant message", () 
   }),
 )
 
+it.instance("interruption resumes pending inputs with partial response context and no duplicate user messages", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Force send" })
+    const events = yield* EventV2Bridge.Service
+    const delta = yield* Deferred.make<void>()
+    yield* Effect.acquireRelease(
+      events.listen((event) =>
+        event.type === "message.part.delta" ? Deferred.succeed(delta, undefined).pipe(Effect.asVoid) : Effect.void,
+      ),
+      (unsubscribe) => unsubscribe,
+    )
+    yield* llm.push(reply().text("Partial response before interruption").hang())
+    const run = yield* prompt
+      .prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "Original request" }] })
+      .pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    yield* awaitWithTimeout(Deferred.await(delta), "partial response was not streamed")
+    const queued = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "Queued correction" }],
+    })
+    yield* prompt.cancel(chat.id)
+    yield* awaitWithTimeout(Fiber.join(run), "interrupted run did not finish")
+    yield* llm.text("Continuing with the correction")
+    const resumed = yield* prompt.loop({ sessionID: chat.id })
+    expect(resumed.info.role === "assistant" && resumed.info.parentID).toBe(queued.info.id)
+    const request = JSON.stringify((yield* llm.inputs)[1])
+    expect(request).toContain("Original request")
+    expect(request).toContain("Partial response before interruption")
+    expect(request).toContain("Queued correction")
+    expect(yield* llm.calls).toBe(2)
+    const history = yield* sessions.messages({ sessionID: chat.id })
+    expect(history.filter((message) => message.info.role === "user")).toHaveLength(2)
+    expect(
+      history.some(
+        (message) => message.info.role === "assistant" && message.info.error?.name === "MessageAbortedError",
+      ),
+    ).toBe(true)
+  }),
+)
+
 it.instance("cancel records MessageAbortedError on interrupted process", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

@@ -252,6 +252,7 @@ export function Prompt(props: PromptProps) {
   const keymap = useOpencodeKeymap()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
+  const sendNowShortcut = useCommandShortcut("prompt.send_now")
   const renderer = useRenderer()
   const exit = useExit()
   const dimensions = useTerminalDimensions()
@@ -346,6 +347,13 @@ export function Prompt(props: PromptProps) {
     const messages = sync.data.message[props.sessionID]
     if (!messages) return undefined
     return messages.findLast((m): m is UserMessage => m.role === "user")
+  })
+
+  const hasPendingMessages = createMemo(() => {
+    const user = lastUserMessage()
+    if (!user || !props.sessionID) return false
+    const assistant = sync.data.message[props.sessionID]?.findLast((message) => message.role === "assistant")
+    return !assistant || user.id > assistant.parentID
   })
 
   const usage = createMemo(() => {
@@ -444,6 +452,16 @@ export function Prompt(props: PromptProps) {
           if (!handled) return
 
           dialog.clear()
+        },
+      },
+      {
+        title: "Send now",
+        desc: "Interrupt the current response and continue with the draft or pending messages",
+        name: "prompt.send_now",
+        category: "Prompt",
+        enabled: !props.disabled && (!!store.prompt.input || hasPendingMessages()),
+        run: async () => {
+          if (await submit(true)) dialog.clear()
         },
       },
       {
@@ -645,6 +663,7 @@ export function Prompt(props: PromptProps) {
     mode: OPENCODE_BASE_MODE,
     bindings: tuiConfig.keybinds.gather("prompt.palette", [
       "prompt.submit",
+      "prompt.send_now",
       "prompt.editor",
       "prompt.editor_context.clear",
       "prompt.stash",
@@ -1047,7 +1066,7 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
-  async function submit() {
+  async function submit(sendNow = false) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -1057,13 +1076,13 @@ export function Prompt(props: PromptProps) {
     if (submitting) return false
     submitting = true
     try {
-      return await submitInner()
+      return await submitInner(sendNow)
     } finally {
       submitting = false
     }
   }
 
-  async function submitInner() {
+  async function submitInner(sendNow: boolean) {
     workspace.clearNotice()
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1076,7 +1095,7 @@ export function Prompt(props: PromptProps) {
     if (props.disabled) return false
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
-    if (!store.prompt.input) return false
+    if (!store.prompt.input && !(sendNow && hasPendingMessages())) return false
     const trimmed = store.prompt.input.trim()
     if (store.mode === "normal" && reminders && /^\/(remind|reminders|notifications)(?:\s|$)/.test(trimmed)) {
       const text = trimmed.replace(/^\/(?:remind|reminders|notifications)\s*/, "")
@@ -1130,6 +1149,25 @@ export function Prompt(props: PromptProps) {
         />
       ))
       return false
+    }
+
+    if (sendNow && props.sessionID) {
+      // Wait for cancellation and tool cleanup before starting another run.
+      // The interrupted response and previously submitted inputs stay in history.
+      const stopped =
+        status().type === "idle" ||
+        (await sdk.client.session.abort({ sessionID: props.sessionID }, { throwOnError: true }).catch((error) => {
+          toast.show({ title: "Failed to interrupt session", message: errorMessage(error), variant: "error" })
+          return undefined
+        }))
+      if (!stopped) return false
+      setStore("interrupt", 0)
+      if (!store.prompt.input) {
+        void sdk.client.session.resume({ sessionID: props.sessionID }, { throwOnError: true }).catch((error) => {
+          toast.show({ title: "Failed to send pending messages", message: errorMessage(error), variant: "error" })
+        })
+        return true
+      }
     }
 
     const variant = local.model.variant.current()
@@ -1787,6 +1825,11 @@ export function Prompt(props: PromptProps) {
                       </box>
                     </box>
                     <InterruptHint />
+                    <Show when={store.prompt.input || hasPendingMessages()}>
+                      <text fg={theme.text} onMouseUp={() => void submit(true)}>
+                        {sendNowShortcut()} <span style={{ fg: theme.textMuted }}>send now</span>
+                      </text>
+                    </Show>
                   </box>
                 </Match>
                 <Match when={workspace.notice()}>
