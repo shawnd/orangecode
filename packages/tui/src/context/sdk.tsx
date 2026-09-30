@@ -8,6 +8,11 @@ export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
 }
 
+export type AttachConnection = {
+  url: string
+  headers?: RequestInit["headers"]
+}
+
 export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   name: "SDK",
   init: (props: {
@@ -16,6 +21,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     fetch?: typeof fetch
     headers?: RequestInit["headers"]
     events?: EventSource
+    onAttach?: () => Promise<AttachConnection>
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
@@ -146,6 +152,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       event: emitter,
       fetch: props.fetch ?? fetch,
       url: props.url,
+      async attachConnection(): Promise<AttachConnection> {
+        if (props.onAttach) return props.onAttach()
+        if (props.fetch) throw new Error("This TUI connection cannot be shared with another pane")
+        return { url: props.url, headers: props.headers }
+      },
     }
   },
 })

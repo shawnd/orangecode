@@ -63,6 +63,7 @@ import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
+import { splitSession } from "../../util/herdr"
 import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
@@ -556,6 +557,26 @@ export function Session() {
             sessionID={route.sessionID}
           />
         ))
+      },
+    },
+    {
+      title: "Split pane with current session",
+      value: "session.split",
+      category: "Session",
+      slash: {
+        name: "split",
+      },
+      run: async () => {
+        dialog.clear()
+        await splitSession({
+          sessionID: route.sessionID,
+          directory: session()?.directory ?? sdk.directory ?? paths.cwd,
+          cwd: paths.cwd,
+          direction: dimensions().width >= 160 ? "right" : "down",
+          connection: sdk.attachConnection,
+        }).catch((error) => {
+          toast.show({ message: errorMessage(error), variant: "error" })
+        })
       },
     },
     {

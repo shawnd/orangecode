@@ -32,7 +32,7 @@ import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
 import { EditorContextProvider } from "./context/editor"
 import { useEvent } from "./context/event"
-import { SDKProvider, useSDK } from "./context/sdk"
+import { SDKProvider, useSDK, type AttachConnection } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
 import { SyncProvider, useSync } from "./context/sync"
 import { DataProvider } from "./context/data"
@@ -145,6 +145,7 @@ export type TuiInput = {
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
+  onAttach?: () => Promise<AttachConnection>
   directory?: string
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
@@ -302,6 +303,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                           fetch={input.fetch}
                                           headers={input.headers}
                                           events={input.events}
+                                          onAttach={input.onAttach}
                                         >
                                           <PermissionProvider>
                                             <ProjectProvider>

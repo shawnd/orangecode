@@ -248,6 +248,9 @@ export const TuiThreadCommand = cmd({
             events: createEventSource(client),
           }
 
+      // Share this worker with additional TUIs without restarting its listener.
+      let listener: Promise<{ url: string }> | undefined
+
       try {
         await validateSession({
           url: transport.url,
@@ -273,6 +276,16 @@ export const TuiThreadCommand = cmd({
         await Effect.runPromise(
           run({
             url: transport.url,
+            async onAttach() {
+              if (external) return { url: transport.url, headers }
+              const server = await (listener ??= Promise.resolve(
+                client.call("server", { hostname: "127.0.0.1", port: 0 }),
+              ).catch((error) => {
+                listener = undefined
+                throw error
+              }))
+              return { url: server.url, headers: ServerAuth.headers() }
+            },
             async onSnapshot() {
               const tui = writeHeapSnapshot("tui.heapsnapshot")
               const server = await client.call("snapshot", undefined)
