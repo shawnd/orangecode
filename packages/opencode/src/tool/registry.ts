@@ -19,6 +19,8 @@ import { SkillTool } from "./skill"
 import { ModelsSearchTool, ModelsTool } from "./models"
 import { CompactTool } from "./compact"
 import { ContextUsageTool } from "./context-usage"
+import { SessionActiveTool } from "./session-active"
+import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { McpManagementTools, managementRequested } from "./mcp-manage"
 import { ReminderManagementTools, reminderManagementRequested } from "./reminder-manage"
 import { ShellManagementTools, shellManagementRequested } from "./shell-manage"
@@ -128,6 +130,7 @@ const layer = Layer.effect(
     const modelsSearch = yield* ModelsSearchTool
     const compact = yield* CompactTool
     const contextUsage = yield* ContextUsageTool
+    const sessionActive = yield* SessionActiveTool
     const mcpManagement = yield* McpManagementTools
     const reminderManagement = yield* ReminderManagementTools
     const shellManagement = yield* ShellManagementTools
@@ -240,6 +243,7 @@ const layer = Layer.effect(
           modelsSearch: Tool.init(modelsSearch),
           compact: Tool.init(compact),
           contextUsage: Tool.init(contextUsage),
+          sessionActive: Tool.init(sessionActive),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
@@ -270,6 +274,7 @@ const layer = Layer.effect(
             tool.modelsSearch,
             tool.compact,
             tool.contextUsage,
+            tool.sessionActive,
             ...management,
             ...reminders,
             ...shells,
@@ -487,6 +492,7 @@ export const node = LayerNode.make({
     RuntimeFlags.node,
     MCP.node,
     Database.node,
+    SessionActivity.node,
     Ripgrep.node,
   ],
 })
