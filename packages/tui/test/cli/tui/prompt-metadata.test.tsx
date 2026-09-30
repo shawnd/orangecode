@@ -598,7 +598,7 @@ test("shell footer selection opens live command output without submitting the dr
     sessionID: "child",
     shell: { messageID: "child-message", partID: "shell-part", returnSessionID: "parent" },
   })
-  view.app.mockInput.pressEscape()
+  view.app.mockInput.pressArrow("up")
   await view.waitForFrame((frame) => frame.includes("1 shell"))
   expect(view.ctx().route.data).toEqual({ type: "session", sessionID: "parent" })
   view.prompt().set({ input: "keep this draft", parts: [] })
@@ -746,10 +746,10 @@ test("a real background shell is inspectable and interruptible while its owner i
   expect(frame).toContain("x".repeat(95))
   expect(frame).not.toContain("Building module 00")
   const first = frame.match(/Building module (\d+)/)?.[1]
-  view.app.mockInput.pressArrow("up")
+  view.app.mockInput.pressArrow("left")
   const scrolled = await view.waitForFrame((frame) => frame.match(/Building module (\d+)/)?.[1] !== first)
   expect(view.ctx().route.data.type).toBe("session")
-  view.app.mockInput.pressArrow("down")
+  view.app.mockInput.pressArrow("right")
   await view.waitForFrame((frame) => frame.match(/Building module (\d+)/)?.[1] === first)
   view.app.mockInput.pressKey("HOME")
   await view.waitForFrame((frame) => frame.includes("Building module 00"))

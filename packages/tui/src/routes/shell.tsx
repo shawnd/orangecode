@@ -41,7 +41,9 @@ export function Shell() {
   useBindings(() => ({
     enabled: dialog.stack.length === 0,
     bindings: [
-      { key: "up", desc: "Scroll shell output up", group: "Shell", cmd: () => scroll?.scrollBy(-1) },
+      { key: "up", desc: "Return to session", group: "Shell", cmd: back },
+      { key: "left", desc: "Scroll shell output up", group: "Shell", cmd: () => scroll?.scrollBy(-1) },
+      { key: "right", desc: "Scroll shell output down", group: "Shell", cmd: () => scroll?.scrollBy(1) },
       { key: "down", desc: "Scroll shell output down", group: "Shell", cmd: () => scroll?.scrollBy(1) },
       {
         key: "pageup",
@@ -75,7 +77,7 @@ export function Shell() {
             <b>Shell</b> · {String(metadata()?.shellStatus ?? state()?.status ?? "finished")}
           </text>
           <text fg={theme.textMuted} onMouseUp={back}>
-            ctrl+↑ / esc return
+            ↑ / esc return
           </text>
         </box>
         <text fg={theme.accent}>{String(state()?.input.command ?? "Shell command")}</text>
@@ -91,7 +93,7 @@ export function Shell() {
         <text fg={theme.text}>{output()}</text>
       </scrollbox>
       <box flexShrink={0} paddingY={1} flexDirection="row" justifyContent="space-between">
-        <text fg={theme.textMuted}>↑/↓ scroll · pgup/pgdn page · home/end first/follow</text>
+        <text fg={theme.textMuted}>←/→ scroll · pgup/pgdn page · home/end first/follow</text>
         <text fg={theme.textMuted} onMouseUp={() => route.navigate({ type: "session", sessionID: data.sessionID })}>
           enter open session
         </text>
