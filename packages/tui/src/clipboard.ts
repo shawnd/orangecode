@@ -63,6 +63,10 @@ export async function read() {
   if (platform() === "linux") {
     const wayland = await command("wl-paste", ["-t", "image/png"]).catch(() => Buffer.alloc(0))
     if (wayland.length) return { data: wayland.toString("base64"), mime: "image/png" }
+    if (process.env.WAYLAND_DISPLAY) {
+      const text = await command("wl-paste", ["--no-newline", "--type", "text"]).catch(() => undefined)
+      if (text) return { data: text.toString(), mime: "text/plain" }
+    }
     const x11 = await command("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"]).catch(() =>
       Buffer.alloc(0),
     )

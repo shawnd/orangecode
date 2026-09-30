@@ -2,6 +2,7 @@ import {
   BoxRenderable,
   RGBA,
   TextareaRenderable,
+  MouseButton,
   MouseEvent,
   PasteEvent,
   decodePasteBytes,
@@ -369,18 +370,7 @@ export function Prompt(props: PromptProps) {
         run: async (ctx: CommandContext<Renderable, KeyEvent>) => {
           ctx.event.preventDefault()
           ctx.event.stopPropagation()
-          const content = await clipboard.read?.()
-          if (content?.mime.startsWith("image/")) {
-            await pasteAttachment({
-              filename: "clipboard",
-              mime: content.mime,
-              content: content.data,
-            })
-            return
-          }
-          if (content?.mime === "text/plain") {
-            await pasteInputText(content.data)
-          }
+          await pasteClipboard()
         },
       },
       {
@@ -1174,6 +1164,23 @@ export function Prompt(props: PromptProps) {
     )
   }
 
+  async function pasteClipboard() {
+    if (!input || input.isDestroyed) return
+    const content = await clipboard.read?.()
+    if (props.disabled || props.visible === false || dialog.stack.length > 0 || input.isDestroyed) return
+    if (content?.mime.startsWith("image/")) {
+      await pasteAttachment({
+        filename: "clipboard",
+        mime: content.mime,
+        content: content.data,
+      })
+      return
+    }
+    if (content?.mime === "text/plain") {
+      await pasteInputText(content.data)
+    }
+  }
+
   async function pasteInputText(text: string) {
     const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
     const pastedContent = normalizedText.trim()
@@ -1429,7 +1436,17 @@ export function Prompt(props: PromptProps) {
                   if (tuiConfig.cursor) input.cursorStyle = tuiConfig.cursor
                 }, 0)
               }}
-              onMouseDown={(r: MouseEvent) => r.target?.focus()}
+              onMouseDown={(event: MouseEvent) => {
+                if (event.button !== MouseButton.RIGHT) {
+                  event.target?.focus()
+                  return
+                }
+                event.preventDefault()
+                event.stopPropagation()
+                if (props.disabled) return
+                input.focus()
+                void pasteClipboard().catch((error) => toast.error(error))
+              }}
               focusedBackgroundColor={theme.backgroundElement}
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               cursorStyle={tuiConfig.cursor}
