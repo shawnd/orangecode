@@ -20,9 +20,11 @@ import { ModelsSearchTool, ModelsTool } from "./models"
 import { ModelFavorites } from "@opencode-ai/core/model-favorites"
 import { CompactTool } from "./compact"
 import { ContextUsageTool } from "./context-usage"
+import { SessionSearchTool } from "./session-search"
 import { SessionActiveTool } from "./session-active"
 import { SessionPlanningTool } from "./session-planning"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
+import { SessionSwitchTool } from "./session-switch"
 import { McpManagementTools, managementRequested } from "./mcp-manage"
 import { ReminderManagementTools, reminderManagementRequested } from "./reminder-manage"
 import { ShellManagementTools, shellManagementRequested } from "./shell-manage"
@@ -132,8 +134,10 @@ const layer = Layer.effect(
     const modelsSearch = yield* ModelsSearchTool
     const compact = yield* CompactTool
     const contextUsage = yield* ContextUsageTool
+    const sessionSearch = yield* SessionSearchTool
     const sessionActive = yield* SessionActiveTool
     const sessionPlanning = yield* SessionPlanningTool
+    const sessionSwitch = yield* SessionSwitchTool
     const mcpManagement = yield* McpManagementTools
     const reminderManagement = yield* ReminderManagementTools
     const shellManagement = yield* ShellManagementTools
@@ -246,8 +250,10 @@ const layer = Layer.effect(
           modelsSearch: Tool.init(modelsSearch),
           compact: Tool.init(compact),
           contextUsage: Tool.init(contextUsage),
+          sessionSearch: Tool.init(sessionSearch),
           sessionActive: Tool.init(sessionActive),
           sessionPlanning: Tool.init(sessionPlanning),
+          sessionSwitch: Tool.init(sessionSwitch),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
@@ -278,8 +284,10 @@ const layer = Layer.effect(
             tool.modelsSearch,
             tool.compact,
             tool.contextUsage,
+            tool.sessionSearch,
             tool.sessionActive,
             tool.sessionPlanning,
+            tool.sessionSwitch,
             ...management,
             ...reminders,
             ...shells,

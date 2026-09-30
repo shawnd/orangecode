@@ -82,7 +82,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   )
 
 const it = testEffect(layer())
-const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
+const withoutBackground = testEffect(layer({ experimentalBackgroundSubagents: false }))
 
 function defer<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -734,7 +734,7 @@ describe("tool.task", () => {
     },
   )
 
-  it.instance("rejects background execution when the experiment is disabled", () =>
+  withoutBackground.instance("rejects background execution when disabled", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
@@ -831,7 +831,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("execute launches background tasks without waiting for completion", () =>
+  it.instance("execute launches background tasks without waiting for completion", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const { chat, assistant } = yield* seed()
@@ -869,7 +869,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("background task completion waits for running updates", () =>
+  it.instance("background task completion waits for running updates", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const { chat, assistant } = yield* seed()
@@ -943,7 +943,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("background tasks complete through the background job service", () =>
+  it.instance("background tasks complete through the background job service", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const { chat, assistant } = yield* seed()
@@ -976,7 +976,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("background task completion does not wait for the parent async prompt", () =>
+  it.instance("background task completion does not wait for the parent async prompt", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const { chat, assistant } = yield* seed()
@@ -1014,7 +1014,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("removing the parent session cancels running background tasks", () =>
+  it.instance("removing the parent session cancels running background tasks", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const sessions = yield* Session.Service
@@ -1053,7 +1053,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("removing the child task session cancels its running background task", () =>
+  it.instance("removing the child task session cancels its running background task", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const sessions = yield* Session.Service
@@ -1092,7 +1092,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("cancelling the parent run cancels running background tasks", () =>
+  it.instance("cancelling the parent run cancels running background tasks", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const runState = yield* SessionRunState.Service
