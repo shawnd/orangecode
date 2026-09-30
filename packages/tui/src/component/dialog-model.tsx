@@ -8,8 +8,19 @@ import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useSync } from "../context/sync"
+import type { StartupControls } from "../startup/controls"
+import type { StartupSelection } from "../startup/presentation"
 
-export function DialogModel(props: { providerID?: string }) {
+export function DialogModel(props: {
+  providerID?: string
+  startup?: {
+    snapshot?: StartupControls
+    selection: () => StartupSelection | undefined
+    active: () => boolean
+    changed?: () => boolean
+    select: (providerID: string, modelID: string) => void
+  }
+}) {
   const local = useLocal()
   const sync = useSync()
   const dialog = useDialog()
@@ -25,6 +36,25 @@ export function DialogModel(props: { providerID?: string }) {
     const showSections = showExtra() && needle.length === 0
     const favorites = connected() ? local.model.favorite() : []
     const recents = local.model.recent()
+    if (props.startup && !sync.ready && sync.data.provider.length === 0) {
+      const snapshot = props.startup.snapshot
+      const selection = props.startup.selection()
+      const models = (snapshot?.models ?? [])
+        .filter((model) => !model.deprecated)
+        .map((model) => ({
+          value: { providerID: snapshot?.providerID ?? "", modelID: model.id },
+          title: model.name,
+          category: selection?.provider,
+          releaseDate: model.releaseDate ?? "",
+          footer: model.free ? "Free" : undefined,
+          disabled: model.disabled,
+          onSelect: () => onSelect(snapshot?.providerID ?? "", model.id),
+        }))
+      return sortModelOptions(
+        needle ? fuzzysort.go(needle, models, { keys: ["title", "category"] }).map((item) => item.obj) : models,
+        props.providerID !== undefined,
+      )
+    }
 
     function toOptions(items: typeof favorites, category: string) {
       if (!showSections) return []
@@ -139,7 +169,24 @@ export function DialogModel(props: { providerID?: string }) {
     if (!value) return "Select model"
     return value.name
   })
+  const current = createMemo(() => {
+    const selection = props.startup?.selection()
+    if (
+      props.startup?.active() &&
+      (!sync.ready || props.startup.changed?.()) &&
+      selection?.providerID &&
+      selection.modelID
+    )
+      return { providerID: selection.providerID, modelID: selection.modelID }
+    return local.model.current()
+  })
+
   function onSelect(providerID: string, modelID: string) {
+    if (props.startup?.active()) {
+      props.startup.select(providerID, modelID)
+      dialog.clear()
+      return
+    }
     local.model.set({ providerID, modelID }, { recent: true })
     const list = local.model.variant.list()
     const cur = local.model.variant.selected()
@@ -178,7 +225,7 @@ export function DialogModel(props: { providerID?: string }) {
       flat={true}
       skipFilter={true}
       title={title()}
-      current={local.model.current()}
+      current={current()}
     />
   )
 }

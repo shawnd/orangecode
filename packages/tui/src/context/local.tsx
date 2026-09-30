@@ -375,8 +375,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           })
         },
         variant: {
-          selected() {
-            const m = currentModel()
+          selected(model?: { providerID: string; modelID: string }) {
+            const m = model ?? currentModel()
             if (!m) return undefined
             const key = `${m.providerID}/${m.modelID}`
             return modelStore.variant[key]

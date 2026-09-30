@@ -6,6 +6,7 @@ import {
   MouseEvent,
   PasteEvent,
   decodePasteBytes,
+  rgbToHex,
   type KeyEvent,
   type Renderable,
 } from "@opentui/core"
@@ -29,7 +30,7 @@ import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+import { useTuiPaths, useTuiStartup, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useSDK } from "../../context/sdk"
@@ -42,6 +43,7 @@ import { editorSelectionKey, useEditorContext, type EditorSelection } from "../.
 import { normalizePromptContent, openEditor } from "../../editor"
 import { useExit } from "../../context/exit"
 import { promptOffsetWidth } from "../../prompt/display"
+import { adoptEarlyDraft } from "../../prompt/early-input"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
@@ -68,13 +70,23 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "../../context/args"
-import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useOpencodeKeymap } from "../../keymap"
+import {
+  OPENCODE_BASE_MODE,
+  useBindings,
+  useCommandShortcut,
+  useCommandSlashes,
+  useLeaderActive,
+  useOpencodeKeymap,
+} from "../../keymap"
 import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
 import { SessionCost, useSessionCostChildren } from "./cost"
+import { homeInputHeight } from "../../startup/presentation"
+import { cacheStartupPresentation } from "../../startup/cache"
+import type { StartupSlashDraft } from "../../startup/slashes"
 
 registerOpencodeSpinner()
 
@@ -112,6 +124,7 @@ export type PromptRef = {
   blur(): void
   focus(): void
   submit(): void
+  adoptStartupDraft?(draft: StartupSlashDraft): void
 }
 
 const DRAFT_RETENTION_MIN_CHARS = 20
@@ -162,6 +175,7 @@ export function Prompt(props: PromptProps) {
   const local = useLocal()
   const args = useArgs()
   const paths = useTuiPaths()
+  const earlyInput = useTuiStartup().earlyInput
   const location = useLocation()
   const terminalEnvironment = useTuiTerminalEnvironment()
   const clipboard = useClipboard()
@@ -250,6 +264,7 @@ export function Prompt(props: PromptProps) {
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
+  const slashes = useCommandSlashes()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
   const sendNowShortcut = useCommandShortcut("prompt.send_now")
@@ -734,6 +749,52 @@ export function Prompt(props: PromptProps) {
     },
     submit() {
       void submit()
+    },
+    adoptStartupDraft(draft) {
+      const unavailable = draft.changes?.some(
+        (change) =>
+          change.target === "select-model" &&
+          !sync.data.provider.some((provider) => provider.id === change.providerID && provider.models[change.modelID]),
+      )
+      draft.changes?.forEach((change) => {
+        if (change.target === "select-model") {
+          local.model.set({ providerID: change.providerID, modelID: change.modelID }, { recent: true })
+          return
+        }
+        if (change.target === "agent") return local.agent.move(change.direction)
+        if (change.target === "model") return local.model.cycleProvider(change.direction)
+        local.model.variant.cycle(change.direction)
+      })
+      // Cached entries carry display data, never callbacks. Resolve an explicitly
+      // selected UI action against the current reachable registry before running
+      // it. Stale/plugin-replaced commands remain editable text, never a prompt.
+      const pending = draft.command
+      const command =
+        pending && draft.text.startsWith(pending.prefix)
+          ? slashes().find((item) => item.command === pending.name && item.display === pending.display)
+          : undefined
+      const prefix = command && pending ? pending.prefix.length : 0
+      setStore(
+        "prompt",
+        "input",
+        adoptEarlyDraft(input, {
+          text: draft.text.slice(prefix),
+          cursor: Math.max(0, draft.cursor - prefix),
+        }),
+      )
+      if (props.visible !== false && dialog.stack.length === 0) input.focus()
+      if (command) queueMicrotask(() => command.onSelect())
+      if (draft.submit && !command && !unavailable) queueMicrotask(() => ref.submit())
+      if (
+        !draft.submit &&
+        !unavailable &&
+        draft.changes?.some((change) => change.target === "select-model") &&
+        local.model.variant.list().length &&
+        !local.model.variant.selected()
+      )
+        queueMicrotask(() => keymap.dispatchCommand("variant.list"))
+      const selected = draft.slash?.selected
+      if (selected) queueMicrotask(() => auto()?.restoreSlash(selected))
     },
   }
 
@@ -1494,10 +1555,67 @@ export function Prompt(props: PromptProps) {
     return local.agent.color(agent.name)
   })
 
-  const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
-  const modelMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", animationsEnabled)
-  const variantMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", animationsEnabled)
+  // Startup already displays the resolved palette at full opacity; fading from
+  // the background here would flash darker metadata during ownership transfer.
+  const metadataAnimations = createMemo(() => animationsEnabled() && !earlyInput)
+  const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), metadataAnimations)
+  const modelMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", metadataAnimations)
+  const variantMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", metadataAnimations)
   const borderHighlight = createMemo(() => tint(theme.border, highlight(), agentMetaAlpha()))
+  createEffect(() => {
+    if (props.sessionID) return
+    const agent = local.agent.current()
+    cacheStartupPresentation(paths.state, { border: rgbToHex(agent ? local.agent.color(agent.name) : theme.border) })
+  })
+  createEffect(() => {
+    if (props.sessionID || store.mode !== "normal" || !sync.ready || !local.model.ready) return
+    const agent = local.agent.current()
+    const model = local.model.current()
+    if (!agent || !model) return
+    const provider = sync.data.provider.find((item) => item.id === model.providerID)
+    cacheStartupPresentation(paths.state, {
+      selection: {
+        directory: paths.cwd,
+        agent: Locale.titlecase(agent.name),
+        model: local.model.parsed().model,
+        provider: currentProviderLabel(),
+        variant: local.model.variant.current() ?? "default",
+        agentColor: rgbToHex(local.agent.color(agent.name)),
+        variantColor: rgbToHex(theme.warning),
+        agentID: agent.name,
+        providerID: model.providerID,
+        modelID: model.modelID,
+      },
+      controls: {
+        directory: paths.cwd,
+        providerID: model.providerID,
+        models: (Object.keys(provider?.models ?? {}).length <= 512 ? Object.entries(provider?.models ?? {}) : []).map(
+          ([id, info]) => {
+            const variants = Object.keys(info.variants ?? {})
+            const variant = local.model.variant.selected({ providerID: model.providerID, modelID: id })
+            return {
+              id,
+              name: info.name ?? id,
+              variants,
+              releaseDate: info.release_date,
+              deprecated: info.status === "deprecated",
+              free: provider?.id === "opencode" && info.cost?.input === 0,
+              disabled: provider?.id === "opencode" && id.includes("-nano"),
+              ...(variant && variants.includes(variant) ? { variant } : {}),
+            }
+          },
+        ),
+        agents: local.agent.list().map((item) => ({
+          id: item.name,
+          label: Locale.titlecase(item.name),
+          color: rgbToHex(local.agent.color(item.name)),
+          ...(!item.model || item.model.providerID === model.providerID
+            ? { modelID: item.model?.modelID ?? model.modelID }
+            : {}),
+        })),
+      },
+    })
+  })
 
   const placeholderText = createMemo(() => {
     if (props.showPlaceholder === false) return undefined
@@ -1533,7 +1651,7 @@ export function Prompt(props: PromptProps) {
       }),
     }
   })
-  const maxHeight = createMemo(() => tuiConfig.prompt?.max_height ?? Math.max(6, Math.floor(dimensions().height / 3)))
+  const maxHeight = createMemo(() => homeInputHeight(dimensions().height, tuiConfig.prompt?.max_height))
   const moveLabelWidth = createMemo(() => Math.max(12, Math.min(44, dimensions().width - 48)))
 
   return (

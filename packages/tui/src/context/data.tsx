@@ -23,6 +23,7 @@ import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
 import { useEvent } from "./event"
 import { createSignal, onCleanup, onMount } from "solid-js"
+import { createRefresh } from "../util/refresh"
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -76,6 +77,37 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: sdk.directory ?? process.cwd(),
     })
+    const refresh = createRefresh()
+
+    function resource<Key extends keyof LocationData>(
+      name: Key,
+      load: (ref?: LocationRef) => Promise<{ data: { location: LocationRef; data: NonNullable<LocationData[Key]> } }>,
+    ) {
+      const read = (ref?: LocationRef, invalidate = false) =>
+        refresh(
+          JSON.stringify([locationKey(ref ?? defaultLocation()), name]),
+          async () => {
+            const response = await load(ref)
+            const key = locationKey(response.data.location)
+            if (!store.location[key]) setStore("location", key, {})
+            setStore(
+              "location",
+              key,
+              produce((draft) => {
+                draft[name] = response.data.data
+              }),
+            )
+          },
+          invalidate,
+        )
+      return {
+        list(ref?: LocationRef) {
+          return store.location[locationKey(ref ?? defaultLocation())]?.[name]
+        },
+        refresh: (ref?: LocationRef) => read(ref),
+        invalidate: (ref?: LocationRef) => read(ref, true),
+      }
+    }
 
     const message = {
       update(sessionID: string, fn: (messages: SessionMessage[]) => void) {
@@ -125,9 +157,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       switch (event.type) {
         case "catalog.updated":
           void Promise.all([
-            result.location.model.refresh(event.location),
-            result.location.provider.refresh(event.location),
-          ])
+            result.location.model.invalidate(event.location),
+            result.location.provider.invalidate(event.location),
+          ]).catch((error) => console.error("Failed to refresh catalog", error))
           break
         case "session.next.agent.switched":
           message.update(event.data.sessionID, (draft) => {
@@ -390,14 +422,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "reference.updated":
-          void result.location.reference.refresh()
+          void result.location.reference
+            .invalidate(event.location)
+            .catch((error) => console.error("Failed to refresh references", error))
           break
         case "integration.updated":
           void Promise.all([
-            result.location.integration.refresh(event.location),
-            result.location.model.refresh(event.location),
-            result.location.provider.refresh(event.location),
-          ])
+            result.location.integration.invalidate(event.location),
+            result.location.model.invalidate(event.location),
+            result.location.provider.invalidate(event.location),
+          ]).catch((error) => console.error("Failed to refresh integrations", error))
           break
       }
     }
@@ -472,79 +506,27 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           if (!store.location[key]) setStore("location", key, {})
           if (!ref) setDefaultLocation({ directory: location.directory, workspaceID: location.workspaceID })
         },
-        agent: {
-          list(location?: LocationRef) {
-            return store.location[locationKey(location ?? defaultLocation())]?.agent
-          },
-          async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.agent.list({ location: locationQuery(ref) }, { throwOnError: true })
-            const key = locationKey(result.data.location)
-            setStore("location", key, "agent", result.data.data)
-          },
-        },
-        command: {
-          list(location?: LocationRef) {
-            return store.location[locationKey(location ?? defaultLocation())]?.command
-          },
-          async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.command.list({ location: locationQuery(ref) }, { throwOnError: true })
-            const key = locationKey(result.data.location)
-            setStore("location", key, "command", result.data.data)
-          },
-        },
-        integration: {
-          list(location?: LocationRef) {
-            return store.location[locationKey(location ?? defaultLocation())]?.integration
-          },
-          async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.integration.list(
-              { location: locationQuery(ref) },
-              { throwOnError: true },
-            )
-            const key = locationKey(result.data.location)
-            setStore("location", key, "integration", result.data.data)
-          },
-        },
-        model: {
-          list(location?: LocationRef) {
-            return store.location[locationKey(location ?? defaultLocation())]?.model
-          },
-          async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.model.list({ location: locationQuery(ref) }, { throwOnError: true })
-            const key = locationKey(result.data.location)
-            setStore("location", key, "model", result.data.data)
-          },
-        },
-        provider: {
-          list(location?: LocationRef) {
-            return store.location[locationKey(location ?? defaultLocation())]?.provider
-          },
-          async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.provider.list({ location: locationQuery(ref) }, { throwOnError: true })
-            const key = locationKey(result.data.location)
-            setStore("location", key, "provider", result.data.data)
-          },
-        },
-        reference: {
-          list(location?: LocationRef) {
-            return store.location[locationKey(location ?? defaultLocation())]?.reference
-          },
-          async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.reference.list({ location: locationQuery(ref) }, { throwOnError: true })
-            const key = locationKey(result.data.location)
-            setStore("location", key, "reference", result.data.data)
-          },
-        },
-        skill: {
-          list(location?: LocationRef) {
-            return store.location[locationKey(location ?? defaultLocation())]?.skill
-          },
-          async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.skill.list({ location: locationQuery(ref) }, { throwOnError: true })
-            const key = locationKey(result.data.location)
-            setStore("location", key, "skill", result.data.data)
-          },
-        },
+        agent: resource("agent", (ref) =>
+          sdk.client.v2.agent.list({ location: locationQuery(ref) }, { throwOnError: true }),
+        ),
+        command: resource("command", (ref) =>
+          sdk.client.v2.command.list({ location: locationQuery(ref) }, { throwOnError: true }),
+        ),
+        integration: resource("integration", (ref) =>
+          sdk.client.v2.integration.list({ location: locationQuery(ref) }, { throwOnError: true }),
+        ),
+        model: resource("model", (ref) =>
+          sdk.client.v2.model.list({ location: locationQuery(ref) }, { throwOnError: true }),
+        ),
+        provider: resource("provider", (ref) =>
+          sdk.client.v2.provider.list({ location: locationQuery(ref) }, { throwOnError: true }),
+        ),
+        reference: resource("reference", (ref) =>
+          sdk.client.v2.reference.list({ location: locationQuery(ref) }, { throwOnError: true }),
+        ),
+        skill: resource("skill", (ref) =>
+          sdk.client.v2.skill.list({ location: locationQuery(ref) }, { throwOnError: true }),
+        ),
       },
     }
 

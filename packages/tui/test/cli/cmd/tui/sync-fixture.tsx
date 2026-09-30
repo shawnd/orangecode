@@ -22,7 +22,7 @@ export async function wait(fn: () => boolean, timeout = 2000) {
 
 type Ctx = { kv: ReturnType<typeof useKV>; project: ReturnType<typeof useProject>; sync: ReturnType<typeof useSync> }
 
-export async function mount(override?: FetchHandler, state?: string) {
+export async function mount(override?: FetchHandler, state?: string, status: "partial" | "complete" = "complete") {
   const calls = createFetch(override)
   const events = createEventSource()
   const disposals = new Set<Promise<void>>()
@@ -66,7 +66,7 @@ export async function mount(override?: FetchHandler, state?: string) {
   ))
 
   await ready
-  await wait(() => sync.status === "complete")
+  await wait(() => sync.status === status)
   return {
     app: Object.assign(app, {
       async dispose() {

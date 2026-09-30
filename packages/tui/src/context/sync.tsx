@@ -63,6 +63,7 @@ export const {
   provider: SyncProvider,
 } = createSimpleContext({
   name: "Sync",
+  eager: () => Boolean(useTuiStartup().earlyInput),
   init: () => {
     const startup = useTuiStartup()
     const kv = useKV()
@@ -455,8 +456,10 @@ export const {
 
     const exit = useExit()
     const args = useArgs()
+    let bootstrapVersion = 0
 
-    async function bootstrap(input: { fatal?: boolean } = {}) {
+    async function bootstrap(input: { fatal?: boolean; backgroundCatalog?: boolean } = {}) {
+      const version = ++bootstrapVersion
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
       const projectPromise = project.sync()
@@ -464,7 +467,6 @@ export const {
 
       // blocking - include session.list when continuing a session
       const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
-      const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
       const capabilitiesPromise = sdk.client.experimental.capabilities
         .get({ workspace }, { throwOnError: true })
         .then((x) => x.data)
@@ -477,7 +479,6 @@ export const {
       const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
       await Promise.all([
         providersPromise,
-        providerListPromise,
         capabilitiesPromise,
         agentsPromise,
         configPromise,
@@ -486,48 +487,61 @@ export const {
       ])
         .then(async () => {
           const providersResponse = providersPromise.then((x) => x.data!)
-          const providerListResponse = providerListPromise.then((x) => x.data!)
           const capabilitiesResponse = capabilitiesPromise
-          const consoleStateResponse = consoleStatePromise
           const agentsResponse = agentsPromise.then((x) => x.data ?? [])
           const configResponse = configPromise.then((x) => x.data!)
           const sessionListResponse = args.continue ? sessionListPromise : undefined
 
           return Promise.all([
             providersResponse,
-            providerListResponse,
             capabilitiesResponse,
-            consoleStateResponse,
             agentsResponse,
             configResponse,
             ...(sessionListResponse ? [sessionListResponse] : []),
           ]).then((responses) => {
             const providers = responses[0]
-            const providerList = responses[1]
-            const capabilities = responses[2]
-            const consoleState = responses[3]
-            const agents = responses[4]
-            const config = responses[5]
-            const sessions = responses[6]
+            const capabilities = responses[1]
+            const agents = responses[2]
+            const config = responses[3]
+            const sessions = responses[4]
+            if (version !== bootstrapVersion) return
 
             batch(() => {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
-              setStore("provider_next", reconcile(providerList))
+              // Connected models are sufficient for a usable session. Keep any
+              // existing disconnected catalog entries until the full refresh.
+              setStore(
+                "provider_next",
+                reconcile({
+                  all: [
+                    ...providers.providers,
+                    ...store.provider_next.all.filter((item) => !providers.providers.some((p) => p.id === item.id)),
+                  ],
+                  default: providers.default,
+                  connected: providers.providers.map((item) => item.id),
+                }),
+              )
               setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
-              setStore("console_state", reconcile(consoleState))
               setStore("agent", reconcile(agents))
               setStore("config", reconcile(config))
               if (sessions !== undefined) setStore("session", reconcile(sessions))
             })
           })
         })
-        .then(() => {
+        .then(async () => {
+          if (version !== bootstrapVersion) return
           if (store.status !== "complete") setStore("status", "partial")
+          const catalog = sdk.client.provider.list({ workspace }, { throwOnError: true }).then((x) => {
+            if (version === bootstrapVersion) setStore("provider_next", reconcile(x.data))
+          })
           // non-blocking
           void Promise.all([
+            catalog,
             ...(args.continue ? [] : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
-            consoleStatePromise.then((consoleState) => setStore("console_state", reconcile(consoleState))),
+            consoleStatePromise.then((consoleState) => {
+              if (version === bootstrapVersion) setStore("console_state", reconcile(consoleState))
+            }),
             sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
             sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
             sdk.client.mcp.status({ workspace }).then((x) => setStore("mcp", reconcile(x.data ?? {}))),
@@ -541,9 +555,16 @@ export const {
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
-          ]).then(() => {
-            setStore("status", "complete")
-          })
+          ])
+            .then(() => {
+              if (version === bootstrapVersion) setStore("status", "complete")
+            })
+            .catch((error) => {
+              console.error("tui background bootstrap failed", error)
+            })
+          // Explicit refresh callers (e.g. provider authorization) still observe
+          // the full catalog on return, while initial readiness is already partial.
+          if (!input.backgroundCatalog) await catalog
         })
         .catch(async (e) => {
           console.error("tui bootstrap failed", {
@@ -560,7 +581,7 @@ export const {
     }
 
     onMount(() => {
-      void bootstrap()
+      void bootstrap({ backgroundCatalog: true })
     })
 
     const result = {

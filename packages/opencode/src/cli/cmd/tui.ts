@@ -14,6 +14,7 @@ import { writeHeapSnapshot } from "v8"
 import { ServerAuth } from "@/server/auth"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
+import { getEarlyInput, stopEarlyInput } from "../early-input"
 import { restartArgs, restartProcess } from "../restart"
 
 declare global {
@@ -190,7 +191,6 @@ export const TuiThreadCommand = cmd({
     const unguard = win32InstallCtrlCGuard()
     let restart: string[] | undefined
     try {
-      const { TuiConfig } = await import("@/config/tui")
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
         process.exitCode = 1
@@ -204,7 +204,9 @@ export const TuiThreadCommand = cmd({
       try {
         process.chdir(next)
       } catch {
+        await stopEarlyInput()
         UI.error("Failed to change directory to " + next)
+        process.exitCode = 1
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
@@ -251,6 +253,10 @@ export const TuiThreadCommand = cmd({
             events: createEventSource(client),
           }
 
+      if (!external && getEarlyInput()) {
+        void client.call("warmup", { directory: cwd }).catch(() => {})
+      }
+
       // Share this worker with additional TUIs without restarting its listener.
       let listener: Promise<{ url: string }> | undefined
 
@@ -263,23 +269,29 @@ export const TuiThreadCommand = cmd({
           headers,
         })
       } catch (error) {
+        await stopEarlyInput()
         UI.error(errorMessage(error))
         process.exitCode = 1
         return
       }
-
-      // Failed validation must not acquire UI services that outlive the worker.
-      const prompt = await input(args.prompt)
-      const config = await TuiConfig.get()
 
       setTimeout(() => {
         client.call("checkUpgrade", { directory: cwd }).catch(() => {})
       }, 1000).unref?.()
 
       try {
-        const { Effect } = await import("effect")
-        const { run } = await import("../tui/layer")
-        const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
+        // Start the backend before loading UI/config modules, then overlap the
+        // independent reads and imports instead of serializing the startup path.
+        const [config, prompt, { Effect }, { run }, { createLegacyTuiPluginHost }] = await Promise.all([
+          (async () => {
+            const { TuiConfig } = await import("@/config/tui")
+            return TuiConfig.get()
+          })(),
+          input(args.prompt),
+          import("effect"),
+          import("../tui/layer"),
+          import("@/plugin/tui/runtime"),
+        ])
         const requested = await Effect.runPromise(
           run({
             url: transport.url,
@@ -299,6 +311,7 @@ export const TuiThreadCommand = cmd({
               return [tui, server]
             },
             config,
+            earlyInput: getEarlyInput(),
             pluginHost: createLegacyTuiPluginHost(),
             directory: cwd,
             fetch: transport.fetch,
@@ -325,6 +338,7 @@ export const TuiThreadCommand = cmd({
         await stop()
       }
     } finally {
+      await stopEarlyInput()
       try {
         unguard?.()
       } catch {}

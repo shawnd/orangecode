@@ -3,7 +3,7 @@ import { pathToFileURL } from "bun"
 import fuzzysort from "fuzzysort"
 import path from "path"
 import { firstBy } from "remeda"
-import { createMemo, createResource, createEffect, onMount, onCleanup, Index, Show, createSignal } from "solid-js"
+import { createMemo, createResource, createEffect, onMount, onCleanup, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useEditorContext } from "../../context/editor"
 import { useProject } from "../../context/project"
@@ -15,7 +15,8 @@ import { useTuiPaths } from "../../context/runtime"
 import { useTuiConfig } from "../../config"
 import { useLocation } from "../../context/location"
 import { useTheme, selectedForeground } from "../../context/theme"
-import { SplitBorder } from "../../ui/border"
+import { AutocompleteList } from "./autocomplete-list"
+import { cacheStartupPresentation } from "../../startup/cache"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "../../util/locale"
 import type { PromptInfo } from "../../prompt/history"
@@ -59,9 +60,11 @@ function extractLineRange(input: string) {
 export type AutocompleteRef = {
   onInput: (value: string) => void
   visible: false | "@" | "/"
+  restoreSlash: (selected: string) => void
 }
 
 export type AutocompleteOption = {
+  command?: string
   display: string
   value?: string
   aliases?: string[]
@@ -452,6 +455,7 @@ export function Autocomplete(props: {
       const label = serverCommand.source === "mcp" ? ":mcp" : ""
       results.push({
         display: "/" + serverCommand.name + label,
+        value: "/" + serverCommand.name,
         description: serverCommand.description,
         onSelect: () => {
           const newText = "/" + serverCommand.name + " "
@@ -471,6 +475,24 @@ export function Autocomplete(props: {
       ...item,
       display: item.display.padEnd(max + 2),
     }))
+  })
+
+  createEffect(() => {
+    if (props.sessionID) return
+    cacheStartupPresentation(paths.state, {
+      slashes: {
+        directory: paths.cwd,
+        items: commands()
+          .slice(0, 128)
+          .map((item) => ({
+            display: item.display.trimEnd(),
+            description: item.description?.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ").slice(0, 256),
+            aliases: item.aliases?.slice(0, 8),
+            command: item.command,
+            value: item.value,
+          })),
+      },
+    })
   })
 
   const options = createMemo((prev: AutocompleteOption[] | undefined) => {
@@ -502,7 +524,7 @@ export function Autocomplete(props: {
     const fuzziedNonFiles = fuzzysort
       .go(removeLineRange(searchValue), nonFileOptions, {
         keys: [
-          (obj) => removeLineRange((obj.value ?? obj.display).trimEnd()),
+          (obj) => removeLineRange((store.visible === "/" ? obj.display : (obj.value ?? obj.display)).trimEnd()),
           // Match description for slash commands only; for "@" it surfaced unrelated items.
           ...(store.visible === "/" ? ["description" as const] : []),
           (obj) => obj.aliases?.join(" ") ?? "",
@@ -670,6 +692,14 @@ export function Autocomplete(props: {
     })
 
     props.ref({
+      restoreSlash(selected) {
+        if (!props.input().plainText.startsWith("/")) return
+        setStore({ visible: "/", index: 0 })
+        queueMicrotask(() => {
+          const index = options().findIndex((item) => item.display.trimEnd() === selected)
+          if (index >= 0) moveTo(index)
+        })
+      },
       get visible() {
         return store.visible
       },
@@ -720,62 +750,27 @@ export function Autocomplete(props: {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
 
   return (
-    <box
+    <AutocompleteList
       visible={store.visible !== false}
-      position="absolute"
-      top={position().y - height()}
-      left={position().x}
+      x={position().x}
+      y={position().y}
       width={position().width}
-      zIndex={100}
-      {...SplitBorder}
-      borderColor={theme.border}
-    >
-      <scrollbox
-        ref={(r: ScrollBoxRenderable) => (scroll = r)}
-        backgroundColor={theme.backgroundMenu}
-        height={height()}
-        scrollbarOptions={{ visible: false }}
-        scrollAcceleration={scrollAcceleration()}
-      >
-        <Index
-          each={options()}
-          fallback={
-            <box paddingLeft={1} paddingRight={1}>
-              <text fg={theme.textMuted}>No matching items</text>
-            </box>
-          }
-        >
-          {(option, index) => (
-            <box
-              paddingLeft={1}
-              paddingRight={1}
-              backgroundColor={index === store.selected ? theme.primary : undefined}
-              flexDirection="row"
-              onMouseMove={() => {
-                setStore("input", "mouse")
-              }}
-              onMouseOver={() => {
-                if (store.input !== "mouse") return
-                moveTo(index)
-              }}
-              onMouseDown={() => {
-                setStore("input", "mouse")
-                moveTo(index)
-              }}
-              onMouseUp={() => select()}
-            >
-              <text fg={index === store.selected ? selectedForeground(theme) : theme.text} flexShrink={0}>
-                {option().display}
-              </text>
-              <Show when={option().description}>
-                <text fg={index === store.selected ? selectedForeground(theme) : theme.textMuted} wrapMode="none">
-                  {" " + option().description?.trimStart()}
-                </text>
-              </Show>
-            </box>
-          )}
-        </Index>
-      </scrollbox>
-    </box>
+      height={height()}
+      options={options()}
+      selected={store.selected}
+      theme={theme}
+      selectedText={selectedForeground(theme)}
+      scrollRef={(r) => (scroll = r)}
+      scrollAcceleration={scrollAcceleration()}
+      onMove={() => setStore("input", "mouse")}
+      onOver={(index) => {
+        if (store.input === "mouse") moveTo(index)
+      }}
+      onDown={(index) => {
+        setStore("input", "mouse")
+        moveTo(index)
+      }}
+      onSelect={() => select()}
+    />
   )
 }

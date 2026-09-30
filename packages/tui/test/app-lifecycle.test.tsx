@@ -8,6 +8,7 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { createEventSource, createFetch, directory, json } from "./fixture/tui-sdk"
 import { tmpdir } from "./fixture/fixture"
 import path from "path"
+import type { EarlyInput } from "../src/context/runtime"
 
 let root: Awaited<ReturnType<typeof tmpdir>>
 beforeEach(async () => {
@@ -19,43 +20,66 @@ afterEach(async () => {
 const testGlobal = () =>
   Layer.succeed(Global.Service, { ...Global.Path, home: root.path, state: root.path, data: root.path })
 
-test("renderer startup failure releases the plugin host before it starts", async () => {
-  const core = await import("@opentui/core")
-  let rendererCalls = 0
-  mock.module("@opentui/core", () => ({
-    ...core,
-    createCliRenderer: async () => {
-      rendererCalls++
-      throw new Error("renderer setup failed")
-    },
-  }))
-  let started = 0
-  let disposed = 0
-  try {
-    const { run } = await import("../src/app")
-    await expect(
-      Effect.runPromise(
-        run({
-          url: "http://test",
-          directory,
-          config: createTuiResolvedConfig({ plugin_enabled: {} }),
-          fetch: createFetch().fetch,
-          events: createEventSource().source,
-          args: {},
-          pluginHost: {
-            async start() { started++ },
-            async dispose() { disposed++ },
-          },
-        }).pipe(Effect.provide(testGlobal())),
-      ),
-    ).rejects.toThrow("renderer setup failed")
-    expect(started).toBe(0)
-    expect(disposed).toBe(1)
-    expect(rendererCalls).toBe(1)
-  } finally {
-    mock.restore()
-  }
-})
+test.each(["renderer", "takeover"])(
+  "startup failure during %s releases the plugin host before it starts",
+  async (phase) => {
+    const core = await import("@opentui/core")
+    let rendererCalls = 0
+    mock.module("@opentui/core", () => ({
+      ...core,
+      createCliRenderer: async () => {
+        rendererCalls++
+        throw new Error("renderer setup failed")
+      },
+    }))
+    let started = 0
+    let disposed = 0
+    let inputDisposed = 0
+    const early: EarlyInput = {
+      active: true,
+      read: () => ({ text: "", cursor: 0 }),
+      subscribe: () => () => {},
+      takeover: async () => {
+        throw new Error("input takeover failed")
+      },
+      onCancel() {},
+      claim: () => undefined,
+      dispose() {
+        inputDisposed++
+      },
+    }
+    try {
+      const { run } = await import("../src/app")
+      await expect(
+        Effect.runPromise(
+          run({
+            url: "http://test",
+            directory,
+            config: createTuiResolvedConfig({ plugin_enabled: {} }),
+            fetch: createFetch().fetch,
+            events: createEventSource().source,
+            args: {},
+            earlyInput: phase === "takeover" ? early : undefined,
+            pluginHost: {
+              async start() {
+                started++
+              },
+              async dispose() {
+                disposed++
+              },
+            },
+          }).pipe(Effect.provide(testGlobal())),
+        ),
+      ).rejects.toThrow(phase === "takeover" ? "input takeover failed" : "renderer setup failed")
+      expect(started).toBe(0)
+      expect(disposed).toBe(1)
+      expect(rendererCalls).toBe(phase === "renderer" ? 1 : 0)
+      expect(inputDisposed).toBe(phase === "takeover" ? 1 : 0)
+    } finally {
+      mock.restore()
+    }
+  },
+)
 
 test("immediate Ctrl+C flushes a newly favorited model and the subprocess exits naturally", async () => {
   await using tmp = await tmpdir()

@@ -35,13 +35,24 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createFetch, createEventSource, directory, json, worktree } from "../../fixture/tui-sdk"
 import type { ToolPart } from "@opencode-ai/sdk/v2"
+import { startupPresentation } from "../../../src/startup/presentation"
 import { RemindersProvider } from "../../../src/context/reminders"
 import { NativeReminders } from "@opencode-ai/core/native/reminders"
+import { TuiStartupProvider, type EarlyInput } from "../../../src/context/runtime"
+import { useStartupModelDialog } from "../../../src/component/startup-model-dialog"
+import type { StartupSlashDraft } from "../../../src/startup/slashes"
 
-async function mount(root: string, sessionID?: string, variants = true, submission?: { abort: Promise<Response> }) {
+async function mount(
+  root: string,
+  sessionID?: string,
+  variants = true,
+  startup?: { input: EarlyInput; load: Promise<void> },
+  submission?: { abort: Promise<Response> },
+) {
   const events = createEventSource()
   const aborted: string[] = []
   const submitted: { path: string; body?: unknown }[] = []
+  const cleanup: Promise<void>[] = []
   const dialogUI = await import("../../../src/ui/dialog")
   await Bun.write(`${root}/kv.json`, JSON.stringify({ animations_enabled: false }))
   const provider = {
@@ -82,7 +93,11 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
     }
     if (url.pathname === "/config") return json({ model: "metadata-provider/metadata-model" })
     if (url.pathname === "/config/providers")
-      return json({ providers: [provider, other], default: { "metadata-provider": "metadata-model" } })
+      return startup
+        ? startup.load.then(() =>
+            json({ providers: [provider, other], default: { "metadata-provider": "metadata-model" } }),
+          )
+        : json({ providers: [provider, other], default: { "metadata-provider": "metadata-model" } })
     if (url.pathname === "/provider")
       return json({
         all: [provider, other],
@@ -111,6 +126,7 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
     const sync = useSync()
     const route = useRoute()
     context = { local, dialog, route, sync, history: usePromptHistory(), kv: useKV(), toast: useToast() }
+    useStartupModelDialog()
     // Register app-level commands so clicks exercise real keymap dispatch and picker components.
     useBindings(() => ({
       commands: [
@@ -157,7 +173,11 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
     const config = createTuiResolvedConfig({ theme: "opencode" })
     onCleanup(registerOpencodeKeymap(keymap, renderer, config))
     return (
-      <TestTuiContexts directory={directory} paths={{ state: root, home: root, worktree }}>
+      <TestTuiContexts
+        directory={directory}
+        paths={{ state: root, home: root, worktree }}
+        onDispose={(done) => cleanup.push(done)}
+      >
         <ArgsProvider>
           <OpencodeKeymapProvider keymap={keymap}>
             <TuiConfigProvider config={config}>
@@ -172,31 +192,40 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
                               throw error ?? new Error("Unexpected exit")
                             }}
                           >
-                            <SyncProvider>
-                              <DataProvider>
-                                <RouteProvider>
-                                  <LocalProvider>
-                                    <ClipboardProvider value={{}}>
-                                      <PromptStashProvider>
-                                        <RemindersProvider>
-                                          <dialogUI.DialogProvider>
-                                            <FrecencyProvider>
-                                              <PromptHistoryProvider>
-                                                <EditorContextProvider>
-                                                  <LocationProvider>
-                                                    <Controls />
-                                                  </LocationProvider>
-                                                </EditorContextProvider>
-                                              </PromptHistoryProvider>
-                                            </FrecencyProvider>
-                                          </dialogUI.DialogProvider>
-                                        </RemindersProvider>
-                                      </PromptStashProvider>
-                                    </ClipboardProvider>
-                                  </LocalProvider>
-                                </RouteProvider>
-                              </DataProvider>
-                            </SyncProvider>
+                            <TuiStartupProvider value={{ skipInitialLoading: false, earlyInput: startup?.input }}>
+                              <SyncProvider>
+                                <DataProvider>
+                                  <RouteProvider>
+                                    <LocalProvider>
+                                      <ClipboardProvider value={{}}>
+                                        <PromptStashProvider>
+                                          <RemindersProvider>
+                                            <dialogUI.DialogProvider>
+                                              <FrecencyProvider>
+                                                <PromptHistoryProvider>
+                                                  <EditorContextProvider>
+                                                    <LocationProvider>
+                                                      <TuiStartupProvider
+                                                        value={{
+                                                          skipInitialLoading: false,
+                                                          earlyInput: startup?.input,
+                                                        }}
+                                                      >
+                                                        <Controls />
+                                                      </TuiStartupProvider>
+                                                    </LocationProvider>
+                                                  </EditorContextProvider>
+                                                </PromptHistoryProvider>
+                                              </FrecencyProvider>
+                                            </dialogUI.DialogProvider>
+                                          </RemindersProvider>
+                                        </PromptStashProvider>
+                                      </ClipboardProvider>
+                                    </LocalProvider>
+                                  </RouteProvider>
+                                </DataProvider>
+                              </SyncProvider>
+                            </TuiStartupProvider>
                           </ExitProvider>
                         </ProjectProvider>
                       </PermissionProvider>
@@ -226,6 +255,7 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
     events,
     aborted,
     submitted,
+    sessionRequests: calls.session,
     prompt() {
       if (!prompt) throw new Error("Prompt not ready")
       return prompt
@@ -243,6 +273,10 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
     },
     [Symbol.dispose]() {
       app.renderer.destroy()
+    },
+    async [Symbol.asyncDispose]() {
+      app.renderer.destroy()
+      await Promise.all(cleanup)
     },
   }
 }
@@ -293,7 +327,7 @@ test("session changes precede the branch on the interrupt row without adding a f
 test("Ctrl+Enter waits for interruption before sending the draft and attachments once", async () => {
   await using tmp = await tmpdir()
   const gate = Promise.withResolvers<Response>()
-  using view = await mount(tmp.path, "parent", true, { abort: gate.promise })
+  await using view = await mount(tmp.path, "parent", true, undefined, { abort: gate.promise })
   await view.waitForFrame((frame) => frame.includes("Metadata Model"))
   view.events.emit({
     directory,
@@ -334,7 +368,7 @@ test("Ctrl+Enter waits for interruption before sending the draft and attachments
 
 test("Ctrl+Enter with an empty draft resumes pending messages without adding a message", async () => {
   await using tmp = await tmpdir()
-  using view = await mount(tmp.path, "parent")
+  await using view = await mount(tmp.path, "parent")
   await view.waitForFrame((frame) => frame.includes("Metadata Model"))
   view.events.emit({
     directory,
@@ -367,7 +401,7 @@ test("Ctrl+Enter with an empty draft resumes pending messages without adding a m
 
 test("send now keeps the draft when interruption fails", async () => {
   await using tmp = await tmpdir()
-  using view = await mount(tmp.path, "parent", true, {
+  await using view = await mount(tmp.path, "parent", true, undefined, {
     abort: Promise.resolve(json({}, { status: 500 })),
   })
   await view.waitForFrame((frame) => frame.includes("Metadata Model"))
@@ -385,7 +419,7 @@ test("send now keeps the draft when interruption fails", async () => {
 
 test("Enter submits normally and Shift+Enter still inserts a newline", async () => {
   await using tmp = await tmpdir()
-  using view = await mount(tmp.path, "parent")
+  await using view = await mount(tmp.path, "parent")
   await view.waitForFrame((frame) => frame.includes("Metadata Model"))
   view.prompt().set({ input: "Normal input", parts: [] })
   view.app.mockInput.pressKey("RETURN", { shift: true })
@@ -395,6 +429,141 @@ test("Enter submits normally and Shift+Enter still inserts a newline", async () 
   await view.waitForFrame(() => view.submitted.length === 1)
   expect(view.submitted[0]?.path).toBe("/session/parent/message")
   expect(view.aborted).toHaveLength(0)
+})
+
+test("the real model picker opens from fast input before provider discovery resolves", async () => {
+  await using tmp = await tmpdir()
+  const gate = Promise.withResolvers<void>()
+  const presentation = startupPresentation()
+  presentation.selection = {
+    directory,
+    agent: "Build",
+    agentID: "build",
+    providerID: "metadata-provider",
+    modelID: "metadata-model",
+    model: "Metadata Model",
+    provider: "Metadata Provider",
+    variant: "default",
+  }
+  presentation.controls = {
+    directory,
+    providerID: "metadata-provider",
+    models: [
+      { id: "metadata-model", name: "Metadata Model", variants: ["high", "low"] },
+      { id: "second-model", name: "second Model", variants: ["high", "low"] },
+    ],
+    agents: [],
+  }
+  let draft: StartupSlashDraft = {
+    text: "/models ",
+    cursor: 8,
+    command: { name: "model.list", display: "/models", prefix: "/models " },
+  }
+  let modal = false
+  const listeners = new Set<() => void>()
+  const notify = () => listeners.forEach((listener) => listener())
+  const input: EarlyInput = {
+    active: true,
+    get modal() {
+      return modal
+    },
+    presentation,
+    read: () => ({ ...draft }),
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    openModal() {
+      draft = { text: "", cursor: 0 }
+      modal = true
+      notify()
+    },
+    closeModal() {
+      modal = false
+      notify()
+    },
+    selectModel(providerID, modelID) {
+      draft = { ...draft, changes: [{ target: "select-model", providerID, modelID }] }
+      notify()
+    },
+    takeover: async () => process.stdin,
+    onCancel() {},
+    claim: () => undefined,
+    dispose() {},
+  }
+  using view = await mount(tmp.path, undefined, true, { input, load: gate.promise })
+  await view.waitForFrame((frame) => frame.includes("Select model") && frame.includes("second Model"))
+  expect(view.ctx().sync.ready).toBe(false)
+  expect(modal).toBe(true)
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  const selected = Date.now() + 2000
+  while (!draft.changes && Date.now() < selected) {
+    await view.app.renderOnce()
+    await Bun.sleep(10)
+  }
+  expect(draft.changes).toEqual([{ target: "select-model", providerID: "metadata-provider", modelID: "second-model" }])
+  expect(modal).toBe(false)
+  gate.resolve()
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  const ready = Date.now() + 2000
+  while (!view.ctx().local.model.ready && Date.now() < ready) await Bun.sleep(10)
+  view.prompt().adoptStartupDraft?.(draft)
+  await view.waitForFrame((frame) => frame.includes("Select variant"))
+  expect(view.ctx().local.model.current()).toEqual({ providerID: "metadata-provider", modelID: "second-model" })
+  const saved = Date.now() + 2000
+  while (Date.now() < saved) {
+    if (
+      (await Bun.file(`${tmp.path}/model.json`).exists()) &&
+      (await Bun.file(`${tmp.path}/model.json`).json()).recent?.[0]?.modelID === "second-model"
+    )
+      break
+    await Bun.sleep(10)
+  }
+  view.ctx().dialog.clear()
+  view.prompt().reset()
+})
+
+test("fast mouse cycling is replayed through the same live model and variant handlers", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path)
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.prompt().adoptStartupDraft?.({
+    text: "keep typing",
+    cursor: 11,
+    changes: [
+      { target: "model", direction: 1 },
+      { target: "variant", direction: -1 },
+    ],
+  })
+  await view.waitForFrame((frame) => frame.includes("second Model") && frame.includes("· low"))
+  expect(view.ctx().local.model.current()).toEqual({ providerID: "metadata-provider", modelID: "second-model" })
+  expect(view.ctx().local.model.variant.current()).toBe("low")
+  expect(view.prompt().current.input).toBe("keep typing")
+  const saved = Date.now() + 2000
+  while (Date.now() < saved) {
+    if (
+      (await Bun.file(`${tmp.path}/model.json`).exists()) &&
+      (await Bun.file(`${tmp.path}/model.json`).json()).variant?.["metadata-provider/second-model"] === "low"
+    )
+      break
+    await Bun.sleep(10)
+  }
+  const requests = view.sessionRequests.length
+  view.prompt().reset()
+  view.prompt().adoptStartupDraft?.({
+    text: "do not send",
+    cursor: 11,
+    submit: true,
+    changes: [{ target: "select-model", providerID: "missing", modelID: "missing" }],
+  })
+  await view.app.renderOnce()
+  expect(view.sessionRequests.length).toBe(requests)
+  expect(view.prompt().current.input).toBe("do not send")
+  view.prompt().reset()
 })
 
 function runningTask(view: Awaited<ReturnType<typeof mount>>, child = "child") {
@@ -854,6 +1023,71 @@ test("a real background shell is inspectable and interruptible while its owner i
     },
   })
   await view.waitForFrame((frame) => !frame.includes("1 shell"))
+})
+
+test("startup slash selection opens the live picker, while stale actions remain editable", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path)
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.prompt().adoptStartupDraft?.({
+    text: "/models ",
+    cursor: 8,
+    command: { name: "model.list", display: "/models", prefix: "/models " },
+  })
+  await view.waitForFrame((frame) => frame.includes("Select model"))
+  expect(view.prompt().current.input).toBe("")
+  view.ctx().dialog.clear()
+  view.prompt().adoptStartupDraft?.({
+    text: "/removed ",
+    cursor: 9,
+    command: { name: "missing.command", display: "/removed", prefix: "/removed " },
+  })
+  await view.app.renderOnce()
+  expect(view.prompt().current.input).toBe("/removed ")
+  expect(view.ctx().dialog.stack.length).toBe(0)
+  view.prompt().reset()
+})
+
+test("an unfinished startup slash keeps its popup and selected item after adoption", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path)
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.prompt().adoptStartupDraft?.({ text: "/", cursor: 1, slash: { query: "", selected: "/models" } })
+  await view.waitForFrame((frame) => frame.includes("/models") && frame.includes("/agents"))
+  expect(view.prompt().current.input).toBe("/")
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("Select model"))
+  expect(view.ctx().local.agent.current()?.name).toBe("build")
+  view.ctx().dialog.clear()
+  view.prompt().reset()
+})
+
+test("home selection changes update the read-only startup snapshot without persisting a draft", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path)
+  await view.waitForFrame((frame) => frame.includes("Metadata Model") && frame.includes("default"))
+  await view.click("Build")
+  await view.waitForFrame((frame) => frame.includes("Plan"))
+  view.ctx().local.model.variant.set("high")
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    if (await Bun.file(`${tmp.path}/startup-presentation.json`).exists()) {
+      const cached = startupPresentation(await Bun.file(`${tmp.path}/startup-presentation.json`).json())
+      if (cached.selection?.agent === "Plan" && cached.selection.variant === "high") break
+    }
+    await Bun.sleep(10)
+  }
+  expect(startupPresentation(await Bun.file(`${tmp.path}/startup-presentation.json`).json()).selection).toMatchObject({
+    directory,
+    agent: "Plan",
+    model: "Metadata Model",
+    provider: "Metadata Provider",
+    variant: "high",
+  })
+  const selection = startupPresentation(await Bun.file(`${tmp.path}/startup-presentation.json`).json()).selection
+  expect(selection?.agentColor).toBe("#9d7cd8")
+  expect(selection?.variantColor).toBe("#f5a742")
+  expect(Object.keys(await Bun.file(`${tmp.path}/startup-presentation.json`).json())).not.toContain("draft")
 })
 
 for (const sessionID of [undefined, "metadata-session"]) {
