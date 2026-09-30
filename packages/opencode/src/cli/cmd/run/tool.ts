@@ -32,11 +32,17 @@ import type { ModelsSearchTool, ModelsTool } from "@/tool/models"
 import type { TaskTool } from "@/tool/task"
 import type { TodoWriteTool } from "@/tool/todo"
 import type { WebFetchTool } from "@/tool/webfetch"
-import { webSearchProviderLabel, type WebSearchTool } from "@/tool/websearch"
+import type { WebSearchTool } from "@/tool/websearch"
 import type { WriteTool } from "@/tool/write"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import * as Locale from "@/util/locale"
 import type { RunEntryBody, StreamCommit, ToolSnapshot } from "./types"
+
+function webSearchProviderLabel(provider: unknown) {
+  if (provider === "parallel") return "Parallel Web Search"
+  if (provider === "exa") return "Exa Web Search"
+  return "Web Search"
+}
 
 export type ToolView = {
   output: boolean

@@ -8,9 +8,9 @@
 // variant and the persisted file.
 import path from "path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Context, Effect, Layer } from "effect"
-import { makeRuntime } from "@/effect/run-service"
+import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import { Global } from "@opencode-ai/core/global"
 import { isRecord } from "@/util/record"
 import { createSession, sessionVariant, type RunSession, type SessionMessages } from "./session.shared"
@@ -136,7 +136,7 @@ function state(value: unknown): ModelState {
   }
 }
 
-function createLayer(fs = AppNodeBuilder.build(FSUtil.node)) {
+function createLayer(fs = LayerNode.compile(FSUtil.node)) {
   return Layer.fresh(
     Layer.effect(
       Service,
@@ -197,7 +197,7 @@ function createLayer(fs = AppNodeBuilder.build(FSUtil.node)) {
 }
 
 /** @internal Exported for testing. */
-export function createVariantRuntime(fs = AppNodeBuilder.build(FSUtil.node)): VariantRuntime {
+export function createVariantRuntime(fs = LayerNode.compile(FSUtil.node)): VariantRuntime {
   const runtime = makeRuntime(Service, createLayer(fs))
   return {
     resolveSavedVariant: (model) => runtime.runPromise((svc) => svc.resolveSavedVariant(model)).catch(() => undefined),

@@ -46,6 +46,11 @@ interface EffectCmdOpts<Args, A> {
   instance?: boolean | ((args: Args) => boolean)
   /** Defaults to process.cwd(). Override for commands that take a directory positional. */
   directory?: (args: Args) => string
+  /** Client-only invocations bypass the backend runtime entirely. */
+  client?: {
+    when: (args: WithDoubleDash<Args>) => boolean
+    handler: (args: WithDoubleDash<Args>) => Promise<A>
+  }
   handler: (args: WithDoubleDash<Args>) => Effect.Effect<A, CliError, AppServices | InstanceStore.Service>
 }
 
@@ -73,9 +78,13 @@ export const effectCmd = <Args, A>(opts: EffectCmdOpts<Args, A>) =>
     describe: opts.describe,
     builder: opts.builder as never,
     async handler(rawArgs) {
-      const { AppRuntime } = await import("@/effect/app-runtime")
       // yargs typing wraps Args in ArgumentsCamelCase<WithDoubleDash<...>>; cast at the boundary.
       const args = rawArgs as unknown as WithDoubleDash<Args>
+      if (opts.client?.when(args)) {
+        await opts.client.handler(args)
+        return
+      }
+      const { AppRuntime } = await import("@/effect/app-runtime")
       const useInstance = typeof opts.instance === "function" ? opts.instance(args) : opts.instance !== false
       if (!useInstance) {
         await AppRuntime.runPromise(opts.handler(args))

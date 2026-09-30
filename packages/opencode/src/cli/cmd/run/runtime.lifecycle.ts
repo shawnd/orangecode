@@ -14,7 +14,6 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { Global } from "@opencode-ai/core/global"
 import { openEditor } from "@opencode-ai/tui/editor"
 import { registerOpencodeKeymap } from "@opencode-ai/tui/keymap"
-import { Session as SessionApi } from "@/session/session"
 import * as Locale from "@/util/locale"
 import { resolveInteractiveStdin } from "./runtime.stdin"
 import { entrySplash, exitSplash, splashMeta } from "./splash"
@@ -107,7 +106,8 @@ function shutdown(renderer: CliRenderer): void {
 }
 
 function splashInfo(title: string | undefined, history: RunPrompt[]) {
-  if (title && !SessionApi.isDefaultTitle(title)) {
+  // Legacy generated titles are wire data; importing Session here loads the backend.
+  if (title && !/^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(title)) {
     return {
       title,
       showSession: true,

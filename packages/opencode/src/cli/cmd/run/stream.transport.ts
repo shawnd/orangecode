@@ -17,7 +17,7 @@
 // delayed idle from an older turn cannot complete a newer busy turn.
 import type { Event, GlobalEvent, OpencodeClient } from "@opencode-ai/sdk/v2"
 import { Context, Deferred, Effect, Exit, Layer, Scope, Stream } from "effect"
-import { makeRuntime } from "@/effect/run-service"
+import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import {
   blockerStatus,
   bootstrapSessionData,
