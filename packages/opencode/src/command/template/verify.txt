@@ -1,0 +1,15 @@
+Verify the project at `${path}` and report what you can demonstrate with actual checks.
+
+User-provided focus or constraints (honor these):
+$ARGUMENTS
+
+## Choose checks for this project
+
+1. Inspect the project before running anything: read relevant instructions (such as AGENTS.md), README, manifests, scripts, CI workflows, and the changed files. Check git status/diff if available, including untracked files. If the user named a target, focus there; otherwise verify the current changes and their likely impact. Preserve unrelated working-tree changes.
+2. Identify the project's real build, typecheck, lint, test, start, and smoke-check commands from its own configuration. Choose a small, meaningful set appropriate to the affected area; prefer focused tests first, then broader checks if warranted. Respect documented working directories, prerequisites, and command order. Don't guess a framework or run a generic command without evidence it applies.
+3. Run the checks you can run in this environment. When useful and feasible, start the application using the project's documented procedure, check that it actually responds or performs a representative operation, then stop any process you started. A successful process launch alone is not a smoke test. Avoid destructive commands, deployment, or changes to user data. If a step is unavailable (missing dependencies, credentials, services, browser, etc.), record why and continue with feasible checks.
+4. If a check fails, examine its output and relevant code; distinguish failures caused by the changes from existing or environmental failures. Fix issues only if the user's request includes fixing them, then rerun affected checks. Never describe an unrun check as passing.
+
+## Report
+
+Summarize the scope and checks chosen, with concrete evidence: exact commands (and working directories when relevant), pass/fail status, key output or observed response, and any relevant counts. Separate checks that passed, failed, and were blocked or skipped, giving reasons. State remaining gaps and what would be needed to verify them. Only claim screenshots, video, browser interaction, or visual correctness if you actually used a supported tool and observed the result; otherwise say visual verification was not performed. Do not claim the whole project is verified when only a subset was checked.

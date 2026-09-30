@@ -9,6 +9,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
+import PROMPT_VERIFY from "./template/verify.txt"
 import { LegacyEvent } from "@opencode-ai/schema/legacy-event"
 
 type State = {
@@ -46,6 +47,7 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  VERIFY: "verify",
 } as const
 
 export interface Interface {
@@ -85,6 +87,15 @@ const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.VERIFY] = {
+        name: Default.VERIFY,
+        description: "verify project changes with relevant build, test, and smoke checks",
+        source: "command",
+        get template() {
+          return PROMPT_VERIFY.replace("${path}", ctx.directory)
+        },
+        hints: hints(PROMPT_VERIFY),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
