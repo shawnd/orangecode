@@ -1,12 +1,40 @@
 import { describe, expect } from "bun:test"
 import { BackgroundJob } from "@opencode-ai/core/background-job"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Deferred, Effect, Exit, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Scope } from "effect"
 import { it } from "./lib/effect"
+import { unlink } from "node:fs/promises"
 
 const jobsLayer = LayerNode.compile(BackgroundJob.node)
 
 describe("BackgroundJob", () => {
+  it.live("releases only acknowledged terminal payloads and preserves late waiters and snapshots", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.make
+      const latch = yield* Deferred.make<void>()
+      const output = "late-output".repeat(3000)
+      const path = `/tmp/opencode/server-jobs-core-${process.pid}.tail`
+      yield* Effect.acquireRelease(
+        Effect.promise(() => Bun.write(path, output)),
+        () => Effect.promise(() => unlink(path)),
+      )
+      const load = Effect.promise(() => Bun.file(path).text())
+      const job = yield* jobs.start({ type: "test", run: Deferred.await(latch).pipe(Effect.as(output)) })
+      expect(yield* jobs.acknowledge(job.id, load)).toBe(false)
+      const waiting = yield* jobs.wait({ id: job.id }).pipe(Effect.forkScoped)
+      yield* Deferred.succeed(latch, undefined)
+      const completed = yield* jobs.wait({ id: job.id })
+      if (!completed.info) throw new Error("Completed job disappeared before acknowledgement")
+      expect(yield* jobs.acknowledge(job.id, load)).toBe(true)
+      expect(yield* jobs.wait({ id: job.id })).toEqual(completed)
+      expect(yield* jobs.get(job.id)).toEqual(completed.info)
+      expect(yield* jobs.cancel(job.id)).toEqual(completed.info)
+      expect(yield* jobs.list()).toEqual([completed.info])
+      expect(yield* Fiber.join(waiting)).toEqual(completed)
+      expect(yield* jobs.extend({ id: job.id, run: Effect.succeed("no") })).toBe(false)
+      expect(yield* jobs.acknowledge("missing", load)).toBe(false)
+    }),
+  )
   it.live("tracks process-local work through explicit observation", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service

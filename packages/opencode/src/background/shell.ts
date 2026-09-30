@@ -7,6 +7,7 @@ import { Identifier } from "@opencode-ai/core/id/id"
 import { Shell } from "@opencode-ai/core/shell"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "./job"
 import { Truncate } from "@/tool/truncate"
 
@@ -44,7 +45,9 @@ export type StartInput = {
 type Entry = {
   info: Info
   ancestors: string[]
-  stdin: Queue.Queue<Uint8Array, Cause.Done>
+  stdin?: Queue.Queue<Uint8Array, Cause.Done>
+  dirty?: Queue.Queue<void>
+  tailPath?: string
   revision: number
 }
 
@@ -77,6 +80,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const spawner = yield* ChildProcessSpawner
     const trunc = yield* Truncate.Service
+    const flags = yield* RuntimeFlags.Service
     const state = yield* InstanceState.make(() =>
       Effect.gen(function* () {
         return { entries: new Map<string, Entry>(), scope: yield* Scope.Scope }
@@ -90,6 +94,15 @@ const layer = Layer.effect(
         return yield* Effect.fail(new Error(`No shell job ${id} belongs to this session`))
       }
       return entry
+    })
+
+    const snapshot = Effect.fnUntraced(function* (entry: Entry) {
+      return {
+        ...entry.info,
+        output: entry.tailPath
+          ? yield* fs.readFileString(entry.tailPath).pipe(Effect.mapError(error))
+          : entry.info.output,
+      }
     })
 
     const start: Interface["start"] = Effect.fn("BackgroundShell.start")(function* (input) {
@@ -111,6 +124,7 @@ const layer = Layer.effect(
         },
         ancestors: input.ancestors,
         stdin: yield* Queue.bounded<Uint8Array, Cause.Done>(16),
+        dirty: yield* Queue.sliding<void>(1),
         revision: 0,
       }
       yield* Effect.all([
@@ -118,6 +132,11 @@ const layer = Layer.effect(
         fs.writeFileString(entry.info.stderrPath, ""),
       ]).pipe(Effect.mapError(error))
       const ready = yield* Deferred.make<void, Error>()
+      const projected = yield* Deferred.make<void>()
+      const delivered = yield* Deferred.make<void>()
+      const stdin = entry.stdin
+      const dirty = entry.dirty
+      if (!stdin || !dirty) return yield* Effect.die(new Error("Missing shell queues"))
       const run = Effect.scoped(
         Effect.gen(function* () {
           const logs = {
@@ -128,7 +147,7 @@ const layer = Layer.effect(
           const options = {
             cwd: input.cwd,
             env: input.env,
-            stdin: input.stdin ? Stream.fromQueue(entry.stdin) : ("ignore" as const),
+            stdin: input.stdin ? Stream.fromQueue(stdin) : ("ignore" as const),
             detached: process.platform !== "win32",
             forceKillAfter: "3 seconds" as const,
           }
@@ -142,6 +161,7 @@ const layer = Layer.effect(
               : ChildProcess.make(input.command, [], { ...options, shell: input.shell })
           const handle = yield* spawner.spawn(command)
           entry.info.pid = handle.pid
+          yield* Queue.offer(dirty, undefined)
           const output = yield* Stream.merge(
             Stream.decodeText(handle.stdout).pipe(Stream.map((text) => ({ stream: "stdout" as const, text }))),
             Stream.decodeText(handle.stderr).pipe(Stream.map((text) => ({ stream: "stderr" as const, text }))),
@@ -153,6 +173,7 @@ const layer = Layer.effect(
                 yield* logs.all.writeAll(bytes)
                 entry.info.output = (entry.info.output + chunk.text).slice(-30_000)
                 entry.revision++
+                yield* Queue.offer(dirty, undefined)
               }),
             ),
             Effect.forkScoped,
@@ -187,11 +208,15 @@ const layer = Layer.effect(
             if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause))
               entry.info.error = error(Cause.squash(exit.cause)).message
             entry.revision++
-            yield* Queue.end(entry.stdin)
+            yield* Queue.offer(dirty, undefined)
+            yield* Queue.end(stdin)
             yield* Deferred.fail(ready, new Error(entry.info.error ?? "Shell cancelled before startup"))
             if (input.onComplete && entry.info.status !== "cancelled") {
-              yield* input.onComplete({ ...entry.info }).pipe(Effect.forkIn(data.scope), Effect.asVoid)
+              yield* input
+                .onComplete({ ...entry.info })
+                .pipe(Effect.andThen(Deferred.succeed(delivered, undefined)), Effect.forkIn(data.scope), Effect.asVoid)
             }
+            if (!input.onComplete || entry.info.status === "cancelled") yield* Deferred.succeed(delivered, undefined)
           }),
         ),
       )
@@ -212,17 +237,40 @@ const layer = Layer.effect(
             if (input.onUpdate) {
               const update = input.onUpdate
               yield* Effect.gen(function* () {
-                let projected = -1
                 while (true) {
-                  if (entry.revision !== projected || entry.info.status !== "running") {
-                    const revision = entry.revision
-                    const settled = yield* update({ ...entry.info })
-                    if (settled) projected = revision
-                    if (settled && entry.info.status !== "running") return
+                  yield* Queue.take(dirty)
+                  if (entry.info.status === "running") yield* Effect.sleep("200 millis")
+                  while (true) {
+                    const info = { ...entry.info }
+                    const settled = yield* update(info)
+                    if (settled && info.status !== "running") {
+                      yield* Deferred.succeed(projected, undefined)
+                      return
+                    }
+                    if (settled) break
+                    // A false acknowledgement means the foreground tool part is
+                    // still being admitted. Retry only this delivery handshake.
+                    yield* Effect.sleep("200 millis")
                   }
-                  yield* Effect.sleep("200 millis")
                 }
               }).pipe(Effect.forkIn(data.scope), Effect.asVoid)
+              if (flags.experimentalJobOutputRelease)
+                yield* Effect.gen(function* () {
+                  yield* Deferred.await(projected)
+                  yield* Deferred.await(delivered)
+                  yield* jobs.wait({ id: entry.info.id })
+                  const tailPath = `${entry.info.outputPath}.tail`
+                  // Persist before releasing either resident copy. Log paths and
+                  // lightweight status descriptors retain their owner lifetime.
+                  yield* fs.writeFileString(tailPath, entry.info.output)
+                  yield* jobs.acknowledge(entry.info.id, fs.readFileString(tailPath).pipe(Effect.orDie))
+                  data.entries.set(entry.info.id, {
+                    info: { ...entry.info, output: "" },
+                    ancestors: entry.ancestors,
+                    revision: entry.revision,
+                    tailPath,
+                  })
+                }).pipe(Effect.forkIn(data.scope), Effect.asVoid)
             }
             yield* Deferred.await(ready)
             return { ...entry.info }
@@ -233,16 +281,20 @@ const layer = Layer.effect(
 
     const list: Interface["list"] = Effect.fn("BackgroundShell.list")(function* (sessionID) {
       const data = yield* InstanceState.get(state)
-      return Array.from(data.entries.values())
-        .filter((entry) => entry.info.sessionID === sessionID || entry.ancestors.includes(sessionID))
-        .map((entry) => ({ ...entry.info }))
+      return yield* Effect.forEach(
+        Array.from(data.entries.values()).filter(
+          (entry) => entry.info.sessionID === sessionID || entry.ancestors.includes(sessionID),
+        ),
+        snapshot,
+        { concurrency: 8 },
+      ).pipe(Effect.orDie)
     })
     const get: Interface["get"] = Effect.fn("BackgroundShell.get")(function* (sessionID, id) {
-      return { ...(yield* requireEntry(sessionID, id)).info }
+      return yield* snapshot(yield* requireEntry(sessionID, id))
     })
     const input: Interface["input"] = Effect.fn("BackgroundShell.input")(function* (sessionID, id, text, eof = false) {
       const entry = yield* requireEntry(sessionID, id)
-      if (entry.info.status !== "running" || !entry.info.stdinOpen)
+      if (entry.info.status !== "running" || !entry.info.stdinOpen || !entry.stdin)
         return yield* Effect.fail(new Error("Shell stdin is closed"))
       if (Buffer.byteLength(text) > 64 * 1024)
         return yield* Effect.fail(new Error("Shell input is limited to 64 KiB per call"))
@@ -252,12 +304,13 @@ const layer = Layer.effect(
       }
       if (eof) yield* Queue.end(entry.stdin)
       entry.revision++
-      return { ...entry.info }
+      if (entry.dirty) yield* Queue.offer(entry.dirty, undefined)
+      return yield* snapshot(entry)
     })
     const cancel: Interface["cancel"] = Effect.fn("BackgroundShell.cancel")(function* (sessionID, id) {
       const entry = yield* requireEntry(sessionID, id)
       yield* jobs.cancel(id)
-      return { ...entry.info }
+      return yield* snapshot(entry)
     })
     const output: Interface["output"] = Effect.fn("BackgroundShell.output")(function* (input) {
       const entry = yield* requireEntry(input.sessionID, input.id)
@@ -284,7 +337,7 @@ const layer = Layer.effect(
         Effect.mapError(error),
       )
       return {
-        info: { ...entry.info },
+        info: yield* snapshot(entry),
         path,
         lines: lines.slice(0, limit).map((item) => ({ ...item, text: item.text.slice(0, 2000) })),
         more: lines.length > limit,
@@ -319,6 +372,6 @@ export function metadata(info: Info) {
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [BackgroundJob.node, FSUtil.node, CrossSpawnSpawner.node, Truncate.node],
+  deps: [BackgroundJob.node, FSUtil.node, CrossSpawnSpawner.node, Truncate.node, RuntimeFlags.node],
 })
 export * as BackgroundShell from "./shell"

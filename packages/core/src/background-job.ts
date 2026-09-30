@@ -33,6 +33,7 @@ type Active = {
 
 type State = {
   jobs: SynchronizedRef.SynchronizedRef<Map<string, Active>>
+  terminal: Map<string, { info: Info; output: Effect.Effect<string> }>
   scope: Scope.Scope
 }
 
@@ -94,6 +95,8 @@ export interface Interface {
   readonly waitForPromotion: (id: string) => Effect.Effect<Info>
   readonly promote: (id: string) => Effect.Effect<Info | undefined>
   readonly cancel: (id: string) => Effect.Effect<Info | undefined>
+  /** Caller has delivered the terminal result and persisted a reloadable output. Never releases running work. */
+  readonly acknowledge: (id: string, output: Effect.Effect<string>) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/BackgroundJob") {}
@@ -120,6 +123,7 @@ function errorText(error: unknown) {
 export const make = Effect.gen(function* () {
   const state: State = {
     jobs: yield* SynchronizedRef.make(new Map()),
+    terminal: new Map(),
     scope: yield* Scope.Scope,
   }
 
@@ -141,7 +145,7 @@ export const make = Effect.gen(function* () {
           ? { sequence, text: exit.value }
           : job.output
       if (Exit.isSuccess(exit) && pending > 0) {
-        return [{}, new Map(jobs).set(id, { ...job, pending, output })]
+        return [{}, jobs.set(id, { ...job, pending, output })]
       }
       const status: Exclude<Status, "running"> = Exit.isSuccess(exit)
         ? "completed"
@@ -161,7 +165,7 @@ export const make = Effect.gen(function* () {
           ...(Exit.isFailure(exit) ? { error: errorText(Cause.squash(exit.cause)) } : {}),
         },
       }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
+      return [{ info: snapshot(next), done: job.done, scope: job.scope }, jobs.set(id, next)]
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) {
@@ -188,15 +192,30 @@ export const make = Effect.gen(function* () {
   })
 
   const list: Interface["list"] = Effect.fn("BackgroundJob.list")(function* () {
-    return Array.from((yield* SynchronizedRef.get(state.jobs)).values())
-      .map(snapshot)
-      .toSorted((a, b) => a.started_at - b.started_at)
+    const active = Array.from((yield* SynchronizedRef.get(state.jobs)).values()).map(snapshot)
+    const terminal = yield* Effect.forEach(
+      Array.from(state.terminal.values()),
+      (job) =>
+        Effect.map(job.output, (output) => ({
+          ...job.info,
+          metadata: job.info.metadata ? { ...job.info.metadata } : undefined,
+          output,
+        })),
+      { concurrency: 8 },
+    )
+    return [...active, ...terminal].toSorted((a, b) => a.started_at - b.started_at)
   })
 
   const get: Interface["get"] = Effect.fn("BackgroundJob.get")(function* (id) {
     const job = (yield* SynchronizedRef.get(state.jobs)).get(id)
-    if (!job) return
-    return snapshot(job)
+    if (job) return snapshot(job)
+    const terminal = state.terminal.get(id)
+    if (!terminal) return
+    return {
+      ...terminal.info,
+      metadata: terminal.info.metadata ? { ...terminal.info.metadata } : undefined,
+      output: yield* terminal.output,
+    }
   })
 
   const start: Interface["start"] = Effect.fn("BackgroundJob.start")(function* (input) {
@@ -234,7 +253,8 @@ export const make = Effect.gen(function* () {
               promoted,
               onPromote: input.onPromote,
             }
-            return [{ info: snapshot(job), scope, token }, new Map(jobs).set(id, job)] as readonly [
+            state.terminal.delete(id)
+            return [{ info: snapshot(job), scope, token }, jobs.set(id, job)] as readonly [
               StartResult,
               Map<string, Active>,
             ]
@@ -264,7 +284,7 @@ export const make = Effect.gen(function* () {
             if (!job || job.info.status !== "running") return [{ extended: false }, jobs]
             return [
               { extended: true, previous: job.tail, scope: job.scope, tail, token: job.token, sequence: job.next },
-              new Map(jobs).set(input.id, {
+              jobs.set(input.id, {
                 ...job,
                 pending: job.pending + 1,
                 next: job.next + 1,
@@ -291,7 +311,7 @@ export const make = Effect.gen(function* () {
 
   const wait: Interface["wait"] = Effect.fn("BackgroundJob.wait")(function* (input) {
     const job = (yield* SynchronizedRef.get(state.jobs)).get(input.id)
-    if (!job) return { timedOut: false }
+    if (!job) return { info: yield* get(input.id), timedOut: false }
     if (job.info.status !== "running") return { info: snapshot(job), timedOut: false }
     if (input.timeout === undefined) return { info: yield* Deferred.await(job.done), timedOut: false }
     if (input.timeout <= 0) return { info: snapshot(job), timedOut: true }
@@ -325,7 +345,7 @@ export const make = Effect.gen(function* () {
         }
         return [
           { info: snapshot(next), onPromote: job.onPromote, promoted: job.promoted },
-          new Map(jobs).set(id, next),
+          jobs.set(id, next),
         ] as readonly [PromoteResult, Map<string, Active>]
       }),
     )
@@ -350,14 +370,24 @@ export const make = Effect.gen(function* () {
           completed_at,
         },
       }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
+      return [{ info: snapshot(next), done: job.done, scope: job.scope }, jobs.set(id, next)]
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) yield* Scope.close(result.scope, Exit.void)
-    return result.info
+    return result.info ?? (yield* get(id))
   })
 
-  return Service.of({ list, get, start, extend, wait, waitForPromotion, promote, cancel })
+  const acknowledge: Interface["acknowledge"] = Effect.fn("BackgroundJob.acknowledge")(function* (id, output) {
+    return yield* SynchronizedRef.modify(state.jobs, (jobs) => {
+      const job = jobs.get(id)
+      if (!job || job.info.status === "running") return [false, jobs] as const
+      state.terminal.set(id, { info: { ...snapshot(job), output: undefined }, output })
+      jobs.delete(id)
+      return [true, jobs] as const
+    })
+  })
+
+  return Service.of({ list, get, start, extend, wait, waitForPromotion, promote, cancel, acknowledge })
 })
 
 const layer = Layer.effect(Service, make)

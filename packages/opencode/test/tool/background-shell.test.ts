@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Exit } from "effect"
+import { Deferred, Effect, Exit } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -41,7 +41,7 @@ const it = testEffect(
       RuntimeFlags.node,
       CrossSpawnSpawner.node,
     ]),
-    [[RuntimeFlags.node, RuntimeFlags.layer({ bashDefaultTimeoutMs: 10 })]],
+    [[RuntimeFlags.node, RuntimeFlags.layer({ bashDefaultTimeoutMs: 10, experimentalJobOutputRelease: true })]],
   ),
 )
 const code = (script: string) => `"${process.execPath}" -e '${script.replaceAll("'", "'\\''")}'`
@@ -149,6 +149,94 @@ const fixture = Effect.fn("BackgroundShellTest.fixture")(function* (params: Para
 })
 
 describe("background shells", () => {
+  it.instance("keeps terminal output resident until delivery, then reloads it for late observers", () =>
+    Effect.gen(function* () {
+      const shells = yield* BackgroundShell.Service
+      const jobs = yield* BackgroundJob.Service
+      const fs = yield* FSUtil.Service
+      const instance = yield* TestInstance
+      const delivery = yield* Deferred.make<void>()
+      const projection = yield* Deferred.make<void>()
+      let notifications = 0
+      const info = yield* shells.start({
+        sessionID: "release",
+        ancestors: ["parent"],
+        shell: "/bin/bash",
+        cwd: instance.directory,
+        env: process.env,
+        command: code('console.log("needle one\\nneedle two");console.log("x".repeat(35000));await Bun.sleep(10)'),
+        onUpdate: (info) =>
+          info.status === "running" ? Effect.succeed(true) : Deferred.await(projection).pipe(Effect.as(true)),
+        onComplete: () =>
+          Deferred.await(delivery).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                notifications++
+              }),
+            ),
+          ),
+      })
+      yield* jobs.wait({ id: info.id })
+      expect((yield* shells.get("release", info.id)).output).toHaveLength(30000)
+      expect(yield* fs.exists(`${info.outputPath}.tail`)).toBe(false)
+      yield* Deferred.succeed(projection, undefined)
+      expect(yield* fs.exists(`${info.outputPath}.tail`)).toBe(false)
+      yield* Deferred.succeed(delivery, undefined)
+      yield* pollWithTimeout(
+        fs.exists(`${info.outputPath}.tail`).pipe(Effect.map((exists) => (exists ? true : undefined))),
+        "tail was not persisted",
+      )
+      const late = yield* shells.get("parent", info.id)
+      expect(late.output).toHaveLength(30000)
+      expect((yield* jobs.wait({ id: info.id })).info?.output).toBe(late.output)
+      expect((yield* shells.list("parent"))[0]).toEqual(late)
+      expect((yield* shells.cancel("parent", info.id)).output).toBe(late.output)
+      expect((yield* shells.output({ sessionID: "parent", id: info.id, query: "NEEDLE", offset: 2 })).lines).toEqual([
+        { line: 2, text: "needle two" },
+      ])
+      expect(notifications).toBe(1)
+      expect(Exit.isFailure(yield* shells.get("stranger", info.id).pipe(Effect.exit))).toBe(true)
+    }),
+  )
+
+  it.instance("foreground burst completion flushes all saved output with backpressure", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture({ background: true, command: code('console.log("ready")') })
+      const tool = yield* ShellTool
+      const def = yield* tool.init()
+      const fs = yield* FSUtil.Service
+      // Bun's console.log can drop a write to a full pipe. End the same buffered
+      // stdout stream so this checks consumer draining rather than producer loss.
+      const result = yield* def.execute(
+        {
+          command: code(
+            'for(let i=0;i<256;i++)process.stdout.write("x".repeat(16384));process.stdout.end("\\nEND\\n")',
+          ),
+          timeout: 10000,
+        },
+        { ...setup.ctx, metadata: () => Effect.void },
+      )
+      expect(result.metadata.truncated).toBe(true)
+      if (!result.metadata.outputPath) throw new Error("Missing foreground log")
+      const output = yield* fs.readFileString(result.metadata.outputPath)
+      expect(output.length).toBe(256 * 16384 + 5)
+      expect(output.endsWith("\nEND\n")).toBe(true)
+    }),
+  )
+  it.instance("foreground timeout remains active while descendants hold the output pipe", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture({ background: true, command: code('console.log("ready")') })
+      const tool = yield* ShellTool
+      const def = yield* tool.init()
+      const result = yield* def.execute(
+        { command: "sleep 0.5 & printf parent-done", timeout: 30 },
+        { ...setup.ctx, metadata: () => Effect.void },
+      )
+      expect(result.output).toContain("parent-done")
+      expect(result.output).toContain("exceeding timeout 30 ms")
+      expect(result.metadata.exit).toBeNull()
+    }),
+  )
   it.instance(
     "returns immediately, survives the foreground timeout, and supports stdin/EOF with distinct searchable logs",
     () =>

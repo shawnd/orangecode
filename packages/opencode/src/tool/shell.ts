@@ -1,4 +1,4 @@
-import { Effect, Option, Stream } from "effect"
+import { Effect, Fiber, Option, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
@@ -456,6 +456,7 @@ export const ShellTool = Tool.define(
       let used = 0
       let file = ""
       let sink: ReturnType<typeof createWriteStream> | undefined
+      let sinkError: Error | undefined
       let cut = false
       let expired = false
       let aborted = false
@@ -485,6 +486,16 @@ export const ShellTool = Tool.define(
         ).pipe(Effect.catch(() => Effect.void))
       })
 
+      const writeSink = (chunk: string) =>
+        Effect.callback<void, Error>((resume) => {
+          const stream = sink
+          if (sinkError) return resume(Effect.fail(sinkError))
+          if (!stream) return resume(Effect.fail(new Error("Shell output sink is closed")))
+          // Await the write callback, so a slow disk applies backpressure to the
+          // process stream rather than accumulating writes in Node's buffer.
+          stream.write(chunk, (error) => resume(error ? Effect.fail(error) : Effect.void))
+        })
+
       yield* ctx.metadata({
         metadata: {
           output: "",
@@ -496,7 +507,7 @@ export const ShellTool = Tool.define(
           yield* Effect.addFinalizer(closeSink)
           const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
 
-          yield* Effect.forkScoped(
+          const output = yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
               const size = Buffer.byteLength(chunk, "utf-8")
               list.push({ text: chunk, size })
@@ -511,7 +522,7 @@ export const ShellTool = Tool.define(
               last = preview(last + chunk)
 
               if (file) {
-                sink?.write(chunk)
+                return writeSink(chunk).pipe(Effect.andThen(ctx.metadata({ metadata: { output: last } })))
               } else {
                 full += chunk
                 if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
@@ -521,6 +532,9 @@ export const ShellTool = Tool.define(
                         file = next
                         cut = true
                         sink = createWriteStream(next, { flags: "a" })
+                        sink.on("error", (error) => {
+                          sinkError = error
+                        })
                         full = ""
                       }),
                     ),
@@ -553,7 +567,11 @@ export const ShellTool = Tool.define(
           const timeout = Effect.sleep(`${input.timeout + 100} millis`)
 
           const exit = yield* Effect.raceAll([
-            handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
+            // Pipe holders can outlive the shell. Keep abort/timeout active while
+            // draining output, rather than joining after the race has finished.
+            handle.exitCode.pipe(
+              Effect.flatMap((code) => Fiber.join(output).pipe(Effect.as({ kind: "exit" as const, code }))),
+            ),
             abort.pipe(Effect.map(() => ({ kind: "abort" as const, code: null }))),
             timeout.pipe(Effect.map(() => ({ kind: "timeout" as const, code: null }))),
           ])
@@ -566,6 +584,8 @@ export const ShellTool = Tool.define(
             expired = true
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
           }
+
+          if (sinkError) return yield* Effect.fail(sinkError)
 
           return exit.kind === "exit" ? exit.code : null
         }),
