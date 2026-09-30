@@ -18,6 +18,7 @@ import { errorMessage } from "../util/error"
 import { DialogSessionDeleteFailed } from "./dialog-session-delete-failed"
 import { useCommandShortcut } from "../keymap"
 import { useEvent } from "../context/event"
+import { useClipboard } from "../context/clipboard"
 
 type SessionListFilter = { scope?: "project"; path?: string }
 
@@ -52,6 +53,7 @@ export function DialogSessionList() {
   const event = useEvent()
   const local = useLocal()
   const toast = useToast()
+  const clipboard = useClipboard()
   const [toDelete, setToDelete] = createSignal<string>()
   const [deleted, setDeleted] = createSignal(new Set<string>())
   const [search, setSearch] = createDebouncedSignal("", 150)
@@ -288,6 +290,17 @@ export function DialogSessionList() {
         dialog.clear()
       }}
       actions={[
+        {
+          command: "session.copy.id",
+          title: "copy ID",
+          disabled: !clipboard.write,
+          onTrigger: (option) => {
+            void clipboard.write?.(option.value).then(() => {
+              dialog.clear()
+              toast.show({ message: "Session ID copied", variant: "info" })
+            }, toast.error)
+          },
+        },
         {
           command: "session.pin.toggle",
           title: "pin/unpin",

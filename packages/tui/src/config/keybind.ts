@@ -85,6 +85,7 @@ export const Definitions = {
 
   session_export: keybind("<leader>x", "Export session to editor"),
   session_copy: keybind("none", "Copy session transcript"),
+  session_copy_id: keybind("ctrl+y", "Copy session ID in the session list"),
   session_move: keybind("none", "Move session"),
   session_new: keybind("<leader>n", "Create a new session"),
   session_list: keybind("<leader>l", "List all sessions"),
@@ -292,6 +293,7 @@ export const CommandMap = {
   debug_view: "opencode.debug",
   session_export: "session.export",
   session_copy: "session.copy",
+  session_copy_id: "session.copy.id",
   session_move: "session.move",
   session_new: "session.new",
   session_list: "session.list",
