@@ -10,6 +10,7 @@ import { LSP } from "@/lsp/lsp"
 import { createTwoFilesPatch, diffLines } from "diff"
 import DESCRIPTION from "./edit.txt"
 import { FileSystem } from "@opencode-ai/core/filesystem"
+import leven from "leven"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Format } from "../format"
@@ -220,27 +221,6 @@ export type Replacer = (content: string, find: string) => Generator<string, void
 const SINGLE_CANDIDATE_SIMILARITY_THRESHOLD = 0.65
 const MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD = 0.65
 
-/**
- * Levenshtein distance algorithm implementation
- */
-function levenshtein(a: string, b: string): number {
-  // Handle empty strings
-  if (a === "" || b === "") {
-    return Math.max(a.length, b.length)
-  }
-  const matrix = Array.from({ length: a.length + 1 }, (_, i) =>
-    Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
-  )
-
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1
-      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost)
-    }
-  }
-  return matrix[a.length][b.length]
-}
-
 export const SimpleReplacer: Replacer = function* (_content, find) {
   yield find
 }
@@ -342,7 +322,7 @@ export const BlockAnchorReplacer: Replacer = function* (content, find) {
         if (maxLen === 0) {
           continue
         }
-        const distance = levenshtein(originalLine, searchLine)
+        const distance = leven(originalLine, searchLine)
         similarity += (1 - distance / maxLen) / linesToCheck
 
         // Exit early when threshold is reached
@@ -391,7 +371,7 @@ export const BlockAnchorReplacer: Replacer = function* (content, find) {
         if (maxLen === 0) {
           continue
         }
-        const distance = levenshtein(originalLine, searchLine)
+        const distance = leven(originalLine, searchLine)
         similarity += 1 - distance / maxLen
       }
       similarity /= linesToCheck // Average similarity

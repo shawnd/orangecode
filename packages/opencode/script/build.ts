@@ -159,6 +159,7 @@ for (const item of targets) {
 
   const workerPath = "./src/cli/tui/worker.ts"
   const treeSitterWorkerPath = "opentui-tree-sitter-worker.js"
+  const fffWorkerPath = "opencode-fff-worker.ts"
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
 
   await Bun.build({
@@ -182,16 +183,19 @@ for (const item of targets) {
     },
     files: {
       [treeSitterWorkerPath]: treeSitterWorker,
+      [fffWorkerPath]: 'import "../core/src/filesystem/fff.worker.ts"',
       ...(embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {}),
     },
     entrypoints: [
       "./src/index.ts",
       workerPath,
       treeSitterWorkerPath,
+      fffWorkerPath,
       ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : []),
     ],
     define: {
       FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
+      OPENCODE_FFF_WORKER_PATH: JSON.stringify(bunfsRoot + fffWorkerPath),
       OPENCODE_VERSION: `'${Script.version}'`,
       OPENCODE_MODELS_DEV: generated.modelsData,
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + treeSitterWorkerPath,
