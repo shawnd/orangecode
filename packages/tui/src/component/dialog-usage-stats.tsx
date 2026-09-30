@@ -40,7 +40,7 @@ export function DialogUsageStats() {
       const cached = cache.get(key)
       if (cached) return cached
       const result = (async () => {
-        const response = await sdk.globalClient.v2.session.usage(
+        const response = await sdk.client.v2.session.usage(
           { start: start === undefined ? undefined : String(start), project: input.project, session: input.session },
           { throwOnError: true },
         )
