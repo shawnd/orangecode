@@ -109,8 +109,11 @@ describe("tool.registry", () => {
         modelID: ModelV2.ID.make("test"),
         agent: yield* agents.get("build"),
       })
-      expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(["compact", "context_usage", "mcp_tools"]))
+      expect(tools.map((tool) => tool.id)).toEqual(
+        expect.arrayContaining(["compact", "context_usage", "mcp_tools", "reminder_tools"]),
+      )
       expect(tools.filter((tool) => tool.id.startsWith("mcp_")).map((tool) => tool.id)).toEqual(["mcp_tools"])
+      expect(tools.filter((tool) => tool.id.startsWith("reminder_")).map((tool) => tool.id)).toEqual(["reminder_tools"])
     }),
   )
   it.instance("does not expose task_status", () =>

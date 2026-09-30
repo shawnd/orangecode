@@ -10,7 +10,18 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  onMount,
+  createSignal,
+  onCleanup,
+  on,
+  Show,
+  Switch,
+  Match,
+  useContext,
+} from "solid-js"
 import { registerOpencodeSpinner } from "../register-spinner"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -36,6 +47,9 @@ import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
+import { RemindersContext } from "../../context/reminders"
+import { DialogReminderCreate, DialogReminderConfirm, DialogReminders } from "../dialog-reminders"
+import { ReminderIndicator } from "../reminder-indicator"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
@@ -157,6 +171,7 @@ export function Prompt(props: PromptProps) {
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
+  const reminders = useContext(RemindersContext)
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
   const history = usePromptHistory()
   const stash = usePromptStash()
@@ -209,7 +224,7 @@ export function Prompt(props: PromptProps) {
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
   const [cursorVersion, setCursorVersion] = createSignal(0)
   const currentProviderLabel = createMemo(() => local.model.parsed().provider)
-  const hasRightContent = createMemo(() => Boolean(props.right))
+  const hasRightContent = createMemo(() => Boolean(props.right) || Boolean(reminders))
 
   function promptModelWarning() {
     toast.show({
@@ -942,9 +957,36 @@ export function Prompt(props: PromptProps) {
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
     if (!store.prompt.input) return false
+    const trimmed = store.prompt.input.trim()
+    if (store.mode === "normal" && reminders && /^\/(remind|reminders|notifications)(?:\s|$)/.test(trimmed)) {
+      const text = trimmed.replace(/^\/(?:remind|reminders|notifications)\s*/, "")
+      const list = /^\/(?:reminders|notifications)(?:\s|$)/.test(trimmed)
+      const parsed =
+        !list && text
+          ? await reminders.parse(text).catch((error) => {
+              toast.error(error)
+              return undefined
+            })
+          : undefined
+      if (!list && text && !parsed) return false
+      dialog.replace(() =>
+        list ? (
+          <DialogReminders />
+        ) : parsed ? (
+          <DialogReminderConfirm parsed={parsed} text={text} />
+        ) : (
+          <DialogReminderCreate />
+        ),
+      )
+      history.append({ ...store.prompt, mode: store.mode })
+      input.extmarks.clear()
+      input.clear()
+      setStore("prompt", { input: "", parts: [] })
+      setStore("extmarkToPartIndex", new Map())
+      return true
+    }
     const agent = local.agent.current()
     if (!agent) return false
-    const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
       return true
@@ -1510,6 +1552,9 @@ export function Prompt(props: PromptProps) {
               <Show when={hasRightContent()}>
                 <box flexDirection="row" gap={1} alignItems="center">
                   {props.right}
+                  <Show when={reminders}>
+                    <ReminderIndicator />
+                  </Show>
                 </box>
               </Show>
             </box>

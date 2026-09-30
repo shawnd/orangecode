@@ -20,6 +20,8 @@ import { ModelsSearchTool, ModelsTool } from "./models"
 import { CompactTool } from "./compact"
 import { ContextUsageTool } from "./context-usage"
 import { McpManagementTools, managementRequested } from "./mcp-manage"
+import { ReminderManagementTools, reminderManagementRequested } from "./reminder-manage"
+import { Global } from "@opencode-ai/core/global"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
@@ -125,6 +127,7 @@ const layer = Layer.effect(
     const compact = yield* CompactTool
     const contextUsage = yield* ContextUsageTool
     const mcpManagement = yield* McpManagementTools
+    const reminderManagement = yield* ReminderManagementTools
     const agent = yield* Agent.Service
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
     const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
@@ -241,6 +244,7 @@ const layer = Layer.effect(
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
         const management = yield* Effect.forEach(mcpManagement, (tool) => Tool.init(tool))
+        const reminders = yield* Effect.forEach(reminderManagement, (tool) => Tool.init(tool))
 
         return {
           custom,
@@ -263,6 +267,7 @@ const layer = Layer.effect(
             tool.compact,
             tool.contextUsage,
             ...management,
+            ...reminders,
             tool.patch,
             ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
@@ -311,8 +316,10 @@ const layer = Layer.effect(
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const management = managementRequested(input.messages ?? [])
+      const reminders = reminderManagementRequested(input.messages ?? [])
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id !== "mcp_tools" && mcpManagement.some((item) => item.id === tool.id)) return management
+        if (tool.id !== "reminder_tools" && reminderManagement.some((item) => item.id === tool.id)) return reminders
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }
@@ -452,6 +459,7 @@ export const node = LayerNode.make({
   layer,
   deps: [
     Config.node,
+    Global.node,
     Plugin.node,
     Question.node,
     Todo.node,

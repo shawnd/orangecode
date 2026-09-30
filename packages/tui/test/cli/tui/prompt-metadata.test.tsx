@@ -4,7 +4,7 @@ import { MouseButton } from "@opentui/core"
 import { testRender, useRenderer } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { onCleanup } from "solid-js"
-import { Prompt } from "../../../src/component/prompt"
+import { Prompt, type PromptRef } from "../../../src/component/prompt"
 import { FrecencyProvider } from "../../../src/component/prompt/frecency"
 import { DialogModel } from "../../../src/component/dialog-model"
 import { DialogProvider } from "../../../src/component/dialog-provider"
@@ -33,6 +33,8 @@ import { tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createFetch, directory, eventSource, json, worktree } from "../../fixture/tui-sdk"
+import { RemindersProvider } from "../../../src/context/reminders"
+import { NativeReminders } from "@opencode-ai/core/native/reminders"
 
 async function mount(root: string, sessionID?: string, variants = true) {
   const dialogUI = await import("../../../src/ui/dialog")
@@ -80,6 +82,7 @@ async function mount(root: string, sessionID?: string, variants = true) {
     if (url.pathname.startsWith("/session/")) return json([])
   })
   let context: { local: ReturnType<typeof useLocal>; dialog: ReturnType<typeof useDialog> } | undefined
+  let prompt: PromptRef | undefined
   function Controls() {
     const local = useLocal()
     const dialog = useDialog()
@@ -145,17 +148,19 @@ async function mount(root: string, sessionID?: string, variants = true) {
                                   <LocalProvider>
                                     <ClipboardProvider value={{}}>
                                       <PromptStashProvider>
-                                        <dialogUI.DialogProvider>
-                                          <FrecencyProvider>
-                                            <PromptHistoryProvider>
-                                              <EditorContextProvider>
-                                                <LocationProvider>
-                                                  <Controls />
-                                                </LocationProvider>
-                                              </EditorContextProvider>
-                                            </PromptHistoryProvider>
-                                          </FrecencyProvider>
-                                        </dialogUI.DialogProvider>
+                                        <RemindersProvider>
+                                          <dialogUI.DialogProvider>
+                                            <FrecencyProvider>
+                                              <PromptHistoryProvider>
+                                                <EditorContextProvider>
+                                                  <LocationProvider>
+                                                    <Controls />
+                                                  </LocationProvider>
+                                                </EditorContextProvider>
+                                              </PromptHistoryProvider>
+                                            </FrecencyProvider>
+                                          </dialogUI.DialogProvider>
+                                        </RemindersProvider>
                                       </PromptStashProvider>
                                     </ClipboardProvider>
                                   </LocalProvider>
@@ -188,6 +193,10 @@ async function mount(root: string, sessionID?: string, variants = true) {
   }
   return {
     app,
+    prompt() {
+      if (!prompt) throw new Error("Prompt not ready")
+      return prompt
+    },
     waitForFrame,
     async click(label: string, button: MouseButton.LEFT | MouseButton.RIGHT = MouseButton.LEFT) {
       const frame = await waitForFrame((frame) => frame.includes(label))
@@ -270,4 +279,53 @@ test("chat session displays default variant for a model with no variants", async
   await view.click("default", MouseButton.RIGHT)
   expect(view.ctx().local.model.variant.current()).toBeUndefined()
   expect(view.ctx().dialog.stack.length).toBe(0)
+})
+
+for (const sessionID of [undefined, "metadata-session"]) {
+  test(`reminder counter stays in the prompt controls on ${sessionID ? "chat session" : "home"}`, async () => {
+    await using tmp = await tmpdir()
+    using view = await mount(tmp.path, sessionID)
+    const empty = await view.waitForFrame((frame) => frame.includes("Metadata Model") && frame.includes("◷ (0)"))
+    const lines = empty.split("\n")
+    const row = lines.findIndex((line) => line.includes("◷ (0)"))
+    expect(lines[row]).toContain("default")
+    expect(lines[row].indexOf("◷")).toBeGreaterThan(lines[row].indexOf("default"))
+    expect(lines[row].indexOf("◷")).toBeGreaterThan(80)
+    expect(lines.slice(0, row).some((line) => line.includes("◷"))).toBe(false)
+    await view.click("◷ (0)")
+    await view.waitForFrame((frame) => frame.includes("Reminders · all terminals"))
+    view.ctx().dialog.clear()
+    const store = NativeReminders.open(`${tmp.path}/reminders.sqlite3`)
+    try {
+      const reminder = store.create(store.parse("in 20 minutes check CI"))
+      await view.waitForFrame((frame) => frame.includes("◷ (1)"))
+      await view.click("◷ (1)")
+      await view.waitForFrame((frame) => frame.includes("check CI"))
+      view.ctx().dialog.clear()
+      store.complete(reminder.id)
+      await view.waitForFrame((frame) => frame.includes("◷ (0)"))
+    } finally {
+      store.close()
+    }
+  })
+}
+
+test("submitting reminder slash commands keeps their dialog open and clears the prompt", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path)
+  await view.waitForFrame((frame) => frame.includes("Metadata Model") && frame.includes("◷ (0)"))
+  for (const command of ["/remind in 20 minutes check CI", "/reminders ", "/notifications "]) {
+    view.prompt().set({ input: command, parts: [] })
+    view.app.mockInput.pressEnter()
+    await view.waitForFrame((frame) =>
+      frame.includes(command.startsWith("/remind ") ? "Confirm reminder" : "Reminders · all terminals"),
+    )
+    expect(view.prompt().current.input).toBe("")
+    view.ctx().dialog.clear()
+    const frame = await view.waitForFrame(
+      (frame) =>
+        frame.includes("Metadata Model") && !frame.includes("all terminals") && !frame.includes("Confirm reminder"),
+    )
+    expect(frame).not.toContain(command.trim())
+  }
 })

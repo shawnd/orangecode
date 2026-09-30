@@ -874,6 +874,51 @@ it.instance("loads MCP management tools after discovery and resets them for the 
   }),
 )
 
+it.instance("loads reminder tools after discovery and resets them for the next user request", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Reminder discovery",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "Show my reminder tools and reminders" }],
+    })
+    yield* llm.tool("reminder_tools", {})
+    yield* llm.tool("reminder_list", {})
+    yield* llm.text("Done")
+    yield* prompt.loop({ sessionID: session.id })
+    const hits = yield* llm.hits
+    expect(hits).toHaveLength(3)
+    expect(JSON.stringify(hits[0].body.tools)).toContain('"name":"reminder_tools"')
+    expect(JSON.stringify(hits[0].body.tools)).not.toContain('"name":"reminder_create"')
+    expect(JSON.stringify(hits[1].body.tools)).toContain('"name":"reminder_create"')
+    expect(JSON.stringify(hits[1].body.tools)).toContain('"name":"reminder_update"')
+    expect(JSON.stringify(hits[2].body.tools)).toContain('"name":"reminder_delete"')
+    const messages = yield* sessions.messages({ sessionID: session.id })
+    const listed = messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.type === "tool" && part.tool === "reminder_list")
+    expect(listed?.type === "tool" && listed.state.status).toBe("completed")
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "Now help with a code question" }],
+    })
+    yield* llm.text("Sure")
+    yield* prompt.loop({ sessionID: session.id })
+    const next = (yield* llm.hits).at(-1)
+    expect(JSON.stringify(next?.body.tools)).toContain('"name":"reminder_tools"')
+    expect(JSON.stringify(next?.body.tools)).not.toContain('"name":"reminder_create"')
+  }),
+)
+
 it.instance("loop continues when finish is tool-calls", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
