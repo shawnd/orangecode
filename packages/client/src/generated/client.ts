@@ -304,6 +304,7 @@ export function make(options: ClientOptions) {
             path: `/api/session`,
             query: {
               workspace: input?.["workspace"],
+              agent: input?.["agent"],
               limit: input?.["limit"],
               order: input?.["order"],
               search: input?.["search"],

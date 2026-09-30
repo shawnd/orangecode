@@ -93,6 +93,16 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("filters listed sessions by selected agent", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const plan = yield* session.create({ location, agent: AgentV2.ID.make("plan") })
+      yield* session.create({ location, agent: AgentV2.ID.make("build") })
+
+      expect(yield* session.list({ agent: AgentV2.ID.make("plan") })).toEqual([plan])
+    }),
+  )
+
   it.effect("returns the existing Session when one ID is reused with different create arguments", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

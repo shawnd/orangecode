@@ -49,6 +49,7 @@ const Endpoint3_0 = (raw: RawClient["server.session"]) => (input?: Endpoint3_0In
 type Endpoint3_1Request = Parameters<RawClient["server.session"]["session.list"]>[0]
 type Endpoint3_1Input = {
   readonly workspace?: Endpoint3_1Request["query"]["workspace"]
+  readonly agent?: Endpoint3_1Request["query"]["agent"]
   readonly limit?: Endpoint3_1Request["query"]["limit"]
   readonly order?: Endpoint3_1Request["query"]["order"]
   readonly search?: Endpoint3_1Request["query"]["search"]
@@ -61,6 +62,7 @@ const Endpoint3_1 = (raw: RawClient["server.session"]) => (input?: Endpoint3_1In
   raw["session.list"]({
     query: {
       workspace: input?.["workspace"],
+      agent: input?.["agent"],
       limit: input?.["limit"],
       order: input?.["order"],
       search: input?.["search"],
