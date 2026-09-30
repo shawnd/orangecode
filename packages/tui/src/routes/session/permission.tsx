@@ -1,10 +1,10 @@
 import { createStore } from "solid-js/store"
 import { dirname } from "node:path"
-import { createMemo, For, Match, Show, Switch } from "solid-js"
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
-import type { PermissionRequest } from "@opencode-ai/sdk/v2"
+import type { PermissionRequest, ToolPart } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useSync } from "../../context/sync"
@@ -119,16 +119,46 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
-  const input = createMemo(() => {
+  const cachedTool = createMemo(() => {
     const tool = props.request.tool
-    if (!tool) return {}
+    if (!tool) return
     const parts = sync.data.part[tool.messageID] ?? []
-    for (const part of parts) {
-      if (part.type === "tool" && part.callID === tool.callID && part.state.status !== "pending") {
-        return part.state.input ?? {}
-      }
+    return parts.find((part): part is ToolPart => part.type === "tool" && part.callID === tool.callID)
+  })
+  // A parent session can receive a child's permission before its tool message is loaded.
+  const [message] = createResource(
+    () =>
+      props.request.tool && (!cachedTool() || cachedTool()?.state.status === "pending") ? props.request : undefined,
+    async (request) => {
+      const result = await sdk.client.session
+        .message({
+          sessionID: request.sessionID,
+          messageID: request.tool!.messageID,
+          directory: props.directory,
+          workspace: project.workspace.current(),
+        })
+        .catch((error) => {
+          console.error("Failed to load permission tool details", error)
+          return undefined
+        })
+      return result?.data
+    },
+  )
+  const tool = createMemo(() => {
+    const cached = cachedTool()
+    if (cached && cached.state.status !== "pending") return cached
+    return (
+      message()?.parts.find(
+        (part): part is ToolPart => part.type === "tool" && part.callID === props.request.tool?.callID,
+      ) ?? cached
+    )
+  })
+  const input = createMemo(() => {
+    const part = tool()
+    return {
+      ...props.request.metadata,
+      ...(part?.type === "tool" && part.state.status !== "pending" ? part.state.input : {}),
     }
-    return {}
   })
 
   const { theme } = useTheme()
@@ -218,8 +248,8 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             }
 
             if (permission === "read") {
-              const raw = data.filePath
-              const filePath = typeof raw === "string" ? raw : ""
+              const raw = data.filePath ?? data.filepath
+              const filePath = typeof raw === "string" ? raw : (props.request.patterns[0] ?? "")
               return {
                 icon: "→",
                 title: `Read ${pathFormatter.format(filePath)}`,
@@ -242,6 +272,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   <Show when={pattern}>
                     <box paddingLeft={1}>
                       <text fg={theme.textMuted}>{"Pattern: " + pattern}</text>
+                      <Show when={typeof data.path === "string"}>
+                        <text fg={theme.textMuted}>{"Path: " + pathFormatter.format(data.path as string)}</text>
+                      </Show>
                     </box>
                   </Show>
                 ),
@@ -257,6 +290,12 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   <Show when={pattern}>
                     <box paddingLeft={1}>
                       <text fg={theme.textMuted}>{"Pattern: " + pattern}</text>
+                      <Show when={typeof data.path === "string"}>
+                        <text fg={theme.textMuted}>{"Path: " + pathFormatter.format(data.path as string)}</text>
+                      </Show>
+                      <Show when={typeof data.include === "string"}>
+                        <text fg={theme.textMuted}>{"Include: " + data.include}</text>
+                      </Show>
                     </box>
                   </Show>
                 ),
@@ -285,11 +324,22 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 icon: "#",
                 title: "Shell command",
                 body: (
-                  <Show when={command}>
-                    <box paddingLeft={1}>
+                  <box paddingLeft={1}>
+                    <Show when={command}>
                       <text fg={theme.text}>{"$ " + command}</text>
-                    </box>
-                  </Show>
+                    </Show>
+                    <Show when={typeof data.description === "string"}>
+                      <text fg={theme.textMuted}>{data.description as string}</text>
+                    </Show>
+                    <Show when={typeof data.workdir === "string"}>
+                      <text fg={theme.textMuted}>
+                        {"Working directory: " + pathFormatter.format(data.workdir as string)}
+                      </text>
+                    </Show>
+                    <Show when={!command}>
+                      <For each={props.request.patterns}>{(pattern) => <text fg={theme.text}>{pattern}</text>}</For>
+                    </Show>
+                  </box>
                 ),
               }
             }
@@ -356,14 +406,33 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 icon: "←",
                 title: `Access external directory ${dir}`,
                 body: (
-                  <Show when={patterns.length > 0}>
-                    <box paddingLeft={1} gap={1}>
-                      <text fg={theme.textMuted}>Patterns</text>
-                      <box>
-                        <For each={patterns}>{(p) => <text fg={theme.text}>{"- " + p}</text>}</For>
-                      </box>
+                  <box paddingLeft={1}>
+                    <Show when={tool()?.tool}>{(name) => <text fg={theme.text}>{"Tool: " + name()}</text>}</Show>
+                    <Show when={typeof data.command === "string"}>
+                      <text fg={theme.text}>{"$ " + data.command}</text>
+                    </Show>
+                    <Show when={filepath ?? (typeof data.filePath === "string" ? data.filePath : undefined)}>
+                      {(file) => <text fg={theme.text}>{"Path: " + pathFormatter.format(file())}</text>}
+                    </Show>
+                    <Show when={typeof data.path === "string" && data.path !== filepath}>
+                      <text fg={theme.text}>{"Search path: " + pathFormatter.format(data.path as string)}</text>
+                    </Show>
+                    <Show when={typeof data.pattern === "string"}>
+                      <text fg={theme.text}>{"Search pattern: " + data.pattern}</text>
+                    </Show>
+                    <Show when={typeof data.include === "string"}>
+                      <text fg={theme.text}>{"Include: " + data.include}</text>
+                    </Show>
+                    <Show when={typeof data.workdir === "string"}>
+                      <text fg={theme.textMuted}>
+                        {"Working directory: " + pathFormatter.format(data.workdir as string)}
+                      </text>
+                    </Show>
+                    <text fg={theme.textMuted}>Permission patterns</text>
+                    <box>
+                      <For each={patterns}>{(p) => <text fg={theme.text}>{"- " + p}</text>}</For>
                     </box>
-                  </Show>
+                  </box>
                 ),
               }
             }
@@ -386,12 +455,16 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               body: (
                 <box paddingLeft={1}>
                   <text fg={theme.textMuted}>{"Tool: " + permission}</text>
+                  <Show when={Object.keys(data).length > 0}>
+                    <text fg={theme.text}>{JSON.stringify(data, null, 2)}</text>
+                  </Show>
+                  <For each={props.request.patterns}>{(pattern) => <text fg={theme.text}>{pattern}</text>}</For>
                 </box>
               ),
             }
           }
 
-          const current = info()
+          const current = createMemo(info)
 
           const header = () => (
             <box flexDirection="column" gap={0}>
@@ -399,11 +472,16 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 <text fg={theme.warning}>{"△"}</text>
                 <text fg={theme.text}>Permission required</text>
               </box>
+              <Show when={session()?.parentID}>
+                <text fg={theme.textMuted} paddingLeft={2}>
+                  {"Subagent: " + session()?.title}
+                </text>
+              </Show>
               <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
                 <text fg={theme.textMuted} flexShrink={0}>
-                  {current.icon}
+                  {current().icon}
                 </text>
-                <text fg={theme.text}>{current.title}</text>
+                <text fg={theme.text}>{current().title}</text>
               </box>
             </box>
           )
@@ -412,7 +490,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             <Prompt
               title="Permission required"
               header={header()}
-              body={current.body}
+              body={current().body}
               options={
                 props.request.permission === "external_directory" && props.request.always.length
                   ? { once: "Allow once", always: "Allow always", global: "Allow global", reject: "Reject" }
