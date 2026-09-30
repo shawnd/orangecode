@@ -28,7 +28,8 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, createEffect, onCleanup, onMount } from "solid-js"
+import { useRoute } from "./route"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
@@ -146,6 +147,8 @@ export const {
     const event = useEvent()
     const project = useProject()
     const sdk = useSDK()
+    const route = useRoute()
+    createEffect(() => sdk.interest.select(route.data.type === "session" ? route.data.sessionID : undefined))
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
@@ -156,6 +159,18 @@ export const {
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
     }
+    onCleanup(sdk.interest.onChange(() => {
+      setStore(produce((draft) => {
+        for (const sessionID of Object.keys(draft.message)) {
+          if (sdk.interest.includes(sessionID)) continue
+          for (const message of draft.message[sessionID]) delete draft.part[message.id]
+          delete draft.message[sessionID]
+          delete draft.todo[sessionID]
+          delete draft.session_diff[sessionID]
+          fullSyncedSessions.delete(sessionID)
+        }
+      }))
+    }))
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
@@ -170,11 +185,22 @@ export const {
     function listSessions() {
       return sdk.client.session
         .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery() })
-        .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+        .then((x) => {
+          const sessions = (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id))
+          sessions.forEach((session) => sdk.interest.observe(session))
+          return sessions
+        })
     }
 
     event.subscribe((event, { directory, workspace }) => {
+      const properties = event.properties as { sessionID?: string; info?: { sessionID?: string }; part?: { sessionID?: string } }
+      const transcriptSession = properties.sessionID ?? properties.info?.sessionID ?? properties.part?.sessionID
+      if ((event.type.startsWith("message.") || event.type === "todo.updated" || event.type === "session.diff") && transcriptSession && !sdk.interest.includes(transcriptSession)) return
       switch (event.type) {
+        case "server.connected":
+          fullSyncedSessions.clear()
+          for (const session of store.session.filter((session) => sdk.interest.includes(session.id))) void result.session.sync(session.id)
+          break
         case "server.instance.disposed":
           void bootstrap()
           break
@@ -203,7 +229,7 @@ export const {
 
         case "permission.asked": {
           const request = event.properties
-          if (permission.mode === "auto") {
+          if (permission.mode === "auto" && sdk.interest.owns(request.sessionID)) {
             void sdk.client.permission.reply({
               requestID: request.id,
               reply: "once",
@@ -369,7 +395,7 @@ export const {
         case "message.removed": {
           touchMessage(event.properties.sessionID, event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
-          const index = messages.findIndex((message) => message.id === event.properties.messageID)
+          const index = messages?.findIndex((message) => message.id === event.properties.messageID) ?? -1
           if (index !== -1) {
             setStore(
               "message",
@@ -406,7 +432,7 @@ export const {
         case "message.part.delta": {
           const parts = store.part[event.properties.messageID]
           if (!parts) break
-          const result = search(parts, event.properties.partID, (part) => part.id)
+          const result = search(parts ?? [], event.properties.partID, (part) => part.id)
           if (!result.found) break
           touchPart(event.properties.sessionID, event.properties.partID)
           setStore(
@@ -425,7 +451,7 @@ export const {
         case "message.part.removed": {
           touchPart(event.properties.sessionID, event.properties.partID)
           const parts = store.part[event.properties.messageID]
-          const result = search(parts, event.properties.partID, (part) => part.id)
+          const result = search(parts ?? [], event.properties.partID, (part) => part.id)
           if (result.found) {
             setStore(
               "part",
@@ -600,6 +626,8 @@ export const {
           return last.time.completed ? "idle" : "working"
         },
         async sync(sessionID: string) {
+          await sdk.eventsReady()
+          if (!sdk.interest.includes(sessionID)) return
           if (fullSyncedSessions.has(sessionID)) return
           const syncing = syncingSessions.get(sessionID)
           if (syncing) return syncing
@@ -612,6 +640,7 @@ export const {
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
+            if (!sdk.interest.includes(sessionID)) return
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)

@@ -122,6 +122,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function handleEvent(event: V2Event) {
+      if (event.type.startsWith("session.next.") && "sessionID" in event.data && typeof event.data.sessionID === "string" && !sdk.interest.includes(event.data.sessionID)) return
       switch (event.type) {
         case "catalog.updated":
           void Promise.all([
@@ -401,6 +402,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
       }
     }
+    onCleanup(sdk.interest.onChange(() => setStore("session", "message", produce((draft) => {
+      for (const sessionID of Object.keys(draft)) if (!sdk.interest.includes(sessionID)) delete draft[sessionID]
+    }))))
 
     onMount(() => {
       const unsub = events.subscribe((event, metadata) => {
@@ -427,7 +431,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
+            await sdk.eventsReady()
+            if (!sdk.interest.includes(sessionID)) return
             const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
+            if (!sdk.interest.includes(sessionID)) return
             setStore("session", "message", sessionID, result.data.data)
           },
         },

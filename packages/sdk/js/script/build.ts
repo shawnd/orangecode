@@ -92,7 +92,12 @@ const historySdkPatched = generatedSdk.replace(
 if (historySdkPatched === generatedSdk) {
   throw new Error("Session history numeric SDK patch did not apply")
 }
-await Bun.write("./src/v2/gen/sdk.gen.ts", historySdkPatched)
+// Adding query parameters must preserve the original global.event(options) call.
+const eventSdkPatched = historySdkPatched.replace(
+  /(public event<ThrowOnError extends boolean = false>\(\s*parameters\?: \{\s*sessions\?: string[;,]?\s*\})/,
+  "$1 & Options<never, ThrowOnError>",
+).replace(/(url: "\/global\/event",\s*)/, "$1...parameters,\n")
+await Bun.write("./src/v2/gen/sdk.gen.ts", eventSdkPatched)
 
 // Patch a @hey-api/openapi-ts codegen bug: SseFn incorrectly passes the
 // endpoint's TError into the second generic of ServerSentEventsResult, which

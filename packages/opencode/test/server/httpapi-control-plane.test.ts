@@ -1,4 +1,5 @@
 import { NodeHttpServer } from "@effect/platform-node"
+import { Database } from "@opencode-ai/core/database/database"
 import { describe, expect } from "bun:test"
 import { Context, Effect, Layer, Option, Ref } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
@@ -38,6 +39,7 @@ const apiLayer = HttpRouter.serve(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provide(Layer.mock(Auth.Service)({})),
   Layer.provide(Layer.mock(Config.Service)({})),
+  Layer.provide(Layer.succeed(Database.Service, { get db(): never { throw new Error("Database not used by control plane tests") } })),
   Layer.provide(Layer.mock(Installation.Service)({})),
   Layer.provide(
     Layer.mock(MoveSession.Service)({

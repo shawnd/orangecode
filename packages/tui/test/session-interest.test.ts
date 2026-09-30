@@ -1,0 +1,26 @@
+import { expect, test } from "bun:test"
+import { createSessionInterest } from "../src/context/session-interest"
+
+test("navigation cannot grant automatic approval authority, including descendants", () => {
+  const client = createSessionInterest()
+  client.observe({ id: "other-child", parentID: "other" })
+  client.select("other")
+  expect(client.includes("other-child")).toBe(true)
+  expect(client.owns("other")).toBe(false)
+  expect(client.owns("other-child")).toBe(false)
+  client.control("mine")
+  client.observe({ id: "my-child", parentID: "mine" })
+  client.observe({ id: "my-grandchild", parentID: "my-child" })
+  expect(client.owns("my-grandchild")).toBe(true)
+  expect(client.owns("other-child")).toBe(false)
+  expect(client.query()).toBe("mine,other")
+  client.select("third")
+  expect(client.includes("other-child")).toBe(false)
+  expect(client.includes("my-child")).toBe(true)
+  client.status("mine", false)
+  expect(client.query()).toBe("third")
+  expect(client.owns("my-child")).toBe(true)
+  expect(client.includes("my-child")).toBe(false)
+  client.observe({ id: "cycle", parentID: "cycle" })
+  expect(client.owns("cycle")).toBe(false)
+})

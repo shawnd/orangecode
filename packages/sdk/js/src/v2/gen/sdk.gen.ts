@@ -1335,12 +1335,19 @@ export class Global extends HeyApiClient {
   /**
    * Get global events
    *
-   * Subscribe to global events from the OpenCode system using server-sent events.
+   * Subscribe using SSE. Omit sessions for legacy unfiltered delivery; an explicit comma-separated list (including an empty list) restricts transcripts to those Sessions and descendants. Summaries, status, permissions and questions remain global. Interest grants no approval authority.
    */
-  public event<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public event<ThrowOnError extends boolean = false>(
+    parameters?: {
+      sessions?: string
+    } & Options<never, ThrowOnError>,
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "sessions" }] }])
     return (options?.client ?? this.client).sse.get<GlobalEventResponses, GlobalEventErrors, ThrowOnError>({
       url: "/global/event",
       ...options,
+      ...params,
     })
   }
 

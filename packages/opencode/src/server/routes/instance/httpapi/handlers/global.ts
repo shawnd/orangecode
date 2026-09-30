@@ -13,6 +13,8 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
 import { EventBuffer } from "@/server/event-buffer"
+import { Database } from "@opencode-ai/core/database/database"
+import { makeEventInterest } from "@/server/event-interest"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -23,15 +25,26 @@ function eventData(data: unknown): Sse.Event {
   }
 }
 
-export function eventResponse(bounded = false, observe?: Parameters<typeof EventBuffer.bufferedEvents>[0]["observe"]) {
+export function eventResponse(
+  bounded = false,
+  observe?: Parameters<typeof EventBuffer.bufferedEvents>[0]["observe"],
+  interest?: ReturnType<typeof makeEventInterest>,
+  db?: Database.Interface["db"],
+) {
   return Effect.gen(function* () {
     yield* Effect.logInfo("global event connected")
     const events = Stream.callback<GlobalBusEvent>((queue) => {
-      const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
-      return Effect.acquireRelease(
-        Effect.sync(() => GlobalBus.on("event", handler)),
-        () => Effect.sync(() => GlobalBus.off("event", handler)),
-      )
+      const handler = (event: GlobalBusEvent) => {
+        if (!interest || interest.accepts(event)) Queue.offerUnsafe(queue, event)
+      }
+      return Effect.gen(function* () {
+        yield* Effect.acquireRelease(
+          Effect.sync(() => GlobalBus.on("event", handler)),
+          () => Effect.sync(() => GlobalBus.off("event", handler)),
+        )
+        if (interest && db) yield* interest.seed(db)
+        Queue.offerUnsafe(queue, { payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } })
+      })
     })
     const heartbeat = Stream.tick("10 seconds").pipe(
       Stream.drop(1),
@@ -68,8 +81,8 @@ export function eventResponse(bounded = false, observe?: Parameters<typeof Event
     return HttpServerResponse.stream(
       (bounded
         ? boundedStream
-        : Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
-            Stream.concat(events.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
+        : events.pipe(
+            Stream.merge(heartbeat, { haltStrategy: "left" }),
             Stream.map(eventData),
           )
       ).pipe(
@@ -95,6 +108,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const config = yield* Config.Service
     const installation = yield* Installation.Service
     const bridge = yield* EffectBridge.make()
+    const database = yield* Database.Service
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion }
@@ -103,7 +117,12 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const event = Effect.fn("GlobalHttpApi.event")(function* (ctx) {
       // Only recovery-aware clients negotiate limits. Legacy clients have no
       // snapshot fence and must not silently reconnect past critical events.
-      return yield* eventResponse(ctx.request.headers["x-opencode-event-buffer"] === "bounded-v1")
+      return yield* eventResponse(
+        ctx.request.headers["x-opencode-event-buffer"] === "bounded-v1",
+        undefined,
+        ctx.query.sessions === undefined ? undefined : makeEventInterest(ctx.query.sessions),
+        database.db,
+      )
     })
 
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {

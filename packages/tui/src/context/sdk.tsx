@@ -4,6 +4,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
 import { createEventBatch } from "./event-batch"
+import { createSessionInterest } from "./session-interest"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -27,6 +28,10 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const abort = new AbortController()
     let sse: AbortController | undefined
     let unsubscribe: (() => void) | undefined
+    const selective = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST === "1"
+    const interest = createSessionInterest(selective)
+    let mounted = false
+    let ready = Promise.withResolvers<void>()
 
     function createSDK() {
       return createOpencodeClient({
@@ -71,6 +76,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     const handleEvent = (event: GlobalEvent) => {
+      if (event.payload.type === "server.connected") ready.resolve()
+      if (event.payload.type === "session.created" || event.payload.type === "session.updated") interest.observe(event.payload.properties.info)
+      if (event.payload.type === "session.status") interest.status(event.payload.properties.sessionID, event.payload.properties.status.type !== "idle")
       if (!queue.offer(event)) return
       const elapsed = Date.now() - last
 
@@ -86,6 +94,8 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     function startSSE() {
       sse?.abort()
+      ready.resolve()
+      ready = Promise.withResolvers<void>()
       const ctrl = new AbortController()
       sse = ctrl
       ;(async () => {
@@ -94,6 +104,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           if (abort.signal.aborted || ctrl.signal.aborted) break
 
           const events = await sdk.global.event({
+            ...(selective ? { sessions: interest.query() } : {}),
             signal: ctrl.signal,
             sseMaxRetryAttempts: 0,
           })
@@ -122,6 +133,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     onMount(async () => {
+      mounted = true
       if (props.events) {
         const cleanup = await props.events.subscribe(handleEvent)
         // subscribe may finish after the provider is disposed. Registering
@@ -131,6 +143,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           return
         }
         unsubscribe = cleanup
+        ready.resolve()
 
         if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
           // Start syncing workspaces, it's important to do this after
@@ -141,6 +154,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         startSSE()
       }
     })
+    onCleanup(interest.onChange(() => {
+      if (selective && mounted && !props.events) startSSE()
+    }))
 
     onCleanup(() => {
       abort.abort()
@@ -157,6 +173,14 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       },
       directory: props.directory,
       event: emitter,
+      interest,
+      async eventsReady() {
+        while (!abort.signal.aborted) {
+          const current = ready
+          await current.promise
+          if (current === ready) return
+        }
+      },
       fetch: props.fetch ?? fetch,
       url: props.url,
       async attachConnection(): Promise<AttachConnection> {

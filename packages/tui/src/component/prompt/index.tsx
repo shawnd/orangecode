@@ -1168,6 +1168,7 @@ export function Prompt(props: PromptProps) {
 
       sessionID = res.data.id
     }
+    sdk.interest.control(sessionID)
 
     const inputText = expandTrackedPastedText(
       store.prompt.input,

@@ -1,4 +1,5 @@
 import { NodeHttpServer } from "@effect/platform-node"
+import { Database } from "@opencode-ai/core/database/database"
 import { describe, expect } from "bun:test"
 import { Context, Effect, Layer, Option, Stream } from "effect"
 import { Sse } from "effect/unstable/encoding"
@@ -33,6 +34,7 @@ const apiLayer = HttpRouter.serve(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provide(Layer.mock(Auth.Service)({})),
   Layer.provide(Layer.mock(Config.Service)({})),
+  Layer.provide(Layer.succeed(Database.Service, { get db(): never { throw new Error("Database not used by global upgrade tests") } })),
   Layer.provide(Layer.mock(MoveSession.Service)({})),
   Layer.provide(
     Layer.mock(Installation.Service)({

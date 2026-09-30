@@ -86,12 +86,15 @@ export const GlobalApi = HttpApi.make("global").add(
         }),
       ),
       HttpApiEndpoint.get("event", GlobalPaths.event, {
+        query: { sessions: Schema.optional(Schema.String.check(Schema.makeFilter((value) =>
+          value.length <= 16384 && value.split(",").length <= 256 ? undefined : "Too many interested Sessions",
+        ))) },
         success: GlobalEventSchema,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.event",
           summary: "Get global events",
-          description: "Subscribe to global events from the OpenCode system using server-sent events.",
+          description: "Subscribe using SSE. Omit sessions for legacy unfiltered delivery; an explicit comma-separated list (including an empty list) restricts transcripts to those Sessions and descendants. Summaries, status, permissions and questions remain global. Interest grants no approval authority.",
         }),
       ),
       HttpApiEndpoint.get("configGet", GlobalPaths.config, {
