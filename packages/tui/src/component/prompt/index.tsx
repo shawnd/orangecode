@@ -1294,19 +1294,9 @@ export function Prompt(props: PromptProps) {
     return local.agent.color(agent.name)
   })
 
-  const showVariant = createMemo(() => {
-    const variants = local.model.variant.list()
-    if (variants.length === 0) return false
-    const current = local.model.variant.current()
-    return !!current
-  })
-
   const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
   const modelMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", animationsEnabled)
-  const variantMetaAlpha = createFadeIn(
-    () => !!local.agent.current() && store.mode === "normal" && showVariant(),
-    animationsEnabled,
-  )
+  const variantMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", animationsEnabled)
   const borderHighlight = createMemo(() => tint(theme.border, highlight(), agentMetaAlpha()))
 
   const placeholderText = createMemo(() => {
@@ -1457,7 +1447,10 @@ export function Prompt(props: PromptProps) {
                 <Show when={local.agent.current()} fallback={<box height={1} />}>
                   {(agent) => (
                     <>
-                      <text fg={fadeColor(highlight(), agentMetaAlpha())}>
+                      <text
+                        fg={fadeColor(highlight(), agentMetaAlpha())}
+                        onMouseUp={() => keymap.dispatchCommand("agent.cycle")}
+                      >
                         {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                       </text>
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
@@ -1469,18 +1462,45 @@ export function Prompt(props: PromptProps) {
                           <text
                             flexShrink={0}
                             fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
+                            onMouseDown={(event) => {
+                              if (event.button !== MouseButton.LEFT && event.button !== MouseButton.RIGHT) return
+                              event.preventDefault()
+                              event.stopPropagation()
+                            }}
+                            onMouseUp={(event) => {
+                              if (event.button !== MouseButton.LEFT && event.button !== MouseButton.RIGHT) return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              local.model.cycleProvider(event.button === MouseButton.RIGHT ? -1 : 1)
+                            }}
                           >
                             {local.model.parsed().model}
                           </text>
-                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentProviderLabel()}</text>
-                          <Show when={showVariant()}>
-                            <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
-                            <text>
-                              <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
-                                {local.model.variant.current()}
-                              </span>
-                            </text>
-                          </Show>
+                          <text
+                            fg={fadeColor(theme.textMuted, modelMetaAlpha())}
+                            onMouseUp={() => keymap.dispatchCommand("provider.connect")}
+                          >
+                            {currentProviderLabel()}
+                          </text>
+                          <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
+                          <text
+                            flexShrink={0}
+                            onMouseDown={(event) => {
+                              if (event.button !== MouseButton.LEFT && event.button !== MouseButton.RIGHT) return
+                              event.preventDefault()
+                              event.stopPropagation()
+                            }}
+                            onMouseUp={(event) => {
+                              if (event.button !== MouseButton.LEFT && event.button !== MouseButton.RIGHT) return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              local.model.variant.cycle(event.button === MouseButton.RIGHT ? -1 : 1)
+                            }}
+                          >
+                            <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
+                              {local.model.variant.current() ?? "default"}
+                            </span>
+                          </text>
                         </box>
                       </Show>
                     </>

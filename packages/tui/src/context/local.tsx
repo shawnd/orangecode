@@ -287,6 +287,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (!a) return
           setModelStore("model", a.name, { ...val })
         },
+        cycleProvider(direction: 1 | -1) {
+          const current = currentModel()
+          if (!current) return
+          const provider = sync.data.provider.find((item) => item.id === current.providerID)
+          const models = Object.keys(provider?.models ?? {})
+          if (models.length === 0) return
+          const index = models.indexOf(current.modelID)
+          const modelID = models[(index + direction + models.length) % models.length]
+          this.set({ providerID: current.providerID, modelID }, { recent: true })
+        },
         cycleFavorite(direction: 1 | -1) {
           const favorites = modelStore.favorite.filter((item) => isModelValid(item))
           if (!favorites.length) {
@@ -387,20 +397,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             setModelStore("variant", key, value ?? "default")
             save()
           },
-          cycle() {
+          cycle(direction: 1 | -1 = 1) {
             const variants = this.list()
             if (variants.length === 0) return
-            const current = this.current()
-            if (!current) {
-              this.set(variants[0])
-              return
-            }
-            const index = variants.indexOf(current)
-            if (index === -1 || index === variants.length - 1) {
-              this.set(undefined)
-              return
-            }
-            this.set(variants[index + 1])
+            const options = [undefined, ...variants]
+            const index = options.indexOf(this.current())
+            this.set(options[(index + direction + options.length) % options.length])
           },
         },
       }
