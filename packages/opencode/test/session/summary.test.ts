@@ -434,7 +434,8 @@ it.live("handles disabled snapshots and missing/non-user targets without computi
       expect(yield* summary.diff({ sessionID, messageID: assistantID })).toEqual([])
       expect(f.metrics.diffCalls).toBe(0)
       expect(f.metrics.messageWrites).toBe(0)
-      expect(f.metrics.diffEvents).toBe(3)
+      // Invalid targets must not clear the durable session summary.
+      expect(f.metrics.diffEvents).toBe(1)
       expect(
         Exit.isFailure(yield* summary.diff({ sessionID: SessionID.make("ses_missing"), messageID }).pipe(Effect.exit)),
       ).toBe(true)

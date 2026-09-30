@@ -1,7 +1,8 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Layer, Context, Schema, Fiber, Scope } from "effect"
-import { and, eq, or, sql } from "drizzle-orm"
+import { and, eq, lt, or, sql } from "drizzle-orm"
 import { isDeepStrictEqual } from "node:util"
+import path from "node:path"
 import { Database } from "@opencode-ai/core/database/database"
 import { MessageTable, PartTable } from "@opencode-ai/core/session/sql"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -71,6 +72,7 @@ function unquoteGitPath(input: string) {
 export interface Interface {
   readonly summarize: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
   readonly diff: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Snapshot.FileDiff[]>
+  readonly sessionDiff: (sessionID: SessionID, force?: boolean) => Effect.Effect<void>
   readonly computeDiff: (input: { messages: SessionV1.WithParts[] }) => Effect.Effect<Snapshot.FileDiff[]>
 }
 
@@ -159,6 +161,111 @@ const layer = Layer.effect(
       return []
     })
 
+    const sessionChanges = Effect.fnUntraced(function* (sessionID: SessionID) {
+      const info = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      const ctx = yield* InstanceState.context
+      const enabled = (yield* config.get()).snapshot !== false
+      const boundary = info.revert ? yield* message({ sessionID, messageID: info.revert.messageID }) : undefined
+      const rows = enabled
+        ? yield* database.db
+            .select({
+              messageID: MessageTable.id,
+              type: sql<string>`json_extract(${PartTable.data}, '$.type')`,
+              snapshot: sql<string | null>`json_extract(${PartTable.data}, '$.snapshot')`,
+              hash: sql<string | null>`json_extract(${PartTable.data}, '$.hash')`,
+              files: sql<string | null>`json_extract(${PartTable.data}, '$.files')`,
+            })
+            .from(MessageTable)
+            .innerJoin(PartTable, eq(PartTable.message_id, MessageTable.id))
+            .where(
+              and(
+                eq(MessageTable.session_id, sessionID),
+                sql`json_extract(${PartTable.data}, '$.type') in ('step-start', 'step-finish', 'patch')`,
+                boundary
+                  ? or(
+                      lt(MessageTable.time_created, boundary.time.created),
+                      and(eq(MessageTable.time_created, boundary.time.created), lt(MessageTable.id, boundary.id)),
+                      info.revert?.partID
+                        ? and(eq(MessageTable.id, boundary.id), lt(PartTable.id, info.revert.partID))
+                        : undefined,
+                    )
+                  : undefined,
+              ),
+            )
+            .orderBy(MessageTable.time_created, MessageTable.id, PartTable.id)
+            .all()
+            .pipe(Effect.orDie)
+        : []
+      const completed = new Map<MessageID, string>()
+      const files = new Map<string, { from: string; to: string }>()
+      for (const row of rows) {
+        if (row.type === "step-start") completed.delete(row.messageID)
+        if (row.type === "step-finish" && row.snapshot) completed.set(row.messageID, row.snapshot)
+        const to = completed.get(row.messageID)
+        if (row.type !== "patch" || !row.hash || !row.files || !to) continue
+        // Use each recorded file's first pre-edit tree, not the session-wide workspace baseline.
+        for (const file of Schema.decodeSync(Schema.fromJsonString(Schema.Array(Schema.String)))(row.files)) {
+          const name = path.relative(ctx.worktree, file).replaceAll("\\", "/")
+          files.set(name, { from: files.get(name)?.from ?? row.hash, to })
+        }
+      }
+      return {
+        info,
+        files,
+        key: JSON.stringify([
+          1,
+          ctx.directory,
+          enabled,
+          info.revert && [info.revert.messageID, info.revert.partID],
+          Array.from(files),
+        ]),
+      }
+    })
+
+    const sessionDiff = Effect.fn("SessionSummary.sessionDiff")(function* (sessionID: SessionID, force = false) {
+      while (true) {
+        const source = yield* sessionChanges(sessionID)
+        if (!force && source.info.summary && source.info.metadata?.["opencode.sessionDiff"] === source.key) return
+        const groups = Map.groupBy(source.files, ([, pair]) => JSON.stringify(pair))
+        const diffs = (yield* Effect.forEach(groups.values(), (group) =>
+          snapshot.stats(group[0][1].from, group[0][1].to, group.map(([file]) => file)),
+        )).flat()
+        // Validate and publish in one SQLite transaction: a newer turn or undo cannot race the cache write.
+        const saved = yield* database.db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const current = yield* sessionChanges(sessionID)
+                if (current.key !== source.key) return false
+                if (
+                  current.info.metadata?.["opencode.sessionDiff"] === source.key &&
+                  isDeepStrictEqual(current.info.summary?.diffs, diffs)
+                )
+                  return true
+                yield* events.publish(Session.Event.Updated, {
+                  sessionID,
+                  info: {
+                    ...current.info,
+                    metadata: { ...current.info.metadata, "opencode.sessionDiff": source.key },
+                    time: { ...current.info.time, updated: Date.now() },
+                    summary: {
+                      additions: diffs.reduce((sum, item) => sum + item.additions, 0),
+                      deletions: diffs.reduce((sum, item) => sum + item.deletions, 0),
+                      files: diffs.length,
+                      diffs,
+                    },
+                  },
+                })
+                yield* events.publish(Session.Event.Diff, { sessionID, diff: diffs })
+                return true
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
+        if (saved) return
+      }
+    })
+
     const refresh = Effect.fnUntraced(function* (
       input: {
         sessionID: SessionID
@@ -166,16 +273,10 @@ const layer = Layer.effect(
       },
       work: { dirty: boolean; revision: number },
     ) {
-      yield* sessions.setSummary({
-        sessionID: input.sessionID,
-        summary: {
-          additions: 0,
-          deletions: 0,
-          files: 0,
-        },
-      })
-      yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: [] })
-      if ((yield* config.get()).snapshot === false) return
+      if ((yield* config.get()).snapshot === false) {
+        yield* sessionDiff(input.sessionID)
+        return
+      }
       if ((yield* message(input))?.role !== "user") return
       // Only retain one pair for this active refresh. diffFull also consults current ignore rules,
       // so retaining results across independent calls would incorrectly hide ignore-file changes.
@@ -221,6 +322,7 @@ const layer = Layer.effect(
           yield* sessions.updateMessage({ ...target, summary: { ...target.summary, diffs: result.diffs } })
         }
       } while (work.dirty)
+      yield* sessionDiff(input.sessionID, true)
     })
 
     const summarize = Effect.fn("SessionSummary.summarize")(function* (input: {
@@ -286,7 +388,7 @@ const layer = Layer.effect(
       })
     })
 
-    return Service.of({ summarize, diff, computeDiff })
+    return Service.of({ summarize, diff, sessionDiff, computeDiff })
   }),
 )
 

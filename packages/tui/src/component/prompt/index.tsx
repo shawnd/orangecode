@@ -36,6 +36,7 @@ import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
+import { GitStatus } from "../git-status"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
@@ -169,6 +170,7 @@ export function Prompt(props: PromptProps) {
   const route = useRoute()
   const project = useProject()
   const sync = useSync()
+  const changes = createMemo(() => (props.sessionID ? sync.session.get(props.sessionID)?.summary : undefined))
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
@@ -1747,8 +1749,10 @@ export function Prompt(props: PromptProps) {
           <box flexDirection="row" gap={2} flexGrow={status().type === "retry" ? 1 : undefined}>
             <box flexDirection="column" flexGrow={status().type === "retry" ? 1 : undefined}>
               <Show when={props.sessionID}>
-                <box marginLeft={1}>
-                  <text fg={theme.textMuted}>{location()?.directory ?? paths.cwd}</text>
+                <box marginLeft={1} flexShrink={1}>
+                  <text fg={theme.textMuted} wrapMode="none" truncate>
+                    {location()?.directory ?? paths.cwd}
+                  </text>
                 </box>
               </Show>
               <Switch>
@@ -1757,6 +1761,7 @@ export function Prompt(props: PromptProps) {
                     flexDirection="row"
                     gap={1}
                     flexGrow={1}
+                    flexShrink={0}
                     justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
                   >
                     <box flexShrink={0} flexDirection="row" gap={1}>
@@ -1883,7 +1888,7 @@ export function Prompt(props: PromptProps) {
                 <Match when={true}>
                   {props.hint ?? (
                     <Show when={props.sessionID && taskKinds().length > 0}>
-                      <box marginLeft={1} flexDirection="row" gap={1}>
+                      <box marginLeft={1} flexDirection="row" gap={1} flexShrink={0}>
                         <ActivitySpinner />
                         <InterruptHint />
                       </box>
@@ -1897,62 +1902,84 @@ export function Prompt(props: PromptProps) {
             </Show>
           </box>
           <Show when={status().type !== "retry"}>
-            <box gap={2} flexDirection="row">
-              <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
-                {(file) => (
-                  <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
-                )}
+            <box flexDirection="column" alignItems="flex-end" flexShrink={0}>
+              <box gap={2} flexDirection="row">
+                <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
+                  {(file) => (
+                    <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>
+                      {file()}
+                    </text>
+                  )}
+                </Show>
+                <Switch>
+                  <Match when={store.mode === "normal"}>
+                    <Switch>
+                      <Match when={usage()}>
+                        {(item) => (
+                          <box flexDirection="row">
+                            <text
+                              fg={theme.textMuted}
+                              wrapMode="none"
+                              onMouseUp={async () => {
+                                const { DialogUsageStats } = await import("../dialog-usage-stats")
+                                dialog.replace(() => <DialogUsageStats />)
+                              }}
+                            >
+                              {item().context}
+                            </text>
+                            <SessionCost
+                              sessionID={props.sessionID}
+                              sessionCost={props.sessionID ? sync.session.get(props.sessionID)?.cost : undefined}
+                              sessions={sync.data.session}
+                              historical={subagents()}
+                              color={theme.textMuted}
+                            />
+                          </box>
+                        )}
+                      </Match>
+                      <Match when={true}>
+                        <text fg={theme.text}>
+                          {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
+                        </text>
+                      </Match>
+                    </Switch>
+                    <text fg={theme.text} onMouseUp={() => keymap.dispatchCommand("command.palette.show")}>
+                      {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
+                    </text>
+                    <text
+                      flexShrink={0}
+                      wrapMode="none"
+                      fg={local.permission.mode === "auto" ? theme.warning : theme.textMuted}
+                      onMouseUp={() => keymap.dispatchCommand("permission.show")}
+                    >
+                      Perms
+                    </text>
+                  </Match>
+                  <Match when={store.mode === "shell"}>
+                    <text fg={theme.text}>
+                      esc <span style={{ fg: theme.textMuted }}>exit shell mode</span>
+                    </text>
+                  </Match>
+                </Switch>
+              </box>
+              <Show when={props.sessionID}>
+                <box flexDirection="row" gap={1} height={1}>
+                  <Show when={changes()}>
+                    {(total) => (
+                      <Show when={total().additions || total().deletions}>
+                        <text wrapMode="none">
+                          <span style={{ fg: theme.diffAdded }}>+{total().additions}</span>
+                          <span style={{ fg: theme.diffRemoved }}>-{total().deletions}</span>
+                        </text>
+                      </Show>
+                    )}
+                  </Show>
+                  <GitStatus
+                    directory={location()?.directory ?? paths.cwd}
+                    separator={!!(changes()?.additions || changes()?.deletions)}
+                  />
+                </box>
               </Show>
-              <Switch>
-                <Match when={store.mode === "normal"}>
-                  <Switch>
-                    <Match when={usage()}>
-                      {(item) => (
-                        <box flexDirection="row">
-                          <text
-                            fg={theme.textMuted}
-                            wrapMode="none"
-                            onMouseUp={async () => {
-                              const { DialogUsageStats } = await import("../dialog-usage-stats")
-                              dialog.replace(() => <DialogUsageStats />)
-                            }}
-                          >
-                            {item().context}
-                          </text>
-                          <SessionCost
-                            sessionID={props.sessionID}
-                            sessionCost={props.sessionID ? sync.session.get(props.sessionID)?.cost : undefined}
-                            sessions={sync.data.session}
-                            historical={subagents()}
-                            color={theme.textMuted}
-                          />
-                        </box>
-                      )}
-                    </Match>
-                    <Match when={true}>
-                      <text fg={theme.text}>
-                        {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
-                      </text>
-                    </Match>
-                  </Switch>
-                  <text fg={theme.text} onMouseUp={() => keymap.dispatchCommand("command.palette.show")}>
-                    {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
-                  </text>
-                  <text
-                    flexShrink={0}
-                    wrapMode="none"
-                    fg={local.permission.mode === "auto" ? theme.warning : theme.textMuted}
-                    onMouseUp={() => keymap.dispatchCommand("permission.show")}
-                  >
-                    Perms
-                  </text>
-                </Match>
-                <Match when={store.mode === "shell"}>
-                  <text fg={theme.text}>
-                    esc <span style={{ fg: theme.textMuted }}>exit shell mode</span>
-                  </text>
-                </Match>
-              </Switch>
             </box>
           </Show>
         </box>

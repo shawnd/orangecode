@@ -39,20 +39,22 @@ export const fixture = Effect.gen(function* () {
   const metrics = { queries: 0, reads: 0, writes: 0, messageWrites: 0, diffEvents: 0, diffCalls: 0 }
   const pairs: string[][] = []
   const control = { blocked: false, fail: false, enabled: true, ignored: false, cleanup: Effect.void }
+  const compare = Effect.fnUntraced(
+    function* (from: string, to: string) {
+      metrics.diffCalls++
+      pairs.push([from, to])
+      const ignored = control.ignored
+      yield* entered.open
+      if (control.blocked) yield* release.await
+      if (control.fail) return yield* Effect.die("snapshot failure")
+      if (ignored) return []
+      return [{ file: "file.txt", patch: `${from} -> ${to}`, additions: 1, deletions: 0, status: "modified" as const }]
+    },
+    Effect.ensuring(Effect.suspend(() => control.cleanup)),
+  )
   const snapshot = Layer.mock(Snapshot.Service, {
-    diffFull: (from, to) =>
-      Effect.gen(function* () {
-        metrics.diffCalls++
-        pairs.push([from, to])
-        const ignored = control.ignored
-        yield* entered.open
-        if (control.blocked) yield* release.await
-        if (control.fail) return yield* Effect.die("snapshot failure")
-        if (ignored) return []
-        return [
-          { file: "file.txt", patch: `${from} -> ${to}`, additions: 1, deletions: 0, status: "modified" as const },
-        ]
-      }).pipe(Effect.ensuring(Effect.suspend(() => control.cleanup))),
+    diffFull: compare,
+    stats: compare,
   })
   const config = Layer.mock(Config.Service, { get: () => Effect.sync(() => ({ snapshot: control.enabled })) })
   const root = LayerNode.group([

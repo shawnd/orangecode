@@ -1,9 +1,7 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Layer, Context, Schema } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { EventV2Bridge } from "@/event-v2-bridge"
 import { Snapshot } from "../snapshot"
-import { Storage } from "@/storage/storage"
 import { Session } from "./session"
 import { MessageV2 } from "./message-v2"
 import { SessionID, MessageID, PartID } from "./schema"
@@ -30,8 +28,6 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const snap = yield* Snapshot.Service
-    const storage = yield* Storage.Service
-    const events = yield* EventV2Bridge.Service
     const summary = yield* SessionSummary.Service
     const state = yield* SessionRunState.Service
 
@@ -71,20 +67,12 @@ const layer = Layer.effect(
       if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
       yield* snap.revert(patches)
       if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot)
-      const index = all.findIndex((msg) => msg.info.id === rev.messageID)
-      const range = index < 0 ? [] : all.slice(index)
-      const diffs = yield* summary.computeDiff({ messages: range })
-      yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
-      yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
       yield* sessions.setRevert({
         sessionID: input.sessionID,
         revert: rev,
-        summary: {
-          additions: diffs.reduce((sum, x) => sum + x.additions, 0),
-          deletions: diffs.reduce((sum, x) => sum + x.deletions, 0),
-          files: diffs.length,
-        },
+        summary: session.summary,
       })
+      yield* summary.sessionDiff(input.sessionID)
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
@@ -95,6 +83,7 @@ const layer = Layer.effect(
       if (!session.revert) return session
       if (session.revert.snapshot) yield* snap.restore(session.revert.snapshot)
       yield* sessions.clearRevert(input.sessionID)
+      yield* summary.sessionDiff(input.sessionID)
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
@@ -121,6 +110,7 @@ const layer = Layer.effect(
         }
       }
       yield* sessions.clearRevert(sessionID)
+      yield* summary.sessionDiff(sessionID)
     })
 
     return Service.of({ revert, unrevert, cleanup })
@@ -130,7 +120,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Session.node, Snapshot.node, Storage.node, EventV2Bridge.node, SessionSummary.node, SessionRunState.node],
+  deps: [Session.node, Snapshot.node, SessionSummary.node, SessionRunState.node],
 })
 
 export * as SessionRevert from "./revert"

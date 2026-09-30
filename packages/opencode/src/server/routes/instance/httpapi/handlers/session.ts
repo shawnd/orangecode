@@ -83,6 +83,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* summary
+        .sessionDiff(ctx.params.sessionID)
+        .pipe(Effect.catchCause((cause) => Effect.logWarning("failed to refresh session changes", { cause })))
       return yield* requireSession(ctx.params.sessionID)
     })
 

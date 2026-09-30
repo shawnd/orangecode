@@ -247,6 +247,49 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
   }
 }
 
+test("session changes precede the branch on the interrupt row without adding a footer row", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Perms"))
+  view.events.emit({
+    directory,
+    payload: {
+      id: "session-counts",
+      type: "session.updated",
+      properties: {
+        sessionID: "parent",
+        info: {
+          id: "parent",
+          slug: "parent",
+          projectID: "project",
+          directory,
+          title: "Parent",
+          version: "test",
+          time: { created: 1, updated: 2 },
+          summary: { additions: 3, deletions: 1, files: 1 },
+        },
+      },
+    },
+  })
+  const idle = await view.waitForFrame((frame) => frame.includes("+3-1 · main"))
+  const lines = idle.split("\n")
+  const row = lines.findIndex((line) => line.includes("+3-1"))
+  expect(lines[row - 1]).toContain("Perms")
+  expect(lines[row]).toContain("+3-1 · main")
+  view.events.emit({
+    directory,
+    payload: {
+      id: "busy-counts",
+      type: "session.status",
+      properties: { sessionID: "parent", status: { type: "busy" } },
+    },
+  })
+  const busy = await view.waitForFrame((frame) => frame.includes("esc interrupt"))
+  expect(busy.split("\n")[row]).toContain("esc interrupt")
+  expect(busy.split("\n")[row]).toContain("+3-1 · main")
+  expect(busy.split("\n").filter((line) => line.trim())).toHaveLength(lines.filter((line) => line.trim()).length)
+})
+
 test("Ctrl+Enter waits for interruption before sending the draft and attachments once", async () => {
   await using tmp = await tmpdir()
   const gate = Promise.withResolvers<Response>()

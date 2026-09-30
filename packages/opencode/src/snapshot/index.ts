@@ -45,6 +45,7 @@ export interface Interface {
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
   readonly diff: (hash: string) => Effect.Effect<string>
+  readonly stats: (from: string, to: string, files: readonly string[]) => Effect.Effect<FileDiff[]>
   readonly diffFull: (from: string, to: string) => Effect.Effect<FileDiff[]>
 }
 
@@ -370,7 +371,17 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 ? yield* git(
                     [
                       ...quote,
-                      ...args(["diff", "--no-ext-diff", "--no-renames", "--name-only", hash, completed, "--", "."]),
+                      ...args([
+                        "diff",
+                        "--no-ext-diff",
+                        "--no-renames",
+                        "--name-only",
+                        "-z",
+                        hash,
+                        completed,
+                        "--",
+                        ".",
+                      ]),
                     ],
                     { cwd: state.directory },
                   )
@@ -388,7 +399,10 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                   : yield* Effect.gen(function* () {
                       yield* add()
                       return yield* git(
-                        [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])],
+                        [
+                          ...quote,
+                          ...args(["diff", "--cached", "--no-ext-diff", "--name-only", "-z", hash, "--", "."]),
+                        ],
                         { cwd: state.directory },
                       )
                     })
@@ -396,11 +410,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 yield* Effect.logWarning("failed to get diff", { hash, exitCode: result.code })
                 return { hash, files: [] }
               }
-              const files = result.text
-                .trim()
-                .split("\n")
-                .map((x) => x.trim())
-                .filter(Boolean)
+              const files = result.text.split("\0").filter(Boolean)
 
               // Hide ignored-file removals from the user-facing patch output.
               const ignored = yield* ignore(files)
@@ -575,6 +585,47 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 return ""
               }
               return result.text.trim()
+            }),
+          )
+        })
+
+        const stats = Effect.fnUntraced(function* (from: string, to: string, files: readonly string[]) {
+          return yield* locked(
+            Effect.gen(function* () {
+              const paths = files.map((file) => `:(top,literal)${file}`)
+              if (!paths.length) return []
+              const flags = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-relative"]
+              const statuses = yield* git(
+                [...quote, ...args([...flags, "--name-status", "-z", from, to, "--", ...paths])],
+                { cwd: state.worktree },
+              )
+              const counts = yield* git([...quote, ...args([...flags, "--numstat", "-z", from, to, "--", ...paths])], {
+                cwd: state.worktree,
+              })
+              if (statuses.code !== 0 || counts.code !== 0)
+                return yield* Effect.die(new Error(statuses.stderr || counts.stderr))
+              const entries = statuses.text.split("\0")
+              const status = new Map<string, "added" | "deleted" | "modified">()
+              for (let i = 0; i + 1 < entries.length; i += 2) {
+                status.set(entries[i + 1], entries[i] === "A" ? "added" : entries[i] === "D" ? "deleted" : "modified")
+              }
+              const ignored = yield* ignore([...status.keys()])
+              return counts.text
+                .split("\0")
+                .filter(Boolean)
+                .flatMap((line) => {
+                  const [adds, dels, ...name] = line.split("\t")
+                  const file = name.join("\t")
+                  if (ignored.has(file)) return []
+                  return [
+                    {
+                      file,
+                      additions: adds === "-" ? 0 : Number(adds),
+                      deletions: dels === "-" ? 0 : Number(dels),
+                      status: status.get(file) ?? "modified",
+                    },
+                  ]
+                })
             }),
           )
         })
@@ -759,7 +810,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffFull }
+        return { cleanup, track, patch, restore, revert, diff, stats, diffFull }
       }),
     )
 
@@ -784,6 +835,9 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
       }),
       diff: Effect.fn("Snapshot.diff")(function* (hash: string) {
         return yield* InstanceState.useEffect(state, (s) => s.diff(hash))
+      }),
+      stats: Effect.fn("Snapshot.stats")(function* (from: string, to: string, files: readonly string[]) {
+        return yield* InstanceState.useEffect(state, (s) => s.stats(from, to, files))
       }),
       diffFull: Effect.fn("Snapshot.diffFull")(function* (from: string, to: string) {
         return yield* InstanceState.useEffect(state, (s) => s.diffFull(from, to))
