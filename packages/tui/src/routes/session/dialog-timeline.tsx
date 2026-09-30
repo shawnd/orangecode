@@ -24,12 +24,13 @@ export function DialogTimeline(props: {
     const result = [] as DialogSelectOption<string>[]
     for (const message of messages) {
       if (message.role !== "user") continue
-      const part = (sync.data.part[message.id] ?? []).find(
-        (x) => x.type === "text" && !x.synthetic && !x.ignored,
-      ) as TextPart
-      if (!part) continue
+      const parts = sync.data.part[message.id] ?? []
+      const compaction = parts.some((part) => part.type === "compaction")
+      const part = parts.find((part): part is TextPart => part.type === "text" && !part.synthetic && !part.ignored)
+      const title = compaction ? "/compact" : part?.text.replace(/\n/g, " ")
+      if (title === undefined) continue
       result.push({
-        title: part.text.replace(/\n/g, " "),
+        title,
         value: message.id,
         footer: Locale.time(message.time.created),
         onSelect: (dialog) => {

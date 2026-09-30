@@ -31,6 +31,7 @@ import { PromptStashProvider } from "../../../src/prompt/stash"
 import { useDialog } from "../../../src/ui/dialog"
 import { ToastProvider, useToast } from "../../../src/ui/toast"
 import { tmpdir } from "../../fixture/fixture"
+import { compactedSession } from "../../fixture/compacted-session"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createFetch, createEventSource, directory, json, worktree } from "../../fixture/tui-sdk"
@@ -280,6 +281,23 @@ async function mount(
     },
   }
 }
+
+test("prompt context meter restores pre-compaction usage on undo and compacted usage on redo", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Perms"))
+  const fixture = compactedSession()
+  view.ctx().sync.set("session", [fixture.session])
+  view.ctx().sync.set("message", "parent", fixture.messages)
+  view.ctx().sync.set("part", fixture.parts)
+  await view.waitForFrame((frame) => frame.includes("12.0K (12%)"))
+  view.ctx().sync.set("session", [{ ...fixture.session, revert: { messageID: "msg_a-compact" } }])
+  const restored = await view.waitForFrame((frame) => frame.includes("90.0K (90%)"))
+  expect(restored).not.toContain("12.0K (12%)")
+  view.ctx().sync.set("session", [fixture.session])
+  const redone = await view.waitForFrame((frame) => frame.includes("12.0K (12%)"))
+  expect(redone).not.toContain("90.0K (90%)")
+})
 
 test("session changes precede the branch on the interrupt row without adding a footer row", async () => {
   await using tmp = await tmpdir()

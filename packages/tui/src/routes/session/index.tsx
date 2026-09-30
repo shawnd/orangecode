@@ -80,6 +80,8 @@ import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
+import { messagesBeforeRevert, undoableMessages } from "../../util/session-history"
+import { CompactionMessage } from "./compaction-message"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { LocationProvider } from "../../context/location"
@@ -212,12 +214,7 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
-  const messagesBeforeRevert = () => {
-    const messageID = session()?.revert?.messageID
-    if (!messageID) return messages()
-    const index = messages().findIndex((message) => message.id === messageID)
-    return index === -1 ? messages() : messages().slice(0, index)
-  }
+  const activeMessages = () => messagesBeforeRevert(messages(), session()?.revert?.messageID)
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents
       ? messages().flatMap((message) =>
@@ -639,7 +636,7 @@ export function Session() {
       run: async () => {
         const status = sync.data.session_status?.[route.sessionID]
         if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        const message = messagesBeforeRevert().findLast((item) => item.role === "user")
+        const message = undoableMessages(activeMessages(), sync.data.part).at(-1)
         if (!message) return
         void sdk.client.session
           .revert({
@@ -649,7 +646,7 @@ export function Session() {
           .then(() => {
             toBottom()
           })
-        const parts = sync.data.part[message.id]
+        const parts = sync.data.part[message.id] ?? []
         prompt?.set(
           parts.reduce(
             (agg, part) => {
@@ -659,7 +656,10 @@ export function Session() {
               if (part.type === "file") agg.parts.push(part)
               return agg
             },
-            { input: "", parts: [] as PromptInfo["parts"] },
+            {
+              input: parts.some((part) => part.type === "compaction") ? "/compact" : "",
+              parts: [] as PromptInfo["parts"],
+            },
           ),
         )
         dialog.clear()
@@ -677,7 +677,9 @@ export function Session() {
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return
-        const message = messages().find((x) => x.role === "user" && x.id > messageID)
+        const index = messages().findIndex((message) => message.id === messageID)
+        if (index < 0) return
+        const message = undoableMessages(messages().slice(index + 1), sync.data.part)[0]
         if (!message) {
           void sdk.client.session.unrevert({
             sessionID: route.sessionID,
@@ -900,7 +902,7 @@ export function Session() {
       value: "messages.copy",
       category: "Session",
       run: () => {
-        const lastAssistantMessage = messagesBeforeRevert().findLast((message) => message.role === "assistant")
+        const lastAssistantMessage = activeMessages().findLast((message) => message.role === "assistant")
         if (!lastAssistantMessage) {
           toast.show({ message: "No assistant messages found", variant: "error" })
           dialog.clear()
@@ -1303,6 +1305,7 @@ export function Session() {
                             ))
                           }}
                           message={message as UserMessage}
+                          setPrompt={(promptInfo) => prompt?.set(promptInfo)}
                           parts={sync.data.part[message.id] ?? []}
                           pending={pending()}
                         />
@@ -1390,6 +1393,7 @@ function UserMessage(props: {
   message: UserMessage
   parts: Part[]
   onMouseUp: () => void
+  setPrompt?: (prompt: PromptInfo) => void
   index: number
   pending?: number
 }) {
@@ -1420,7 +1424,7 @@ function UserMessage(props: {
     <>
       <Show when={text()}>
         <box
-          id={props.message.id}
+          id={compaction() ? undefined : props.message.id}
           ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
           border={["left"]}
           borderColor={color()}
@@ -1479,12 +1483,10 @@ function UserMessage(props: {
         </box>
       </Show>
       <Show when={compaction()}>
-        <box
-          marginTop={1}
-          border={["top"]}
-          title=" Compaction "
-          titleAlignment="center"
-          borderColor={theme.borderActive}
+        <CompactionMessage
+          messageID={props.message.id}
+          sessionID={props.message.sessionID}
+          setPrompt={props.setPrompt}
         />
       </Show>
     </>
