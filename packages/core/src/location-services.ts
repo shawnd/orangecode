@@ -107,8 +107,23 @@ export function buildLocationServiceMap(
         )
       },
       { idleTimeToLive: "60 minutes" },
+    ).pipe(
+      Effect.map((locations) =>
+        LocationServiceMap.Service.of({
+          ...locations,
+          // Schema.Struct preserves absent optional keys. LayerMap hashes those
+          // differently from explicit undefined, although both mean local placement.
+          get: (ref) => locations.get(normalizeRef(ref)),
+          contextEffect: (ref) => locations.contextEffect(normalizeRef(ref)),
+          invalidate: (ref) => locations.invalidate(normalizeRef(ref)),
+        }),
+      ),
     ),
   )
+}
+
+function normalizeRef(ref: Location.Ref) {
+  return Location.Ref.make({ directory: ref.directory, workspaceID: ref.workspaceID })
 }
 
 // This is temporary for backwards compatibility
