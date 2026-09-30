@@ -219,3 +219,6 @@ visible response, resume, fork and the headless checks described above. Artifact
 daemon/client process IDs and endpoint metadata were absent after cleanup.
 The frozen binaries and performance measurements above still describe the
 pre-sync revisions; they are not measurements of this subsequent merge.
+
+The subsequent post-sync paired rerun is documented separately in
+[`server-synced-rerun-results.md`](server-synced-rerun-results.md).
