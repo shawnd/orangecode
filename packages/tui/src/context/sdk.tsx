@@ -38,7 +38,24 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         baseUrl: props.url,
         signal: abort.signal,
         directory: props.directory,
-        fetch: props.fetch,
+        fetch: Object.assign(
+          async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request = new Request(input, init)
+            // Register before dispatch: approvals can arrive before the submission response.
+            // Creating, attaching, listing and hydrating a Session are view-only operations.
+            const submission =
+              request.method === "POST" &&
+              new URL(request.url).pathname.match(
+                /^\/(?:api\/session\/([^/]+)\/(?:prompt|shell|compact)|session\/([^/]+)\/(?:message|prompt_async|shell|command))$/,
+              )
+            if (submission) {
+              interest.control(decodeURIComponent(submission[1] ?? submission[2]))
+              if (selective) await eventsReady()
+            }
+            return (props.fetch ?? fetch)(request)
+          },
+          { preconnect: fetch.preconnect },
+        ),
         headers: props.headers,
       })
     }
@@ -76,9 +93,15 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     const handleEvent = (event: GlobalEvent) => {
-      if (event.payload.type === "server.connected") ready.resolve()
-      if (event.payload.type === "session.created" || event.payload.type === "session.updated") interest.observe(event.payload.properties.info)
-      if (event.payload.type === "session.status") interest.status(event.payload.properties.sessionID, event.payload.properties.status.type !== "idle")
+      if (event.payload.type === "server.connected") {
+        for (const session of event.payload.properties.sessions ?? [])
+          interest.observe({ id: session.id, parentID: session.parentID ?? undefined }, false)
+        ready.resolve()
+      }
+      if (event.payload.type === "session.created" || event.payload.type === "session.updated")
+        interest.observe(event.payload.properties.info)
+      if (event.payload.type === "session.status")
+        interest.status(event.payload.properties.sessionID, event.payload.properties.status.type !== "idle")
       if (!queue.offer(event)) return
       const elapsed = Date.now() - last
 
@@ -93,6 +116,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     function startSSE() {
+      flush()
       sse?.abort()
       ready.resolve()
       ready = Promise.withResolvers<void>()
@@ -154,18 +178,32 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         startSSE()
       }
     })
-    onCleanup(interest.onChange(() => {
-      if (selective && mounted && !props.events) startSSE()
-    }))
+    onCleanup(
+      interest.onChange(() => {
+        if (selective && mounted && !props.events) startSSE()
+      }),
+    )
 
     onCleanup(() => {
       abort.abort()
       sse?.abort()
       unsubscribe?.()
+      ready.resolve()
       if (timer) clearTimeout(timer)
       handlers.clear()
       queue.close()
     })
+
+    async function eventsReady() {
+      while (!abort.signal.aborted) {
+        const current = ready
+        await current.promise
+        if (current === ready) {
+          flush()
+          return
+        }
+      }
+    }
 
     return {
       get client() {
@@ -174,12 +212,12 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       directory: props.directory,
       event: emitter,
       interest,
-      async eventsReady() {
-        while (!abort.signal.aborted) {
-          const current = ready
-          await current.promise
-          if (current === ready) return
-        }
+      selective,
+      eventsReady,
+      flushEvents: flush,
+      // Explicit adoption is client-local. A second attached client starts view-only.
+      adoptSession(sessionID: string) {
+        interest.control(sessionID)
       },
       fetch: props.fetch ?? fetch,
       url: props.url,

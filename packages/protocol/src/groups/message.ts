@@ -28,6 +28,10 @@ export const MessageGroup = HttpApiGroup.make("server.message")
       query: SessionMessagesQuery,
       success: Schema.Struct({
         data: Schema.Array(SessionMessage.Message),
+        sequence: Schema.Int.pipe(Schema.optional).annotate({
+          description:
+            "Session aggregate sequence captured atomically with this projected message page; ignore earlier durable stream events when hydrating.",
+        }),
         cursor: Schema.Struct({
           previous: Schema.String.pipe(Schema.optional),
           next: Schema.String.pipe(Schema.optional),

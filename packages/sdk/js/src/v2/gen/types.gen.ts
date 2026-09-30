@@ -1590,7 +1590,10 @@ export type GlobalEvent = {
         id: string
         type: "server.connected"
         properties: {
-          [key: string]: unknown
+          sessions?: Array<{
+            id: string
+            parentID: string
+          }>
         }
       }
     | {
@@ -2782,6 +2785,7 @@ export type SessionDurableEventStream = string
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessage>
+  sequence?: number
   cursor: {
     previous?: string
     next?: string
@@ -6118,7 +6122,10 @@ export type ServerConnected = {
   }
   location?: LocationRef
   data: {
-    [key: string]: unknown
+    sessions?: Array<{
+      id: string
+      parentID: string
+    }>
   }
 }
 
@@ -7074,7 +7081,10 @@ export type EventServerConnected = {
   id: string
   type: "server.connected"
   properties: {
-    [key: string]: unknown
+    sessions?: Array<{
+      id: string
+      parentID: string
+    }>
   }
 }
 

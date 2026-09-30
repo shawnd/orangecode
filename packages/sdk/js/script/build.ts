@@ -93,10 +93,22 @@ if (historySdkPatched === generatedSdk) {
   throw new Error("Session history numeric SDK patch did not apply")
 }
 // Adding query parameters must preserve the original global.event(options) call.
-const eventSdkPatched = historySdkPatched.replace(
-  /(public event<ThrowOnError extends boolean = false>\(\s*parameters\?: \{\s*sessions\?: string[;,]?\s*\})/,
-  "$1 & Options<never, ThrowOnError>",
-).replace(/(url: "\/global\/event",\s*)/, "$1...parameters,\n")
+const eventSdkPatched = historySdkPatched
+  .replace(
+    /(public event<ThrowOnError extends boolean = false>\(\s*parameters\?: \{\s*sessions\?: string[;,]?\s*\})/,
+    "$1 & Options<never, ThrowOnError>",
+  )
+  .replace(/(url: ["']\/global\/event["'],\s*)/, "$1...parameters,\n")
+  .replace(
+    /(return \(options\?\.client \?\? )this\.client(\)\.sse\.get<GlobalEventResponses)/,
+    "$1parameters?.client ?? this.client$2",
+  )
+if (
+  eventSdkPatched === historySdkPatched ||
+  !/url: ["']\/global\/event["'],\s*\.\.\.parameters/.test(eventSdkPatched)
+) {
+  throw new Error("Global event options compatibility patch did not apply")
+}
 await Bun.write("./src/v2/gen/sdk.gen.ts", eventSdkPatched)
 
 // Patch a @hey-api/openapi-ts codegen bug: SseFn incorrectly passes the
@@ -116,6 +128,13 @@ if (sseTypesPatched === sseTypesSource) {
   throw new Error(`SseFn patch did not apply; @hey-api/openapi-ts output may have changed (${sseTypesPath})`)
 }
 await Bun.write(sseTypesPath, sseTypesPatched)
+
+// Cancellation returns a promise; a synchronous catch cannot consume its rejection.
+const sseSourcePath = "./src/v2/gen/core/serverSentEvents.gen.ts"
+const sseSource = await Bun.file(sseSourcePath).text()
+const ssePatched = sseSource.replace("reader.cancel();", "void reader.cancel().catch(() => {});")
+if (ssePatched === sseSource) throw new Error("SSE cancellation patch did not apply")
+await Bun.write(sseSourcePath, ssePatched)
 
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`

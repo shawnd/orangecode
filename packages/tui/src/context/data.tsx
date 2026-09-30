@@ -23,6 +23,7 @@ import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
 import { useEvent } from "./event"
 import { createSignal, onCleanup, onMount } from "solid-js"
+import { SessionEvent } from "@opencode-ai/core/session/event"
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -73,6 +74,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     const sdk = useSDK()
     const events = useEvent()
+    const sequences = new Map<string, number>()
+    const hydrating = new Map<
+      string,
+      { events: { sequence: number; durable: boolean; event: V2Event }[]; task?: Promise<void> }
+    >()
+    const durableTypes = new Set<string>(SessionEvent.DurableDefinitions.map((definition) => definition.type))
+    const versionedTypes = new Set(
+      SessionEvent.DurableDefinitions.map((definition) => `${definition.type}.${definition.durable?.version}`),
+    )
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: sdk.directory ?? process.cwd(),
     })
@@ -122,8 +132,37 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function handleEvent(event: V2Event) {
-      if (event.type.startsWith("session.next.") && "sessionID" in event.data && typeof event.data.sessionID === "string" && !sdk.interest.includes(event.data.sessionID)) return
+      if (
+        event.type.startsWith("session.next.") &&
+        "sessionID" in event.data &&
+        typeof event.data.sessionID === "string" &&
+        !sdk.interest.includes(event.data.sessionID)
+      )
+        return
       switch (event.type) {
+        case "permission.v2.asked":
+          setStore("session", "permission", event.data.sessionID, (items = []) => [
+            ...items.filter((item) => item.id !== event.data.id),
+            event.data,
+          ])
+          break
+        case "permission.v2.replied":
+          setStore("session", "permission", event.data.sessionID, (items = []) =>
+            items.filter((item) => item.id !== event.data.requestID),
+          )
+          break
+        case "question.v2.asked":
+          setStore("session", "question", event.data.sessionID, (items = []) => [
+            ...items.filter((item) => item.id !== event.data.id),
+            event.data,
+          ])
+          break
+        case "question.v2.replied":
+        case "question.v2.rejected":
+          setStore("session", "question", event.data.sessionID, (items = []) =>
+            items.filter((item) => item.id !== event.data.requestID),
+          )
+          break
         case "catalog.updated":
           void Promise.all([
             result.location.model.refresh(event.location),
@@ -402,19 +441,70 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
       }
     }
-    onCleanup(sdk.interest.onChange(() => setStore("session", "message", produce((draft) => {
-      for (const sessionID of Object.keys(draft)) if (!sdk.interest.includes(sessionID)) delete draft[sessionID]
-    }))))
+    onCleanup(
+      sdk.interest.onChange(() =>
+        setStore(
+          "session",
+          "message",
+          produce((draft) => {
+            for (const sessionID of new Set([...Object.keys(draft), ...hydrating.keys()])) {
+              if (sdk.interest.includes(sessionID)) continue
+              delete draft[sessionID]
+              hydrating.delete(sessionID)
+              sequences.delete(sessionID)
+            }
+          }),
+        ),
+      ),
+    )
 
     onMount(() => {
       const unsub = events.subscribe((event, metadata) => {
-        handleEvent({
+        if (event.type === "server.connected" && sdk.selective) {
+          for (const sessionID of Object.keys(store.session.message)) {
+            void result.session.message
+              .refresh(sessionID)
+              .catch((error) => console.error("Failed to refresh Session messages", error))
+          }
+        }
+        if (sdk.selective && durableTypes.has(event.type)) return
+        const current = {
           ...event,
           data: event.properties,
           location: { directory: metadata.directory, workspaceID: metadata.workspace },
-        } as V2Event)
+        } as V2Event
+        if (
+          sdk.selective &&
+          event.type.startsWith("session.next.") &&
+          "sessionID" in event.properties &&
+          typeof event.properties.sessionID === "string"
+        ) {
+          hydrating.get(event.properties.sessionID)?.events.push({
+            sequence: sequences.get(event.properties.sessionID) ?? -1,
+            durable: false,
+            event: current,
+          })
+        }
+        handleEvent(current)
       })
       onCleanup(unsub)
+      onCleanup(
+        sdk.event.on("event", (envelope) => {
+          if (!sdk.selective || envelope.payload.type !== "sync") return
+          const sync = envelope.payload.syncEvent
+          if (!versionedTypes.has(sync.type) || !sdk.interest.includes(sync.aggregateID)) return
+          if (sync.seq <= (sequences.get(sync.aggregateID) ?? -1)) return
+          const event = {
+            type: sync.type.replace(/\.\d+$/, ""),
+            data: sync.data,
+            location: { directory: envelope.directory, workspaceID: envelope.workspace },
+          } as V2Event
+          const tracker = hydrating.get(sync.aggregateID)
+          tracker?.events.push({ sequence: sync.seq, durable: true, event })
+          handleEvent(event)
+          sequences.set(sync.aggregateID, sync.seq)
+        }),
+      )
     })
 
     const result = {
@@ -433,9 +523,36 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           async refresh(sessionID: string) {
             await sdk.eventsReady()
             if (!sdk.interest.includes(sessionID)) return
-            const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
-            if (!sdk.interest.includes(sessionID)) return
-            setStore("session", "message", sessionID, result.data.data)
+            const current = hydrating.get(sessionID)
+            if (current) return current.task
+            const tracker: { events: { sequence: number; durable: boolean; event: V2Event }[]; task?: Promise<void> } =
+              { events: [] }
+            hydrating.set(sessionID, tracker)
+            tracker.task = (async () => {
+              const response = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
+              sdk.flushEvents()
+              if (!sdk.interest.includes(sessionID) || hydrating.get(sessionID) !== tracker) return
+              if (sdk.selective && response.data.sequence === undefined) {
+                throw new Error("Selective Session hydration requires a server snapshot sequence")
+              }
+              setStore("session", "message", sessionID, response.data.data)
+              const sequence = response.data.sequence ?? -1
+              sequences.set(sessionID, sequence)
+              // Replay only commits newer than the atomic snapshot. Delayed older
+              // stream events are rejected by the sequence floor above.
+              for (const pending of tracker.events) {
+                if (!pending.durable) {
+                  if (pending.sequence >= sequence) handleEvent(pending.event)
+                  continue
+                }
+                if (pending.sequence <= (sequences.get(sessionID) ?? sequence)) continue
+                handleEvent(pending.event)
+                sequences.set(sessionID, pending.sequence)
+              }
+            })().finally(() => {
+              if (hydrating.get(sessionID) === tracker) hydrating.delete(sessionID)
+            })
+            return tracker.task
           },
         },
         permission: {

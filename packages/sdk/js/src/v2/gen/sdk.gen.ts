@@ -1344,8 +1344,13 @@ export class Global extends HeyApiClient {
     options?: Options<never, ThrowOnError>,
   ) {
     const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "sessions" }] }])
-    return (options?.client ?? this.client).sse.get<GlobalEventResponses, GlobalEventErrors, ThrowOnError>({
+    return (options?.client ?? parameters?.client ?? this.client).sse.get<
+      GlobalEventResponses,
+      GlobalEventErrors,
+      ThrowOnError
+    >({
       url: "/global/event",
+      ...parameters,
       ...options,
       ...params,
     })

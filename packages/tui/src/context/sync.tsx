@@ -159,18 +159,24 @@ export const {
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
     }
-    onCleanup(sdk.interest.onChange(() => {
-      setStore(produce((draft) => {
-        for (const sessionID of Object.keys(draft.message)) {
-          if (sdk.interest.includes(sessionID)) continue
-          for (const message of draft.message[sessionID]) delete draft.part[message.id]
-          delete draft.message[sessionID]
-          delete draft.todo[sessionID]
-          delete draft.session_diff[sessionID]
-          fullSyncedSessions.delete(sessionID)
-        }
-      }))
-    }))
+    onCleanup(
+      sdk.interest.onChange(() => {
+        setStore(
+          produce((draft) => {
+            for (const sessionID of new Set([...Object.keys(draft.message), ...hydratingSessions.keys()])) {
+              if (sdk.interest.includes(sessionID)) continue
+              for (const message of draft.message[sessionID] ?? []) delete draft.part[message.id]
+              delete draft.message[sessionID]
+              delete draft.todo[sessionID]
+              delete draft.session_diff[sessionID]
+              fullSyncedSessions.delete(sessionID)
+              syncingSessions.delete(sessionID)
+              hydratingSessions.delete(sessionID)
+            }
+          }),
+        )
+      }),
+    )
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
@@ -193,13 +199,32 @@ export const {
     }
 
     event.subscribe((event, { directory, workspace }) => {
-      const properties = event.properties as { sessionID?: string; info?: { sessionID?: string }; part?: { sessionID?: string } }
+      const properties = event.properties as {
+        sessionID?: string
+        info?: { sessionID?: string }
+        part?: { sessionID?: string }
+      }
       const transcriptSession = properties.sessionID ?? properties.info?.sessionID ?? properties.part?.sessionID
-      if ((event.type.startsWith("message.") || event.type === "todo.updated" || event.type === "session.diff") && transcriptSession && !sdk.interest.includes(transcriptSession)) return
+      if (
+        (event.type.startsWith("message.") || event.type === "todo.updated" || event.type === "session.diff") &&
+        transcriptSession &&
+        !sdk.interest.includes(transcriptSession)
+      )
+        return
       switch (event.type) {
+        case "permission.v2.asked": {
+          if (permission.mode !== "auto" || !sdk.interest.owns(event.properties.sessionID)) break
+          void sdk.client.v2.session.permission.reply({
+            sessionID: event.properties.sessionID,
+            requestID: event.properties.id,
+            reply: "once",
+          })
+          break
+        }
         case "server.connected":
           fullSyncedSessions.clear()
-          for (const session of store.session.filter((session) => sdk.interest.includes(session.id))) void result.session.sync(session.id)
+          for (const session of store.session.filter((session) => sdk.interest.includes(session.id)))
+            void result.session.sync(session.id)
           break
         case "server.instance.disposed":
           void bootstrap()
@@ -640,7 +665,8 @@ export const {
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
-            if (!sdk.interest.includes(sessionID)) return
+            sdk.flushEvents()
+            if (!sdk.interest.includes(sessionID) || hydratingSessions.get(sessionID) !== tracker) return
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
@@ -696,6 +722,7 @@ export const {
             )
             fullSyncedSessions.add(sessionID)
           })().finally(() => {
+            if (hydratingSessions.get(sessionID) !== tracker) return
             syncingSessions.delete(sessionID)
             hydratingSessions.delete(sessionID)
           })

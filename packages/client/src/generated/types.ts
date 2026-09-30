@@ -1977,6 +1977,7 @@ export type MessagesListOutput = {
         readonly time: { readonly created: number }
       }
   >
+  readonly sequence?: number | null
   readonly cursor: { readonly previous?: string | null; readonly next?: string | null }
 }
 

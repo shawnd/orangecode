@@ -34,7 +34,13 @@ export function eventResponse(
   return Effect.gen(function* () {
     yield* Effect.logInfo("global event connected")
     const events = Stream.callback<GlobalBusEvent>((queue) => {
+      let seeding = !!interest && !!db
+      const pending: GlobalBusEvent[] = []
       const handler = (event: GlobalBusEvent) => {
+        if (seeding) {
+          pending.push(event)
+          return
+        }
         if (!interest || interest.accepts(event)) Queue.offerUnsafe(queue, event)
       }
       return Effect.gen(function* () {
@@ -42,8 +48,17 @@ export function eventResponse(
           Effect.sync(() => GlobalBus.on("event", handler)),
           () => Effect.sync(() => GlobalBus.off("event", handler)),
         )
-        if (interest && db) yield* interest.seed(db)
-        Queue.offerUnsafe(queue, { payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } })
+        const sessions = interest && db ? yield* interest.seed(db) : undefined
+        Queue.offerUnsafe(queue, {
+          payload: {
+            id: EventV2.ID.create(),
+            type: "server.connected",
+            properties: { ...(sessions ? { sessions } : {}) },
+          },
+        })
+        seeding = false
+        pending.forEach(handler)
+        pending.length = 0
       })
     })
     const heartbeat = Stream.tick("10 seconds").pipe(

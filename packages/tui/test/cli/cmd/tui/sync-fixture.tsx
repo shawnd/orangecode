@@ -4,10 +4,11 @@ import { onMount } from "solid-js"
 import { ArgsProvider } from "../../../../src/context/args"
 import { KVProvider, useKV } from "../../../../src/context/kv"
 import { ProjectProvider, useProject } from "../../../../src/context/project"
-import { SDKProvider } from "../../../../src/context/sdk"
+import { SDKProvider, useSDK } from "../../../../src/context/sdk"
 import { SyncProvider, useSync } from "../../../../src/context/sync"
-import { PermissionProvider } from "../../../../src/context/permission"
+import { PermissionProvider, usePermission } from "../../../../src/context/permission"
 import { ExitProvider } from "../../../../src/context/exit"
+import { useRoute } from "../../../../src/context/route"
 import { createEventSource, createFetch, type FetchHandler, directory } from "../../../fixture/tui-sdk"
 import { TestTuiContexts } from "../../../fixture/tui-environment"
 export { createEventSource, createFetch, directory, eventSource, json, worktree } from "../../../fixture/tui-sdk"
@@ -28,6 +29,9 @@ export async function mount(override?: FetchHandler, state?: string) {
   let sync!: ReturnType<typeof useSync>
   let project!: ReturnType<typeof useProject>
   let kv!: ReturnType<typeof useKV>
+  let sdk!: ReturnType<typeof useSDK>
+  let permission!: ReturnType<typeof usePermission>
+  let route!: ReturnType<typeof useRoute>
   let done!: () => void
   const ready = new Promise<void>((resolve) => {
     done = resolve
@@ -35,6 +39,9 @@ export async function mount(override?: FetchHandler, state?: string) {
 
   function Probe() {
     const ctx: Ctx = { kv: useKV(), project: useProject(), sync: useSync() }
+    sdk = useSDK()
+    permission = usePermission()
+    route = useRoute()
     onMount(() => {
       sync = ctx.sync
       project = ctx.project
@@ -66,5 +73,5 @@ export async function mount(override?: FetchHandler, state?: string) {
 
   await ready
   await wait(() => sync.status === "complete")
-  return { app, emit: events.emit, kv, project, sync, session: calls.session }
+  return { app, emit: events.emit, kv, project, sync, sdk, permission, route, session: calls.session }
 }

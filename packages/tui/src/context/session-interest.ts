@@ -22,15 +22,18 @@ export function createSessionInterest(selective = true) {
       notify()
     },
     control(sessionID: string) {
+      if (controlled.has(sessionID) && active.has(sessionID)) return
       controlled.add(sessionID)
       active.add(sessionID)
       notify()
     },
-    observe(info: { id: string; parentID?: string }) {
+    observe(info: { id: string; parentID?: string }, notifyChange = true) {
+      const included = belongs(info.id, new Set([...active, ...(selected ? [selected] : [])]))
       parents.set(info.id, info.parentID)
+      if (notifyChange && included !== belongs(info.id, new Set([...active, ...(selected ? [selected] : [])]))) notify()
     },
     status(sessionID: string, busy: boolean) {
-      if (!controlled.has(sessionID)) return
+      if (!belongs(sessionID, controlled)) return
       if (busy === active.has(sessionID)) return
       if (busy) active.add(sessionID)
       if (!busy) active.delete(sessionID)
