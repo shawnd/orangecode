@@ -981,6 +981,93 @@ it.instance("compact tool defers compaction until after its turn and resumes fro
   }),
 )
 
+for (const options of [
+  { auto: false, preserve: 0 },
+  { auto: false, preserve: 12_000 },
+  { auto: true, preserve: 0 },
+  { auto: true, preserve: 12_000 },
+]) {
+  it.instance(`messages wait for compaction (auto=${options.auto}, preserve=${options.preserve})`, () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        compaction: { preserve_recent_tokens: options.preserve },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const compaction = yield* SessionCompaction.Service
+      const chat = yield* sessions.create({ title: "Compaction ordering" })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "Original conversation" }],
+      })
+      yield* compaction.create({ sessionID: chat.id, agent: "build", model: ref, auto: options.auto })
+      const parent = (yield* sessions.messages({ sessionID: chat.id })).at(-1)?.info.id
+      if (!parent) throw new Error("expected compaction request")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "First queued request" }],
+      })
+
+      const gate = yield* Deferred.make<void>()
+      yield* llm.hold("Completed compaction summary", deferredAsPromise(gate))
+      yield* llm.text("Handled queued requests")
+      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* awaitWithTimeout(llm.wait(1), "compaction did not start")
+
+      const id = MessageID.ascending()
+      const followup = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "Second queued request" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(Effect.map((msgs) => msgs.some((m) => m.info.id === id) || undefined)),
+        "second queued request was not saved",
+      )
+      const third = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "Third queued request" }],
+      })
+      expect(yield* llm.calls).toBe(1)
+      expect(JSON.stringify((yield* llm.inputs)[0])).not.toContain("queued request")
+      yield* Deferred.succeed(gate, undefined)
+
+      const result = yield* awaitWithTimeout(Fiber.join(run), "queued requests did not run")
+      yield* Fiber.join(followup)
+      expect(result.parts.some((part) => part.type === "text" && part.text === "Handled queued requests")).toBe(true)
+      expect(yield* llm.calls).toBe(2)
+      const history = yield* sessions.messages({ sessionID: chat.id })
+      const summary = history.find((m) => m.info.role === "assistant" && m.info.summary)
+      expect(summary?.info.role === "assistant" && summary.info.parentID).toBe(parent)
+      expect(result.info.role === "assistant" && result.info.parentID).toBe(third.info.id)
+      const request = JSON.stringify((yield* llm.inputs)[1])
+      expect(request).toContain("First queued request")
+      expect(request).toContain("Second queued request")
+      expect(request).toContain("Third queued request")
+      expect(request.indexOf("Completed compaction summary")).toBeLessThan(request.indexOf("First queued request"))
+      expect(request.indexOf("First queued request")).toBeLessThan(request.indexOf("Second queued request"))
+      expect(request.indexOf("Second queued request")).toBeLessThan(request.indexOf("Third queued request"))
+      expect(request).not.toContain("Continue if you have next steps")
+    }),
+  )
+}
+
 it.instance("loop continues when finish is unknown", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

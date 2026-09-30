@@ -1698,6 +1698,101 @@ describe("session.message-v2.latest", () => {
     expect(state.tasks[0]).toMatchObject({ type: "compaction", auto: true })
   })
 
+  test.each([false, true])("keeps queued prompts after the summary (retained tail=%s)", (retained) => {
+    const request: SessionV1.WithParts = {
+      info: compactionUser.info,
+      parts: [
+        {
+          ...basePart(COMPACTION_USER, "compact"),
+          type: "compaction",
+          auto: false,
+          ...(retained ? { tail_start_id: TAIL_USER } : {}),
+        },
+      ],
+    }
+    const first: SessionV1.WithParts = {
+      info: userInfo("msg_003a"),
+      parts: [{ ...basePart("msg_003a", "first"), type: "text", text: "first queued prompt" }],
+    }
+    const second: SessionV1.WithParts = {
+      info: userInfo("msg_003b"),
+      parts: [{ ...basePart("msg_003b", "second"), type: "text", text: "second queued prompt" }],
+    }
+    const third: SessionV1.WithParts = {
+      info: userInfo("msg_005"),
+      parts: [{ ...basePart("msg_005", "third"), type: "text", text: "third queued prompt" }],
+    }
+
+    const filtered = MessageV2.filterCompacted([
+      third,
+      summaryAssistant,
+      second,
+      first,
+      request,
+      overflowAssistant,
+      tailUser,
+    ])
+
+    expect(filtered).toEqual([
+      request,
+      summaryAssistant,
+      ...(retained ? [tailUser, overflowAssistant] : []),
+      first,
+      second,
+      third,
+    ])
+    expect(MessageV2.latest(filtered).user?.id).toBe(third.info.id)
+    expect(MessageV2.latest(filtered).finished?.id).toBe(SUMMARY_ASSISTANT)
+    expect(MessageV2.latest(filtered).tasks).toEqual([])
+  })
+
+  test.each(["unfinished", "failed"])("preserves original history while compaction is %s", (status) => {
+    const queued: SessionV1.WithParts = {
+      info: userInfo("msg_003a"),
+      parts: [{ ...basePart("msg_003a", "queued"), type: "text", text: "queued prompt" }],
+    }
+    const summary: SessionV1.WithParts = {
+      info: {
+        ...assistantInfo(SUMMARY_ASSISTANT, COMPACTION_USER),
+        summary: true,
+        ...(status === "failed"
+          ? { finish: "error", error: new SessionV1.AbortedError({ message: "Compaction cancelled" }).toObject() }
+          : {}),
+      },
+      parts: [],
+    }
+
+    expect(MessageV2.filterCompacted([summary, queued, compactionUser, overflowAssistant, tailUser])).toEqual([
+      tailUser,
+      overflowAssistant,
+      compactionUser,
+      queued,
+      summary,
+    ])
+  })
+
+  test("a newer pending compaction does not hide queued prompts behind the completed boundary", () => {
+    const queued: SessionV1.WithParts = {
+      info: userInfo("msg_003a"),
+      parts: [{ ...basePart("msg_003a", "queued"), type: "text", text: "queued prompt" }],
+    }
+    const pending: SessionV1.WithParts = {
+      info: userInfo(NEW_COMPACTION_USER),
+      parts: [{ ...basePart(NEW_COMPACTION_USER, "pending"), type: "compaction", auto: false }],
+    }
+    const filtered = MessageV2.filterCompacted([
+      pending,
+      summaryAssistant,
+      queued,
+      compactionUser,
+      overflowAssistant,
+      tailUser,
+    ])
+
+    expect(filtered).toEqual([compactionUser, summaryAssistant, tailUser, overflowAssistant, queued, pending])
+    expect(MessageV2.latest(filtered).tasks).toEqual(pending.parts.filter((part) => part.type === "compaction"))
+  })
+
   test("selects compaction and subtask work after the finished boundary by creation time", () => {
     const finished = {
       ...assistantInfo("msg_z_finished", "msg_parent"),

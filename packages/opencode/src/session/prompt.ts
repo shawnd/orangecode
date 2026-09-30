@@ -1150,7 +1150,7 @@ const layer = Layer.effect(
           if (task?.type === "compaction") {
             const result = yield* compaction.process({
               messages: msgs,
-              parentID: lastUser.id,
+              parentID: task.messageID,
               sessionID,
               auto: task.auto,
               overflow: task.overflow,
