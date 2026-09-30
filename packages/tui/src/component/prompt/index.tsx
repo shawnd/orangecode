@@ -1659,7 +1659,14 @@ export function Prompt(props: PromptProps) {
                     <Match when={usage()}>
                       {(item) => (
                         <box flexDirection="row">
-                          <text fg={theme.textMuted} wrapMode="none">
+                          <text
+                            fg={theme.textMuted}
+                            wrapMode="none"
+                            onMouseUp={async () => {
+                              const { DialogUsageStats } = await import("../dialog-usage-stats")
+                              dialog.replace(() => <DialogUsageStats />)
+                            }}
+                          >
                             {item().context}
                           </text>
                           <SessionCost

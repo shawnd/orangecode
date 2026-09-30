@@ -772,6 +772,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
+        name: "opencode.usage",
+        title: "View usage stats",
+        slashName: "usage",
+        run: async () => {
+          const { DialogUsageStats } = await import("./component/dialog-usage-stats")
+          dialog.replace(() => <DialogUsageStats />)
+        },
+        category: "System",
+      },
+      {
         name: "opencode.debug",
         title: "View debug info",
         slashName: "debug",
