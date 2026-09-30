@@ -35,6 +35,14 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionRequest" })
 export type Request = typeof Request.Type
 
+export interface Status extends Schema.Schema.Type<typeof Status> {}
+export const Status = Schema.Struct({
+  global: Ruleset,
+  configured: Ruleset,
+  approved: Ruleset,
+  pending: Schema.Array(Request),
+}).annotate({ identifier: "PermissionV1.Status" })
+
 export const Reply = Schema.Literals(["once", "always", "global", "reject"])
 export type Reply = typeof Reply.Type
 

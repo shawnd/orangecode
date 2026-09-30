@@ -120,6 +120,20 @@ describe("instance HttpApi", () => {
     }),
   )
 
+  it.live("serves permission status for the requested directory", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true, config: { permission: { bash: { "git *": "ask" } } } })
+      const response = yield* HttpClientRequest.get("/permission/status").pipe(directoryHeader(dir), HttpClient.execute)
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toMatchObject({
+        global: expect.any(Array),
+        configured: expect.arrayContaining([{ permission: "bash", pattern: "git *", action: "ask" }]),
+        approved: [],
+        pending: [],
+      })
+    }),
+  )
+
   it.live("rejects malformed permission and question request ids", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })

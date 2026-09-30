@@ -43,6 +43,7 @@ import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
+import { DialogPermissions } from "./component/dialog-permissions"
 import { DialogDebug } from "./component/dialog-debug"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
@@ -954,6 +955,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           await sync.session.refresh()
           dialog.clear()
         },
+      },
+      {
+        name: "permission.show",
+        title: "View permissions",
+        slashName: "permissions",
+        run: () => {
+          dialog.replace(() => <DialogPermissions />)
+        },
+        category: "System",
       },
       {
         name: "permission.mode",

@@ -52,6 +52,7 @@ const fakePermission = Permission.Service.of({
   ask: () => Effect.void,
   reply: () => Effect.void,
   list: () => Effect.succeed([]),
+  status: () => Effect.die("unused"),
 } satisfies Permission.Interface)
 
 const fakeTruncate = Truncate.Service.of({

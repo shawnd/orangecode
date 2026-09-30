@@ -3861,6 +3861,13 @@ export type PtyTicketConnectToken = {
   expires_in: number
 }
 
+export type PermissionV1Status = {
+  global: PermissionRuleset
+  configured: PermissionRuleset
+  approved: PermissionRuleset
+  pending: Array<PermissionRequest>
+}
+
 export type WorkspaceEventConnectionStatus = {
   workspaceID: string
   status: "connected" | "connecting" | "disconnected" | "error"
@@ -9239,6 +9246,34 @@ export type QuestionRejectResponses = {
 }
 
 export type QuestionRejectResponse = QuestionRejectResponses[keyof QuestionRejectResponses]
+
+export type PermissionStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/permission/status"
+}
+
+export type PermissionStatusErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type PermissionStatusError = PermissionStatusErrors[keyof PermissionStatusErrors]
+
+export type PermissionStatusResponses = {
+  /**
+   * Permission rules, active approvals, and pending requests
+   */
+  200: PermissionV1Status
+}
+
+export type PermissionStatusResponse = PermissionStatusResponses[keyof PermissionStatusResponses]
 
 export type PermissionListData = {
   body?: never

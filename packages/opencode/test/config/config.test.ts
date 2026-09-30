@@ -411,6 +411,47 @@ it.effect("persists global folder approvals alongside existing settings", () =>
   ),
 )
 
+for (const name of ["opencode.json", "opencode.jsonc"]) {
+  it.live(`permission action patches preserve shorthand defaults in ${name}`, () =>
+    withGlobalConfig({ config: { permission: "ask", model: "test/model" }, name }, ({ dir }) =>
+      Effect.gen(function* () {
+        const svc = yield* Config.Service
+        yield* svc.updateGlobal({ permission: { bash: "allow" } })
+        yield* svc.updateGlobal({ permission: { bash: { "git *": "deny" } } })
+        yield* svc.updateGlobal({ permission: { external_directory: { "~/work/*": "ask", "$HOME/work/*": "deny" } } })
+        yield* svc.updateGlobal({ permission: { external_directory: { "~/work/*": "allow" } } })
+        const file = path.join(dir, name)
+        const written = ConfigParse.jsonc(yield* FSUtil.use.readFileString(file), file)
+        expect(written).toMatchObject({
+          model: "test/model",
+          permission: {
+            "*": "ask",
+            bash: { "*": "allow", "git *": "deny" },
+            external_directory: { "~/work/*": "allow", "$HOME/work/*": "deny" },
+          },
+        })
+        const config = yield* svc.getGlobal()
+        expect(Object.keys(config.permission ?? {})).toEqual(["*", "bash", "external_directory"])
+        expect(Object.keys(config.permission?.bash ?? {})).toEqual(["*", "git *"])
+      }),
+    ),
+  )
+}
+
+it.instance("directory permission patches preserve local defaults and unrelated settings", () =>
+  Effect.gen(function* () {
+    const instance = yield* TestInstance
+    const svc = yield* Config.Service
+    yield* writeConfigEffect(instance.directory, { permission: "deny", model: "test/model" }, "opencode.json")
+    yield* svc.update({ permission: { bash: "ask" } })
+    yield* svc.update({ permission: { bash: { "git status": "allow" } } })
+    expect(yield* FSUtil.use.readJson(path.join(instance.directory, "opencode.json"))).toMatchObject({
+      model: "test/model",
+      permission: { "*": "deny", bash: { "*": "ask", "git status": "allow" } },
+    })
+  }),
+)
+
 it.effect("updates global config and omits empty shell key in jsonc", () =>
   withGlobalConfig({ config: { shell: "bash", model: "test/model" }, name: "opencode.jsonc" }, ({ dir }) =>
     Effect.gen(function* () {

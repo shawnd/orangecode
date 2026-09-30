@@ -103,6 +103,39 @@ const list = () =>
     return yield* permission.list()
   })
 
+it.instance(
+  "status reports configured rules, pending requests, and instance approvals",
+  () =>
+    Effect.gen(function* () {
+      const permission = yield* Permission.Service
+      const initial = yield* permission.status()
+      expect(initial.configured).toContainEqual({ permission: "bash", pattern: "git *", action: "ask" })
+      expect(initial.approved).toEqual([])
+      expect(initial.pending).toEqual([])
+
+      const fiber = yield* permission
+        .ask({
+          sessionID: SessionID.make("session_status"),
+          permission: "bash",
+          patterns: ["git status"],
+          always: ["git *"],
+          metadata: {},
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(1)
+      expect((yield* permission.status()).pending).toEqual(pending)
+      yield* permission.reply({ requestID: pending[0].id, reply: "always" })
+      yield* Fiber.join(fiber)
+
+      const status = yield* permission.status()
+      expect(status.pending).toEqual([])
+      expect(status.approved).toEqual([{ permission: "bash", pattern: "git *", action: "allow" }])
+      expect(initial.approved).toEqual([])
+    }),
+  { git: true, config: { permission: { bash: { "git *": "ask" } } } },
+)
+
 // fromConfig tests
 
 test("fromConfig - string value becomes wildcard rule", () => {
@@ -835,6 +868,7 @@ it.instance(
 
 globalIt.live("global folder approval is applied across projects and after instance reload", () =>
   Effect.gen(function* () {
+    const permission = yield* Permission.Service
     const one = yield* tmpdirScoped({ git: true })
     const two = yield* tmpdirScoped({ git: true })
     const store = yield* InstanceStore.Service
@@ -856,6 +890,10 @@ globalIt.live("global folder approval is applied across projects and after insta
     yield* store.provide({ directory: one }, ask(request))
     expect(yield* store.provide({ directory: two }, list())).toHaveLength(0)
     expect(yield* store.provide({ directory: one }, list())).toHaveLength(0)
+    const status = yield* store.provide({ directory: one }, permission.status())
+    expect(status.global).toEqual([{ permission: "external_directory", pattern: "/shared/folder/*", action: "allow" }])
+    expect(status.approved).toEqual([])
+    expect(status.pending).toEqual([])
 
     const denied = yield* store.provide(
       { directory: two },

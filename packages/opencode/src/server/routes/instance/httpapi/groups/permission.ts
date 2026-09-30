@@ -1,5 +1,4 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { Permission } from "@/permission"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { PermissionNotFoundError } from "../errors"
@@ -18,6 +17,17 @@ export const PermissionApi = HttpApi.make("permission")
   .add(
     HttpApiGroup.make("permission")
       .add(
+        HttpApiEndpoint.get("status", `${root}/status`, {
+          query: WorkspaceRoutingQuery,
+          success: described(PermissionV1.Status, "Permission rules, active approvals, and pending requests"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "permission.status",
+            summary: "Get permission status",
+            description:
+              "Get global and merged configuration rules, instance approvals, and pending permission requests.",
+          }),
+        ),
         HttpApiEndpoint.get("list", root, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Array(PermissionV1.Request), "List of pending permissions"),

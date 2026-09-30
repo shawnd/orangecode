@@ -1688,6 +1688,14 @@ export function Prompt(props: PromptProps) {
                   <text fg={theme.text} onMouseUp={() => keymap.dispatchCommand("command.palette.show")}>
                     {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                   </text>
+                  <text
+                    flexShrink={0}
+                    wrapMode="none"
+                    fg={local.permission.mode === "auto" ? theme.warning : theme.textMuted}
+                    onMouseUp={() => keymap.dispatchCommand("permission.show")}
+                  >
+                    Perms
+                  </text>
                 </Match>
                 <Match when={store.mode === "shell"}>
                   <text fg={theme.text}>

@@ -128,6 +128,8 @@ import type {
   PermissionRespondErrors,
   PermissionRespondResponses,
   PermissionRuleset,
+  PermissionStatusErrors,
+  PermissionStatusResponses,
   PermissionV2Reply,
   PermissionV2Source,
   ProjectCommands,
@@ -3083,6 +3085,36 @@ export class Question extends HeyApiClient {
 }
 
 export class Permission extends HeyApiClient {
+  /**
+   * Get permission status
+   *
+   * Get global and merged configuration rules, instance approvals, and pending permission requests.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<PermissionStatusResponses, PermissionStatusErrors, ThrowOnError>({
+      url: "/permission/status",
+      ...options,
+      ...params,
+    })
+  }
+
   /**
    * List pending permissions
    *

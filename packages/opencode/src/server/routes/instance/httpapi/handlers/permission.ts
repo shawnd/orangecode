@@ -36,6 +36,9 @@ export const permissionHandlers = HttpApiBuilder.group(InstanceHttpApi, "permiss
       return true
     })
 
-    return handlers.handle("list", list).handle("reply", reply)
+    return handlers
+      .handle("status", () => svc.status())
+      .handle("list", list)
+      .handle("reply", reply)
   }),
 )

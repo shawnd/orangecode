@@ -14,6 +14,7 @@ export interface Interface {
   readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  readonly status: () => Effect.Effect<PermissionV1.Status>
 }
 
 interface PendingEntry {
@@ -190,7 +191,19 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, list })
+    const status = Effect.fn("Permission.status")(function* () {
+      const global = yield* config.getGlobal()
+      const configured = yield* config.get()
+      const current = yield* InstanceState.get(state)
+      return {
+        global: fromConfig(global.permission ?? {}),
+        configured: fromConfig(configured.permission ?? {}),
+        approved: current.approved.map((rule) => ({ ...rule })),
+        pending: Array.from(current.pending.values(), (item) => item.info),
+      }
+    })
+
+    return Service.of({ ask, reply, list, status })
   }),
 )
 

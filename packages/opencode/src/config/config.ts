@@ -173,6 +173,43 @@ function writableGlobal(info: Info) {
   return next
 }
 
+function preservePermissionDefaults(text: string, patch: Info, file: string) {
+  if (!patch.permission) return text
+  const original = ConfigParse.jsonc(text, file)
+  if (!isRecord(original)) return text
+  const permission = original.permission
+  // A narrow pattern patch must not discard a shorthand catch-all, nor attempt
+  // to insert a JSONC property into a string. Keep the catch-all first in order.
+  if (typeof permission === "string") {
+    return applyEdits(
+      text,
+      modify(
+        text,
+        ["permission"],
+        { "*": permission },
+        {
+          formattingOptions: { insertSpaces: true, tabSize: 2 },
+        },
+      ),
+    )
+  }
+  if (!isRecord(permission)) return text
+  return Object.entries(patch.permission).reduce((result, [key, value]) => {
+    if (typeof value === "string" || typeof permission[key] !== "string") return result
+    return applyEdits(
+      result,
+      modify(
+        result,
+        ["permission", key],
+        { "*": permission[key] },
+        {
+          formattingOptions: { insertSpaces: true, tabSize: 2 },
+        },
+      ),
+    )
+  }, text)
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -642,7 +679,9 @@ const layer = Layer.effect(
         path.join(dir, "opencode.json")
       const existing = yield* loadFile(file)
       const text = yield* readConfigFile(file)
-      const original = text ? ConfigParse.jsonc(text, file) : writable(existing)
+      const original = text
+        ? ConfigParse.jsonc(preservePermissionDefaults(text, config, file), file)
+        : writable(existing)
       yield* fs
         .writeFileString(
           file,
@@ -659,11 +698,12 @@ const layer = Layer.effect(
       const file = globalConfigFile()
       const before = (yield* readConfigFile(file)) ?? "{}"
       const patch = writableGlobal(config)
+      const prepared = preservePermissionDefaults(before, config, file)
 
       let next: Info
       let changed: boolean
       if (!file.endsWith(".jsonc")) {
-        const existing = ConfigParse.jsonc(before, file)
+        const existing = ConfigParse.jsonc(prepared, file)
         ConfigParse.schema(ConfigV1.Info, ConfigV2Compat.lower(normalizeLoadedConfig(existing), file).value, file)
         const merged = mergeDeep(isRecord(existing) ? existing : {}, patch)
         const serialized = JSON.stringify(merged, null, 2)
@@ -671,7 +711,7 @@ const layer = Layer.effect(
         changed = serialized !== before
         if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
       } else {
-        const updated = patchJsonc(before, patch)
+        const updated = patchJsonc(prepared, patch)
         next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
         changed = updated !== before
         if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
