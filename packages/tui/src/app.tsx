@@ -54,6 +54,7 @@ import { DialogConsoleOrg } from "./component/dialog-console-org"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { Shell } from "./routes/shell"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -1180,7 +1181,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
             </Match>
             <Match when={route.data.type === "session"}>
               <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
-                {(_) => <Session />}
+                {(_) => (
+                  <Show when={route.data.type === "session" && route.data.shell} fallback={<Session />}>
+                    <Shell />
+                  </Show>
+                )}
               </Show>
             </Match>
           </Switch>

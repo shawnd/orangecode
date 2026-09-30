@@ -55,8 +55,7 @@ import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
-import { sessionTasks } from "../../util/session-background"
-import { DialogTasks } from "../dialog-tasks"
+import { useTaskNavigation } from "../dialog-tasks"
 import { formatDuration } from "../../util/format"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
@@ -175,7 +174,8 @@ export function Prompt(props: PromptProps) {
   const toast = useToast()
   const reminders = useContext(RemindersContext)
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
-  const tasks = createMemo(() => sessionTasks(props.sessionID, sync.data))
+  const taskNavigation = useTaskNavigation(() => props.sessionID)
+  const tasks = taskNavigation.tasks
   const background = createMemo(() => tasks().agents.length)
   const taskKinds = createMemo(() => [
     ...(background() > 0 ? ["agents" as const] : []),
@@ -183,10 +183,8 @@ export function Prompt(props: PromptProps) {
   ])
   const [taskSelection, setTaskSelection] = createSignal<"agents" | "shells">()
   function openTasks(kind: "agents" | "shells") {
-    const sessionID = props.sessionID
-    if (!sessionID) return
     setTaskSelection(undefined)
-    dialog.replace(() => <DialogTasks sessionID={sessionID} kind={kind} />)
+    taskNavigation.open(kind)
   }
   function moveTaskSelection(direction: -1 | 1) {
     const kinds = taskKinds()

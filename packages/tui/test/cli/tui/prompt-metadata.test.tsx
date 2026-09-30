@@ -3,7 +3,8 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { MouseButton } from "@opentui/core"
 import { testRender, useRenderer } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { onCleanup } from "solid-js"
+import { onCleanup, Show } from "solid-js"
+import { Shell } from "../../../src/routes/shell"
 import { Prompt, type PromptRef } from "../../../src/component/prompt"
 import { FrecencyProvider } from "../../../src/component/prompt/frecency"
 import { DialogModel } from "../../../src/component/dialog-model"
@@ -97,6 +98,7 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
         local: ReturnType<typeof useLocal>
         dialog: ReturnType<typeof useDialog>
         route: ReturnType<typeof useRoute>
+        sync: ReturnType<typeof useSync>
         history: ReturnType<typeof usePromptHistory>
         kv: ReturnType<typeof useKV>
         toast: ReturnType<typeof useToast>
@@ -107,7 +109,8 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
     const local = useLocal()
     const dialog = useDialog()
     const sync = useSync()
-    context = { local, dialog, route: useRoute(), history: usePromptHistory(), kv: useKV(), toast: useToast() }
+    const route = useRoute()
+    context = { local, dialog, route, sync, history: usePromptHistory(), kv: useKV(), toast: useToast() }
     // Register app-level commands so clicks exercise real keymap dispatch and picker components.
     useBindings(() => ({
       commands: [
@@ -130,15 +133,22 @@ async function mount(root: string, sessionID?: string, variants = true, submissi
       ],
     }))
     return (
-      <box paddingTop={10}>
-        <Prompt
-          sessionID={sessionID}
-          visible={sync.ready}
-          ref={(ref) => {
-            prompt = ref
-          }}
-        />
-      </box>
+      <Show
+        when={route.data.type === "session" && route.data.shell}
+        fallback={
+          <box paddingTop={10}>
+            <Prompt
+              sessionID={sessionID}
+              visible={sync.ready}
+              ref={(ref) => {
+                prompt = ref
+              }}
+            />
+          </box>
+        }
+      >
+        <Shell />
+      </Show>
     )
   }
   function Harness() {
@@ -344,13 +354,17 @@ test("Enter submits normally and Shift+Enter still inserts a newline", async () 
   expect(view.aborted).toHaveLength(0)
 })
 
-function runningTask(view: Awaited<ReturnType<typeof mount>>) {
+function runningTask(view: Awaited<ReturnType<typeof mount>>, child = "child") {
   view.events.emit({
     directory,
-    payload: { id: "busy", type: "session.status", properties: { sessionID: "child", status: { type: "busy" } } },
+    payload: {
+      id: `busy-${child}`,
+      type: "session.status",
+      properties: { sessionID: child, status: { type: "busy" } },
+    },
   })
   const part: ToolPart = {
-    id: "task-part",
+    id: `task-part-${child}`,
     sessionID: "parent",
     messageID: "parent-message",
     callID: "task-call",
@@ -361,14 +375,14 @@ function runningTask(view: Awaited<ReturnType<typeof mount>>) {
       input: {},
       output: "started",
       title: "Inspect cache",
-      metadata: { sessionId: "child", background: true },
+      metadata: { sessionId: child, background: true },
       time: { start: 1, end: 2 },
     },
   }
   view.events.emit({
     directory,
     payload: {
-      id: "task-started",
+      id: `task-started-${child}`,
       type: "message.part.updated",
       properties: { part, sessionID: part.sessionID, time: 2 },
     },
@@ -411,14 +425,16 @@ test("idle parent keeps background count beside path and Escape aborts the entir
   expect(working).not.toContain("interrupt all")
 })
 
-test("agent count opens a live list by click or Down/Enter and switches to the selected agent", async () => {
+test("a lone background agent opens directly by click or Down/Enter", async () => {
   await using tmp = await tmpdir()
   using view = await mount(tmp.path, "parent")
   await view.waitForFrame((frame) => frame.includes("Metadata Model"))
   runningTask(view)
   await view.click("1 background agent")
-  await view.waitForFrame((frame) => frame.includes("Background agents") && frame.includes("Inspect cache"))
-  view.ctx().dialog.clear()
+  await view.waitForFrame(() => view.ctx().route.data.type === "session")
+  expect(view.ctx().route.data).toMatchObject({ type: "session", sessionID: "child" })
+  expect(view.ctx().dialog.stack).toHaveLength(0)
+  view.ctx().route.navigate({ type: "session", sessionID: "parent" })
   await view.app.renderOnce()
   view.app.mockInput.pressArrow("down")
   await view.app.renderOnce()
@@ -430,10 +446,12 @@ test("agent count opens a live list by click or Down/Enter and switches to the s
   view.app.mockInput.pressArrow("down")
   await view.app.renderOnce()
   view.app.mockInput.pressEnter()
-  await view.waitForFrame((frame) => frame.includes("Background agents"))
-  view.app.mockInput.pressEnter()
-  await view.waitForFrame(() => view.ctx().route.data.type === "session")
+  await view.waitForFrame(() => {
+    const route = view.ctx().route.data
+    return route.type === "session" && route.sessionID === "child"
+  })
   expect(view.ctx().route.data).toMatchObject({ type: "session", sessionID: "child" })
+  expect(view.ctx().dialog.stack).toHaveLength(0)
 })
 
 test("background agent activity keeps animating before Escape while the parent is idle", async () => {
@@ -464,6 +482,22 @@ test("background agent activity keeps animating before Escape while the parent i
   await view.waitForFrame((frame) => !frame.includes("background agent") && !frame.includes("esc interrupt"))
 })
 
+test("multiple running agents keep the picker and navigate to the selected agent", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  runningTask(view)
+  runningTask(view, "other-child")
+  await view.click("2 background agents")
+  await view.waitForFrame((frame) => frame.includes("Background agents") && frame.includes("Inspect cache"))
+  expect(view.ctx().route.data).toEqual({ type: "home" })
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame(() => view.ctx().dialog.stack.length === 0)
+  expect(view.ctx().route.data).toEqual({ type: "session", sessionID: "other-child" })
+})
+
 test("input history keeps arrow priority until returning to the draft, then Down enters background agents", async () => {
   await using tmp = await tmpdir()
   await using view = await mount(tmp.path, "parent")
@@ -488,8 +522,12 @@ test("input history keeps arrow priority until returning to the draft, then Down
   view.app.mockInput.pressArrow("down")
   await view.app.renderOnce()
   view.app.mockInput.pressEnter()
-  await view.waitForFrame((frame) => frame.includes("Background agents"))
-  view.ctx().dialog.clear()
+  await view.waitForFrame(() => {
+    const route = view.ctx().route.data
+    return route.type === "session" && route.sessionID === "child"
+  })
+  expect(view.ctx().dialog.stack).toHaveLength(0)
+  view.ctx().route.navigate({ type: "session", sessionID: "parent" })
   await view.app.renderOnce()
   view.app.mockInput.pressArrow("up")
   await view.waitForFrame(() => view.prompt().current.input === "newer prompt")
@@ -498,9 +536,12 @@ test("input history keeps arrow priority until returning to the draft, then Down
   view.app.mockInput.pressArrow("down")
   await view.app.renderOnce()
   view.app.mockInput.pressEnter()
-  await view.waitForFrame((frame) => frame.includes("Background agents"))
+  await view.waitForFrame(() => {
+    const route = view.ctx().route.data
+    return route.type === "session" && route.sessionID === "child"
+  })
   expect(view.prompt().current.input).toBe("edited recalled prompt")
-  view.ctx().dialog.clear()
+  expect(view.ctx().dialog.stack).toHaveLength(0)
   view.prompt().reset()
 })
 
@@ -550,8 +591,16 @@ test("shell footer selection opens live command output without submitting the dr
     expect(lines[shellRow].indexOf("[⋯]")).toBeLessThan(lines[shellRow].indexOf("esc interrupt"))
   }
   await view.click("1 shell")
-  await view.waitForFrame((frame) => frame.includes("Running shells") && frame.includes("bun test"))
-  view.ctx().dialog.clear()
+  await view.waitForFrame((frame) => frame.includes("Starting tests") && frame.includes("bun test"))
+  expect(view.ctx().dialog.stack).toHaveLength(0)
+  expect(view.ctx().route.data).toMatchObject({
+    type: "session",
+    sessionID: "child",
+    shell: { messageID: "child-message", partID: "shell-part", returnSessionID: "parent" },
+  })
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame((frame) => frame.includes("1 shell"))
+  expect(view.ctx().route.data).toEqual({ type: "session", sessionID: "parent" })
   view.prompt().set({ input: "keep this draft", parts: [] })
   await view.app.renderOnce()
   view.app.mockInput.pressArrow("down")
@@ -561,8 +610,12 @@ test("shell footer selection opens live command output without submitting the dr
   view.app.mockInput.pressArrow("up")
   await view.app.renderOnce()
   view.app.mockInput.pressEnter()
-  await view.waitForFrame((frame) => frame.includes("Background agents"))
-  view.ctx().dialog.clear()
+  await view.waitForFrame(() => {
+    const route = view.ctx().route.data
+    return route.type === "session" && route.sessionID === "child"
+  })
+  expect(view.ctx().dialog.stack).toHaveLength(0)
+  view.ctx().route.navigate({ type: "session", sessionID: "parent" })
   await view.app.renderOnce()
   view.app.mockInput.pressArrow("down")
   await view.app.renderOnce()
@@ -570,11 +623,9 @@ test("shell footer selection opens live command output without submitting the dr
   await view.app.renderOnce()
   view.app.mockInput.pressArrow("down")
   await view.app.renderOnce()
-  view.app.mockInput.pressEnter()
-  await view.waitForFrame((frame) => frame.includes("Running shells") && frame.includes("bun test"))
   view.app.mockInput.pressEnter()
   await view.waitForFrame((frame) => frame.includes("Starting tests"))
-  expect(view.prompt().current.input).toBe("keep this draft")
+  expect(view.ctx().dialog.stack).toHaveLength(0)
   view.events.emit({
     directory,
     payload: {
@@ -598,9 +649,52 @@ test("shell footer selection opens live command output without submitting the dr
     },
   })
   await view.waitForFrame((frame) => frame.includes("All tests passed"))
-  view.ctx().dialog.clear()
-  await view.waitForFrame((frame) => !frame.includes("1 shell"))
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame((frame) => frame.includes("Metadata Model") && !frame.includes("1 shell"))
+  expect(view.prompt().current.input).toBe("keep this draft")
   view.prompt().reset()
+})
+
+test("multiple running shells keep the picker and open the selected command full-screen", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  for (const command of ["first", "second"]) {
+    const part: ToolPart = {
+      id: command,
+      sessionID: "parent",
+      messageID: "shell-message",
+      callID: command,
+      type: "tool",
+      tool: "bash",
+      state: {
+        status: "completed",
+        input: { command },
+        title: command,
+        output: "Job started",
+        time: { start: 1, end: 2 },
+        metadata: { background: true, shellStatus: "running", output: `${command} output` },
+      },
+    }
+    view.events.emit({
+      directory,
+      payload: {
+        id: `started-${command}`,
+        type: "message.part.updated",
+        properties: { sessionID: part.sessionID, part, time: 3 },
+      },
+    })
+  }
+  await view.click("2 shells")
+  await view.waitForFrame((frame) => frame.includes("Running shells") && frame.includes("second"))
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("second output"))
+  expect(view.ctx().dialog.stack).toHaveLength(0)
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("2 shells"))
+  expect(view.ctx().route.data).toEqual({ type: "session", sessionID: "parent" })
 })
 
 test("a real background shell is inspectable and interruptible while its owner is idle", async () => {
@@ -625,7 +719,10 @@ test("a real background shell is inspectable and interruptible while its owner i
         jobId: "job_build",
         shellStatus: "running",
         stdinOpen: true,
-        output: "Building module A",
+        output: Array.from(
+          { length: 80 },
+          (_, index) => `Building module ${String(index).padStart(2, "0")} ${"x".repeat(95)}`,
+        ).join("\n"),
         outputPath: "/tmp/build.log",
       },
     },
@@ -641,14 +738,60 @@ test("a real background shell is inspectable and interruptible while its owner i
   const active = await view.waitForFrame((frame) => frame.includes("1 shell"))
   expect(active.split("\n").find((line) => line.includes("esc interrupt"))).toContain("[⋯]")
   await view.click("1 shell")
-  await view.waitForFrame((frame) => frame.includes("Running shells"))
-  view.app.mockInput.pressEnter()
-  const frame = await view.waitForFrame((frame) => frame.includes("Building module A"))
+  const frame = await view.waitForFrame((frame) => frame.includes("Building module 79"))
+  expect(view.ctx().dialog.stack).toHaveLength(0)
   expect(frame).toContain("Shell · running")
   expect(frame).toContain("stdin open")
   expect(frame).toContain("/tmp/build.log")
+  expect(frame).toContain("x".repeat(95))
+  expect(frame).not.toContain("Building module 00")
+  const first = frame.match(/Building module (\d+)/)?.[1]
+  view.app.mockInput.pressArrow("up")
+  const scrolled = await view.waitForFrame((frame) => frame.match(/Building module (\d+)/)?.[1] !== first)
+  expect(view.ctx().route.data.type).toBe("session")
+  view.app.mockInput.pressArrow("down")
+  await view.waitForFrame((frame) => frame.match(/Building module (\d+)/)?.[1] === first)
+  view.app.mockInput.pressKey("HOME")
+  await view.waitForFrame((frame) => frame.includes("Building module 00"))
+  expect(scrolled).not.toContain("Metadata Model")
+  if (part.state.status !== "completed") throw new Error("Expected completed source call")
+  view.events.emit({
+    directory,
+    payload: {
+      id: "bg-shell-output",
+      type: "message.part.updated",
+      properties: {
+        sessionID: part.sessionID,
+        time: 4,
+        part: {
+          ...part,
+          state: {
+            ...part.state,
+            metadata: { ...part.state.metadata, output: `${part.state.metadata.output}\nBuilding module 80` },
+          },
+        },
+      },
+    },
+  })
+  await view.waitForFrame(() => {
+    const value = view.ctx().sync.data.part[part.messageID]?.find((item) => item.id === part.id)
+    return (
+      value?.type === "tool" &&
+      "metadata" in value.state &&
+      String(value.state.metadata?.output).includes("Building module 80")
+    )
+  })
+  const paused = await view.waitForFrame((frame) => frame.includes("Building module 00"))
+  expect(paused).not.toContain("Building module 80")
+  view.app.mockInput.pressKey("END")
+  await view.waitForFrame((frame) => frame.includes("Building module 80"))
+  view.app.mockInput.pressArrow("up", { ctrl: true })
+  await view.waitForFrame((frame) => frame.includes("1 shell"))
+  expect(view.ctx().route.data).toEqual({ type: "session", sessionID: "parent" })
+  await view.click("1 shell")
+  await view.waitForFrame((frame) => frame.includes("Building module 80"))
   view.app.mockInput.pressEscape()
-  await view.waitForFrame((frame) => !frame.includes("Building module A"))
+  await view.waitForFrame((frame) => frame.includes("1 shell") && !frame.includes("Building module"))
   expect(view.aborted).toEqual([])
   view.app.mockInput.pressEscape()
   await view.waitForFrame((frame) => frame.includes("again to interrupt"))
