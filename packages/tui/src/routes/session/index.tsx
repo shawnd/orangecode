@@ -53,6 +53,7 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar } from "./sidebar"
+import { Titlebar } from "./titlebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
@@ -1198,6 +1199,9 @@ export function Session() {
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
+              <Show when={!wide() && !sidebarVisible()}>
+                <Titlebar sessionID={route.sessionID} width={contentWidth()} />
+              </Show>
               <scrollbox
                 ref={(r) => (scroll = r)}
                 viewportOptions={{
