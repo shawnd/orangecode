@@ -12,6 +12,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { EventBuffer } from "@/server/event-buffer"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -22,7 +23,7 @@ function eventData(data: unknown): Sse.Event {
   }
 }
 
-function eventResponse() {
+export function eventResponse(bounded = false, observe?: Parameters<typeof EventBuffer.bufferedEvents>[0]["observe"]) {
   return Effect.gen(function* () {
     yield* Effect.logInfo("global event connected")
     const events = Stream.callback<GlobalBusEvent>((queue) => {
@@ -37,10 +38,41 @@ function eventResponse() {
       Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
     )
 
+    const boundedStream = EventBuffer.bufferedEvents<GlobalBusEvent>({
+      encode: JSON.stringify,
+      observe,
+      subscribe(offer) {
+        GlobalBus.on("event", offer)
+        // Install the source before advertising readiness to the client.
+        offer({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } })
+        const timer = setInterval(() => {
+          offer({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })
+        }, 10_000)
+        return () => {
+          clearInterval(timer)
+          GlobalBus.off("event", offer)
+        }
+      },
+      terminal: (reason) => JSON.stringify({ resync: true, reason }),
+    }).pipe(
+      Stream.map(
+        (event): Sse.Event => ({
+          _tag: "Event",
+          event: event.terminal ? "opencode.resync" : "message",
+          id: undefined,
+          data: event.data,
+        }),
+      ),
+    )
+
     return HttpServerResponse.stream(
-      Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
-        Stream.concat(events.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
-        Stream.map(eventData),
+      (bounded
+        ? boundedStream
+        : Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
+            Stream.concat(events.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
+            Stream.map(eventData),
+          )
+      ).pipe(
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,
         Stream.ensuring(Effect.logInfo("global event disconnected")),
@@ -51,6 +83,7 @@ function eventResponse() {
           "Cache-Control": "no-cache, no-transform",
           "X-Accel-Buffering": "no",
           "X-Content-Type-Options": "nosniff",
+          ...(bounded ? { "X-Opencode-Event-Buffer": "bounded-v1" } : {}),
         },
       },
     )
@@ -67,8 +100,10 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return { healthy: true as const, version: InstallationVersion }
     })
 
-    const event = Effect.fn("GlobalHttpApi.event")(function* () {
-      return yield* eventResponse()
+    const event = Effect.fn("GlobalHttpApi.event")(function* (ctx) {
+      // Only recovery-aware clients negotiate limits. Legacy clients have no
+      // snapshot fence and must not silently reconnect past critical events.
+      return yield* eventResponse(ctx.request.headers["x-opencode-event-buffer"] === "bounded-v1")
     })
 
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {

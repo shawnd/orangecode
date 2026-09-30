@@ -3,6 +3,7 @@ import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
+import { createEventBatch } from "./event-batch"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -25,6 +26,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
+    let unsubscribe: (() => void) | undefined
 
     function createSDK() {
       return createOpencodeClient({
@@ -51,28 +53,25 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       },
     }
 
-    let queue: GlobalEvent[] = []
+    const queue = createEventBatch<GlobalEvent>({
+      size: (event) => Buffer.byteLength(JSON.stringify(event)),
+      emit: (events) => batch(() => events.forEach((event) => emitter.emit("event", event))),
+    })
     let timer: Timer | undefined
     let last = 0
     const retryDelay = 1000
     const maxRetryDelay = 30000
 
     const flush = () => {
-      if (queue.length === 0) return
-      const events = queue
-      queue = []
+      if (timer) clearTimeout(timer)
       timer = undefined
+      if (queue.length === 0) return
       last = Date.now()
-      // Batch all event emissions so all store updates result in a single render
-      batch(() => {
-        for (const event of events) {
-          emitter.emit("event", event)
-        }
-      })
+      queue.flush()
     }
 
     const handleEvent = (event: GlobalEvent) => {
-      queue.push(event)
+      if (!queue.offer(event)) return
       const elapsed = Date.now() - last
 
       if (timer) return
@@ -124,8 +123,14 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     onMount(async () => {
       if (props.events) {
-        const unsub = await props.events.subscribe(handleEvent)
-        onCleanup(unsub)
+        const cleanup = await props.events.subscribe(handleEvent)
+        // subscribe may finish after the provider is disposed. Registering
+        // onCleanup after await also loses Solid's synchronous owner.
+        if (abort.signal.aborted) {
+          cleanup()
+          return
+        }
+        unsubscribe = cleanup
 
         if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
           // Start syncing workspaces, it's important to do this after
@@ -140,8 +145,10 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     onCleanup(() => {
       abort.abort()
       sse?.abort()
+      unsubscribe?.()
       if (timer) clearTimeout(timer)
       handlers.clear()
+      queue.close()
     })
 
     return {
