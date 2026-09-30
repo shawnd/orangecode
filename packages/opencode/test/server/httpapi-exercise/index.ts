@@ -965,6 +965,11 @@ const scenarios: Scenario[] = [
     }))
     .status(400, undefined, "none"),
   http.protected.get("/api/session/active", "v2.session.active").json(200, data(object), "none"),
+  http.protected.get("/api/session/usage", "v2.session.usage").json(200, data(object), "none"),
+  http.protected
+    .get("/api/session/usage", "v2.session.usage.window")
+    .at((ctx) => ({ path: "/api/session/usage?start=0", headers: ctx.headers() }))
+    .json(200, data(object), "none"),
   http.protected
     .post("/api/session", "v2.session.create")
     .at((ctx) => ({

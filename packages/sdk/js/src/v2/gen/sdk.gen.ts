@@ -383,6 +383,8 @@ import type {
   V2SessionSwitchAgentResponses,
   V2SessionSwitchModelErrors,
   V2SessionSwitchModelResponses,
+  V2SessionUsageErrors,
+  V2SessionUsageResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
   V2SkillListErrors,
@@ -5458,6 +5460,38 @@ export class Question2 extends HeyApiClient {
 }
 
 export class Session3 extends HeyApiClient {
+  /**
+   * Get usage stats
+   *
+   * Aggregate usage across all projects, one project, and one session. Start is an inclusive epoch-millisecond cutoff; omit it for lifetime totals.
+   */
+  public usage<ThrowOnError extends boolean = false>(
+    parameters?: {
+      start?: string
+      project?: string
+      session?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "start" },
+            { in: "query", key: "project" },
+            { in: "query", key: "session" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2SessionUsageResponses, V2SessionUsageErrors, ThrowOnError>({
+      url: "/api/session/usage",
+      ...options,
+      ...params,
+    })
+  }
+
   /**
    * List sessions
    *

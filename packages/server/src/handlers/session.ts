@@ -22,6 +22,18 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
 
     return handlers
       .handle(
+        "session.usage",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.usage({
+              start: ctx.query.start,
+              projectID: ctx.query.project,
+              sessionID: ctx.query.session,
+            }),
+          }
+        }),
+      )
+      .handle(
         "session.list",
         Effect.fn(function* (ctx) {
           const query =

@@ -3916,6 +3916,26 @@ export type AgentV2Info = {
   permissions: PermissionV2Ruleset
 }
 
+export type SessionUsageSummary = {
+  sessions: number
+  cost: number
+  tokens: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+}
+
+export type SessionUsage = {
+  all: SessionUsageSummary
+  project: SessionUsageSummary
+  session: SessionUsageSummary
+}
+
 export type SessionV2Info = {
   id: string
   parentID?: string
@@ -11371,6 +11391,41 @@ export type V2AgentListResponses = {
 }
 
 export type V2AgentListResponse = V2AgentListResponses[keyof V2AgentListResponses]
+
+export type V2SessionUsageData = {
+  body?: never
+  path?: never
+  query?: {
+    start?: string
+    project?: string
+    session?: string
+  }
+  url: "/api/session/usage"
+}
+
+export type V2SessionUsageErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2SessionUsageError = V2SessionUsageErrors[keyof V2SessionUsageErrors]
+
+export type V2SessionUsageResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionUsage
+  }
+}
+
+export type V2SessionUsageResponse = V2SessionUsageResponses[keyof V2SessionUsageResponses]
 
 export type V2SessionListData = {
   body?: never

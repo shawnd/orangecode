@@ -4,6 +4,8 @@ import type {
   LocationGetOutput,
   AgentsListInput,
   AgentsListOutput,
+  SessionsUsageInput,
+  SessionsUsageOutput,
   SessionsListInput,
   SessionsListOutput,
   SessionsCreateInput,
@@ -283,6 +285,18 @@ export function make(options: ClientOptions) {
         ),
     },
     sessions: {
+      usage: (input?: SessionsUsageInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsUsageOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/usage`,
+            query: { start: input?.["start"], project: input?.["project"], session: input?.["session"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       list: (input?: SessionsListInput, requestOptions?: RequestOptions) =>
         request<SessionsListOutput>(
           {

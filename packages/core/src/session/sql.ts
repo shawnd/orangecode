@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sql } from "drizzle-orm"
 import * as DatabasePath from "../database/path"
 import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
@@ -62,6 +63,11 @@ export const SessionTable = sqliteTable(
     index("session_project_idx").on(table.project_id),
     index("session_workspace_idx").on(table.workspace_id),
     index("session_parent_idx").on(table.parent_id),
+    index("session_updated_id_idx").on(table.time_updated, table.id),
+    index("session_project_updated_id_idx").on(table.project_id, table.time_updated, table.id),
+    index("session_created_id_idx").on(table.time_created, table.id),
+    index("session_project_created_id_idx").on(table.project_id, table.time_created, table.id),
+    index("session_directory_created_id_idx").on(table.directory, table.time_created, table.id),
   ],
 )
 
@@ -94,6 +100,12 @@ export const PartTable = sqliteTable(
   (table) => [
     index("part_message_id_id_idx").on(table.message_id, table.id),
     index("part_session_idx").on(table.session_id),
+    index("part_usage_time_created_idx")
+      .on(table.time_created, table.session_id)
+      .where(sql`json_extract(${table.data}, '$.type') = 'step-finish'`),
+    index("part_text_session_idx")
+      .on(table.session_id)
+      .where(sql`json_extract(${table.data}, '$.type') = 'text'`),
   ],
 )
 

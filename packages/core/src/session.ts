@@ -37,6 +37,8 @@ import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
+import { SessionUsage } from "./session/usage"
+import type { Session } from "@opencode-ai/schema/session"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -111,6 +113,7 @@ export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
 
 export interface Interface {
+  readonly usage: (input: SessionUsage.Input) => Effect.Effect<Session.Usage>
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
@@ -205,6 +208,7 @@ const layer = Layer.effect(
       )
 
     const result = Service.of({
+      usage: (input) => SessionUsage.read(db, input),
       create: Effect.fn("V2Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)

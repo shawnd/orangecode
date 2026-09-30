@@ -5,7 +5,7 @@ import { Agent } from "./agent"
 import { Location } from "./location"
 import { Model } from "./model"
 import { Project } from "./project"
-import { DateTimeUtcFromMillis, optional, RelativePath } from "./schema"
+import { DateTimeUtcFromMillis, NonNegativeInt, optional, RelativePath } from "./schema"
 import { SessionEvent } from "./session-event"
 import { SessionID } from "./session-id"
 import { Revert } from "./revert"
@@ -49,3 +49,17 @@ export const ListAnchor = Schema.Struct({
   direction: Schema.Literals(["previous", "next"]),
 }).annotate({ identifier: "Session.ListAnchor" })
 export interface ListAnchor extends Schema.Schema.Type<typeof ListAnchor> {}
+
+export interface UsageSummary extends Schema.Schema.Type<typeof UsageSummary> {}
+export const UsageSummary = Schema.Struct({
+  sessions: NonNegativeInt,
+  cost: Info.fields.cost,
+  tokens: Info.fields.tokens,
+}).annotate({ identifier: "Session.UsageSummary" })
+
+export interface Usage extends Schema.Schema.Type<typeof Usage> {}
+export const Usage = Schema.Struct({
+  all: UsageSummary,
+  project: UsageSummary,
+  session: UsageSummary,
+}).annotate({ identifier: "Session.Usage" })

@@ -148,6 +148,59 @@ export type AgentsListOutput = {
   }>
 }
 
+export type SessionsUsageInput = {
+  readonly start?: {
+    readonly start?: number | undefined
+    readonly project?: string | undefined
+    readonly session?: string | undefined
+  }["start"]
+  readonly project?: {
+    readonly start?: number | undefined
+    readonly project?: string | undefined
+    readonly session?: string | undefined
+  }["project"]
+  readonly session?: {
+    readonly start?: number | undefined
+    readonly project?: string | undefined
+    readonly session?: string | undefined
+  }["session"]
+}
+
+export type SessionsUsageOutput = {
+  readonly data: {
+    readonly all: {
+      readonly sessions: number
+      readonly cost: number
+      readonly tokens: {
+        readonly input: number
+        readonly output: number
+        readonly reasoning: number
+        readonly cache: { readonly read: number; readonly write: number }
+      }
+    }
+    readonly project: {
+      readonly sessions: number
+      readonly cost: number
+      readonly tokens: {
+        readonly input: number
+        readonly output: number
+        readonly reasoning: number
+        readonly cache: { readonly read: number; readonly write: number }
+      }
+    }
+    readonly session: {
+      readonly sessions: number
+      readonly cost: number
+      readonly tokens: {
+        readonly input: number
+        readonly output: number
+        readonly reasoning: number
+        readonly cache: { readonly read: number; readonly write: number }
+      }
+    }
+  }
+}["data"]
+
 export type SessionsListInput = {
   readonly workspace?: {
     readonly workspace?: string | undefined

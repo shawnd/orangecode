@@ -106,6 +106,23 @@ export const SessionsQuery = Schema.Struct({
 export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLocationMiddleware: Context.Key<I, S>) =>
   HttpApiGroup.make("server.session")
     .add(
+      HttpApiEndpoint.get("session.usage", "/api/session/usage", {
+        query: Schema.Struct({
+          start: Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
+          project: Project.ID.pipe(Schema.optional),
+          session: Session.ID.pipe(Schema.optional),
+        }),
+        success: Schema.Struct({ data: Session.Usage }),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.usage",
+          summary: "Get usage stats",
+          description:
+            "Aggregate usage across all projects, one project, and one session. Start is an inclusive epoch-millisecond cutoff; omit it for lifetime totals.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.get("session.list", "/api/session", {
         query: SessionsQuery,
         success: Schema.Struct({

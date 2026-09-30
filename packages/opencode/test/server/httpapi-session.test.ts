@@ -28,6 +28,7 @@ import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from ".
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionMessage } from "@opencode-ai/core/session/message"
+import type { SessionUsage } from "@opencode-ai/sdk/v2/client"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import * as DateTime from "effect/DateTime"
@@ -425,6 +426,35 @@ describe("session HttpApi", () => {
         root: sessionDirectory,
       })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  it.instance("returns usage summaries and validates time-window cutoffs", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const headers = { "x-opencode-directory": test.directory }
+      const session = yield* createSession({ title: "usage" })
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionTable)
+        .set({ cost: 12.5, tokens_input: 30 })
+        .where(eq(SessionTable.id, session.id))
+        .run()
+      const response = yield* request(`/api/session/usage?session=${session.id}&project=${session.projectID}`, {
+        headers,
+      })
+      expect(response.status).toBe(200)
+      const lifetime = yield* json<{ data: SessionUsage }>(response)
+      expect(lifetime.data.session).toEqual({
+        sessions: 1,
+        cost: 12.5,
+        tokens: { input: 30, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      const window = yield* request(`/api/session/usage?start=${Date.now()}&session=${session.id}`, { headers })
+      expect(window.status).toBe(200)
+      expect((yield* json<{ data: SessionUsage }>(window)).data.session.cost).toBe(0)
+      const invalid = yield* request("/api/session/usage?start=-1", { headers })
+      expect(invalid.status).toBe(400)
+    }),
   )
 
   it.instance(
