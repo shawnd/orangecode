@@ -7,9 +7,11 @@ declare const self: {
   postMessage: (response: Response) => void
 }
 
-let picker: FileFinder | undefined
+const pickers = new Map<number, FileFinder>()
 
 async function run(request: Request) {
+  const pickerID = request.pickerID ?? 0
+  const picker = pickers.get(pickerID)
   if (request.op === "init") {
     if (picker) throw new FffError("defect", "fff already initialized")
     const { FileFinder } = await import("@ff-labs/fff-bun").catch(() => {
@@ -18,13 +20,13 @@ async function run(request: Request) {
     if (!FileFinder.isAvailable()) throw new FffError("unavailable", "fff library unavailable")
     const result = FileFinder.create(request.args[0])
     if (!result.ok) throw new FffError("unavailable", "fff picker could not initialize")
-    picker = result.value
+    pickers.set(pickerID, result.value)
     return { backend: "fff-worker" as const, workerPath: import.meta.url }
   }
   if (request.op === "dispose") {
     const owned = picker
     owned?.destroy()
-    picker = undefined
+    pickers.delete(pickerID)
     return { destroyed: owned?.isDestroyed ?? false }
   }
   if (!picker) throw new FffError("defect", "fff not initialized")
@@ -59,9 +61,10 @@ async function run(request: Request) {
 self.onmessage = async (event: MessageEvent<Request>) => {
   const request = event.data
   const response: Response = await run(request).then(
-    (value) => ({ id: request.id, ok: true, value }),
+    (value) => ({ id: request.id, pickerID: request.pickerID, ok: true, value }),
     (error: unknown) => ({
       id: request.id,
+      pickerID: request.pickerID,
       ok: false,
       error:
         error instanceof FffError
@@ -70,6 +73,6 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     }),
   )
   self.postMessage(response)
-  // The parent terminates this idle worker after receiving the destruction
-  // acknowledgement. Bun does not provide WorkerGlobalScope.close().
+  // The parent terminates an idle worker after its final owner acknowledges
+  // destruction. Bun does not provide WorkerGlobalScope.close().
 }

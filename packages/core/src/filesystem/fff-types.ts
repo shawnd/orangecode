@@ -20,6 +20,14 @@ export type Grep = GrepResult
 export type SearchOptions = { currentFile?: string; pageIndex?: number; pageSize?: number }
 export type { GrepOptions }
 
+export function workerConfig(env: Record<string, string | undefined>) {
+  const count = Number(env.OPENCODE_FFF_WORKERS ?? 2)
+  return {
+    enabled: env.OPENCODE_EXPERIMENTAL_FFF_WORKER === "1" || env.OPENCODE_EXPERIMENTAL_FFF_WORKER === "true",
+    workers: Number.isInteger(count) && count >= 1 && count <= 8 ? count : 2,
+  }
+}
+
 export type GrepMatches = Array<{
   entry: { path: string; type: "file" }
   line: number
@@ -57,16 +65,27 @@ export type Operations = {
 }
 
 export type Request = {
-  [K in keyof Operations]: { id: number; op: K; args: Operations[K]["args"] }
+  [K in keyof Operations]: { id: number; pickerID?: number; op: K; args: Operations[K]["args"] }
 }[keyof Operations]
 
 export type Response =
-  | { id: number; ok: true; value: Operations[keyof Operations]["value"] }
-  | { id: number; ok: false; error: { kind: FffError["kind"]; message: string } }
+  | { id: number; pickerID?: number; ok: true; value: Operations[keyof Operations]["value"] }
+  | { id: number; pickerID?: number; ok: false; error: { kind: FffError["kind"]; message: string } }
+
+export interface Transport {
+  onmessage: ((event: MessageEvent<Response>) => void) | null
+  onerror: ((event: ErrorEvent) => void) | null
+  addEventListener(type: "close", listener: () => void): void
+  postMessage(request: Request): void
+  cancel?(id: number): boolean
+  terminate(): void
+  ref?(): void
+  unref?(): void
+}
 
 export class FffError extends Error {
   constructor(
-    readonly kind: "unavailable" | "transport" | "query" | "defect" | "disposed",
+    readonly kind: "unavailable" | "transport" | "query" | "defect" | "disposed" | "busy",
     message: string,
   ) {
     super(message)

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { FileFinder } from "@ff-labs/fff-bun"
 import { Fff } from "../../src/filesystem/fff.bun"
 import { FffClient } from "../../src/filesystem/fff-client"
+import { FffPool } from "../../src/filesystem/fff-pool"
 import { FffError } from "../../src/filesystem/fff-types"
 import { FileSystemSearch } from "../../src/filesystem/search"
 import { tmpdir } from "../fixture/tmpdir"
@@ -539,7 +540,7 @@ describe("fff source worker", () => {
   }
 })
 
-describe("fff direct default and worker opt-in", () => {
+describe("fff parallel opt-in", () => {
   for (const setting of [undefined, "0", "false", "invalid", "1", "true"]) {
     test(`routing ${setting ?? "unset"} preserves the selected native backend`, async () => {
       await using tmp = await fixture()
@@ -666,4 +667,242 @@ describe("fff direct default and worker opt-in", () => {
       }),
     ),
   )
+})
+
+describe("shared fff executor", () => {
+  test("actual Node runtime keeps the unavailable-native contract with the opt-in set", async () => {
+    await using tmp = await fixture()
+    const build = await Bun.build({
+      entrypoints: [new URL("../../src/filesystem/fff.node.ts", import.meta.url).pathname],
+      target: "node",
+    })
+    expect(build.success).toBe(true)
+    await Bun.write(`${tmp.path}/fff.mjs`, build.outputs[0]!)
+    const child = Bun.spawn(
+      [
+        "node",
+        "--input-type=module",
+        "-e",
+        `
+      import assert from "node:assert/strict"
+      import { Fff } from ${JSON.stringify(`${tmp.path}/fff.mjs`)}
+      assert.equal(Fff.available(), false)
+      for (const create of [Fff.create, Fff.createDirect, Fff.createWorker]) {
+        assert.throws(() => create(${JSON.stringify(options(tmp.path))}), error => error.kind === "unavailable")
+      }
+    `,
+      ],
+      { env: { ...process.env, OPENCODE_EXPERIMENTAL_FFF_WORKER: "1" }, stdout: "pipe", stderr: "pipe" },
+    )
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    expect(code, stdout + stderr).toBe(0)
+  })
+
+  for (const setting of ["1", "2", "8", "invalid", "0", "9"]) {
+    test(`actual worker budget ${setting} is bounded and all owners clean up`, async () => {
+      await using tmp = await fixture()
+      const expected = ["1", "2", "8"].includes(setting) ? Number(setting) : 2
+      const child = Bun.spawn(
+        [
+          "timeout",
+          "--signal=KILL",
+          "15s",
+          process.execPath,
+          "-e",
+          `
+        import assert from "node:assert/strict"
+        import { Fff } from ${JSON.stringify(new URL("../../src/filesystem/fff.bun.ts", import.meta.url).pathname)}
+        const clients = Array.from({length: 9}, () => Fff.createWorker(${JSON.stringify(options(tmp.path))}))
+        assert.equal(Fff.executorState().workers, 0)
+        assert.ok((await Promise.all(clients.map(client => client.waitForScan(5000)))).every(Boolean))
+        assert.equal(Fff.executorState().workers, ${expected})
+        assert.equal(Fff.executorState().pickers, 9)
+        await Promise.all(clients.map(client => client.destroy()))
+        assert.ok(clients.every(client => client.state.destroyed && !client.state.started))
+        assert.deepEqual(Fff.executorState(), {workers:0, pickers:0, queued:0})
+      `,
+        ],
+        { env: { ...process.env, OPENCODE_FFF_WORKERS: setting }, stdout: "pipe", stderr: "pipe" },
+      )
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ])
+      expect(code, stdout + stderr).toBe(0)
+    }, 20000)
+  }
+
+  test("without Worker the opt-in uses real direct native search", async () => {
+    await using tmp = await fixture()
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `
+      import assert from "node:assert/strict"
+      // Only a subprocess capability removal can exercise the no-Worker host.
+      Object.defineProperty(globalThis, "Worker", {value: undefined})
+      const { Fff } = await import(${JSON.stringify(new URL("../../src/filesystem/fff.bun.ts", import.meta.url).pathname)})
+      const picker = Fff.create(${JSON.stringify(options(tmp.path))})
+      assert.equal(await picker.waitForScan(5000), true)
+      assert.ok((await picker.fileSearch("search")).items.length)
+      assert.equal(picker.state.backend, "fff-direct")
+      await picker.destroy()
+      assert.equal(picker.state.destroyed, true)
+      assert.equal(Fff.executorState().workers, 0)
+    `,
+      ],
+      { env: { ...process.env, OPENCODE_EXPERIMENTAL_FFF_WORKER: "1" }, stdout: "pipe", stderr: "pipe" },
+    )
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    expect(code, stdout + stderr).toBe(0)
+  })
+
+  test("bounds worker lanes across Locations and disposes each native handle independently", async () => {
+    await using a = await fixture()
+    await using b = await fixture()
+    const clients = Array.from({ length: 6 }, (_, index) => Fff.createWorker(options(index % 2 ? a.path : b.path)))
+    try {
+      expect((await Promise.all(clients.map((client) => client.waitForScan(5000)))).every(Boolean)).toBe(true)
+      expect(Fff.executorState()).toMatchObject({ workers: 2, pickers: 6 })
+      await clients[0]?.destroy()
+      expect(Fff.executorState()).toMatchObject({ workers: 2, pickers: 5 })
+      expect((await clients[2]?.fileSearch("search"))?.items.length).toBeGreaterThan(0)
+      await Bun.write(`${a.path}/shared-fresh.ts`, "new content\n")
+      const deadline = performance.now() + 5000
+      while (!(await clients[1]?.fileSearch("shared-fresh"))?.items.length && performance.now() < deadline)
+        await Bun.sleep(25)
+      expect((await clients[1]?.fileSearch("shared-fresh"))?.items.length).toBe(1)
+      expect((await clients[2]?.fileSearch("shared-fresh"))?.items.length).toBe(0)
+    } finally {
+      await Promise.all(clients.map((client) => client.destroy()))
+    }
+    expect(Fff.executorState()).toEqual({ workers: 0, pickers: 0, queued: 0 })
+  })
+
+  test("bounds admission closures and removes cancelled/overflow work", async () => {
+    await using tmp = await fixture()
+    const gate = await harness(tmp.path, true)
+    const abort = new AbortController()
+    const pending = Array.from({ length: 400 }, () =>
+      gate.client.fileSearch("search", undefined, abort.signal).catch((error: unknown) => error),
+    )
+    await gate.wait("init-held")
+    expect(gate.client.state).toMatchObject({ active: "init", queued: 31, waiting: 128 })
+    abort.abort(new Error("obsolete"))
+    const errors = await Promise.all(pending)
+    expect(errors.filter((error) => error instanceof FffError && error.kind === "busy")).toHaveLength(241)
+    expect(gate.client.state).toMatchObject({ queued: 0, waiting: 0 })
+    const disposed = gate.client.destroy()
+    gate.command("release-init")
+    await disposed
+    expect(gate.client.state.destroyed).toBe(true)
+  })
+
+  test("a full waiting cohort drains normally instead of rejecting its admitted waiters", async () => {
+    await using tmp = await fixture()
+    const gate = await harness(tmp.path, true)
+    const pending = Array.from({ length: 159 }, () => gate.client.waitForScan(5000))
+    await gate.wait("init-held")
+    expect(gate.client.state.waiting).toBe(128)
+    gate.command("release-init")
+    expect((await Promise.all(pending)).every(Boolean)).toBe(true)
+    await gate.client.destroy()
+    expect(gate.client.state).toMatchObject({ waiting: 0, queued: 0, destroyed: true })
+  })
+
+  test("a failed shared worker settles all logical owners and can be replaced", async () => {
+    await using tmp = await fixture()
+    await Bun.write(`${tmp.path}/failed-pool.ts`, 'throw new Error("executor failed")')
+    const pool = new FffPool(() => new Worker(`${tmp.path}/failed-pool.ts`), 1)
+    const clients = Array.from({ length: 3 }, () => new FffClient(options(tmp.path), () => pool.acquire()))
+    expect(
+      (await Promise.all(clients.map((client) => client.fileSearch("search").catch((error: unknown) => error)))).every(
+        (error) => error instanceof FffError && error.kind === "transport",
+      ),
+    ).toBe(true)
+    await Promise.all(clients.map((client) => client.destroy()))
+    expect(pool.state).toEqual({ workers: 0, pickers: 0, queued: 0 })
+    await Bun.write(
+      `${tmp.path}/failed-pool.ts`,
+      `import ${JSON.stringify(new URL("../../src/filesystem/fff.worker.ts", import.meta.url).href)}`,
+    )
+    const recovered = new FffClient(options(tmp.path), () => pool.acquire())
+    expect(await recovered.waitForScan(5000)).toBe(true)
+    await recovered.destroy()
+    expect(recovered.state.destroyed).toBe(true)
+    expect(pool.state.workers).toBe(0)
+  })
+
+  test("shared transport clone failure preserves native disposal acknowledgement", async () => {
+    await using tmp = await fixture()
+    const pool = new FffPool(() => new Worker(new URL("../../src/filesystem/fff.worker.ts", import.meta.url)), 1)
+    const client = new FffClient(options(tmp.path), () => pool.acquire())
+    const survivor = new FffClient(options(tmp.path), () => pool.acquire())
+    expect(await client.waitForScan(5000)).toBe(true)
+    expect(await survivor.waitForScan(5000)).toBe(true)
+    await expect(
+      client.fileSearch("search", {
+        get currentFile(): string {
+          throw new Error("clone")
+        },
+      }),
+    ).rejects.toMatchObject({ kind: "transport" })
+    await client.destroy()
+    expect(client.state.destroyed).toBe(true)
+    expect((await survivor.fileSearch("search")).items.length).toBeGreaterThan(0)
+    await survivor.destroy()
+    expect(Fff.executorState().workers).toBe(0)
+  })
+
+  test("queued shared RPC cancellation skips native work and a hot owner cannot starve its peer", async () => {
+    await using tmp = await fixture()
+    const gate = await harness(tmp.path)
+    let native: Worker | undefined
+    const held = Promise.withResolvers<void>()
+    const pool = new FffPool(() => {
+      const worker = new Worker(gate.entry)
+      native = worker
+      worker.addEventListener("message", (event: MessageEvent<{ test?: string }>) => {
+        if (event.data.test === "grep-result-held") held.resolve()
+      })
+      return worker
+    }, 1)
+    const hot = new FffClient(options(tmp.path), () => pool.acquire())
+    const peer = new FffClient(options(tmp.path), () => pool.acquire())
+    expect(await hot.waitForScan(5000)).toBe(true)
+    expect(await peer.waitForScan(5000)).toBe(true)
+    const active = hot.grep("needle")
+    await held.promise
+    const abort = new AbortController()
+    const obsolete = peer.fileSearch("search", undefined, abort.signal).catch((error: unknown) => error)
+    expect(pool.state.queued).toBe(1)
+    abort.abort(new Error("obsolete native RPC"))
+    expect(await obsolete).toBe(abort.signal.reason)
+    expect(pool.state.queued).toBe(0)
+    expect(peer.state).toMatchObject({ active: undefined, queued: 0, waiting: 0 })
+    let delivered = 0
+    const traffic = Array.from({ length: 80 }, () =>
+      hot.fileSearch("search").then(() => {
+        delivered++
+      }),
+    )
+    const fresh = peer.fileSearch("space")
+    native?.postMessage({ test: "release-grep" })
+    await active
+    expect((await fresh).items.length).toBeGreaterThan(0)
+    expect(delivered).toBeLessThan(80)
+    await Promise.all(traffic)
+    await Promise.all([hot.destroy(), peer.destroy()])
+    expect(pool.state).toEqual({ workers: 0, pickers: 0, queued: 0 })
+  })
 })

@@ -1,5 +1,5 @@
 import { FffError } from "./fff-types"
-import type { GrepOptions, Init, Operations, Picker, Request, Response, SearchOptions } from "./fff-types"
+import type { GrepOptions, Init, Operations, Picker, Request, Response, SearchOptions, Transport } from "./fff-types"
 
 type Pending = {
   request: Request
@@ -9,7 +9,7 @@ type Pending = {
 }
 
 export class FffClient implements Picker {
-  private worker?: Worker
+  private worker?: Transport
   private active?: Pending
   private queue: Pending[] = []
   private waiting = new Set<() => void>()
@@ -24,7 +24,7 @@ export class FffClient implements Picker {
 
   constructor(
     private readonly init: Init,
-    private readonly spawn: () => Worker,
+    private readonly spawn: () => Transport,
   ) {}
 
   // Diagnostics expose scheduling state, never queries or native handles.
@@ -90,6 +90,7 @@ export class FffClient implements Picker {
             return
           }
           this.initialization = value
+          if (process.env.OPENCODE_FFF_DIAGNOSTICS === "1") console.error("FFF_NATIVE_INIT", JSON.stringify(value))
         },
         reject: (error) => {
           this.fail(error instanceof FffError ? error : new FffError("defect", "fff init failed"))
@@ -184,6 +185,13 @@ export class FffClient implements Picker {
         if (pending && pending === this.active) {
           pending.resolve = () => {}
           pending.reject = () => {}
+          // A shared executor may not have entered FFI yet. Remove that obsolete
+          // RPC rather than executing it just to free the logical caller's slot.
+          if (this.worker?.cancel?.(pending.request.id)) {
+            this.active = undefined
+            pending.detach()
+            this.pump()
+          }
         }
         Array.from(this.waiting).forEach((resume) => resume())
       }
@@ -196,6 +204,13 @@ export class FffClient implements Picker {
           return
         }
         if (this.queue.length + Number(!!this.active) >= 32) {
+          // Admission itself must be bounded: retaining arbitrary query closures
+          // outside the 32 RPC slots was an unbounded queue in a shared daemon.
+          if (!this.waiting.has(admit) && this.waiting.size >= 128) {
+            signal?.removeEventListener("abort", abort)
+            reject(new FffError("busy", "fff admission queue full"))
+            return
+          }
           this.waiting.add(admit)
           return
         }
@@ -233,6 +248,7 @@ export class FffClient implements Picker {
       this.active.reject(error)
       this.active.resolve = () => {}
       this.active.reject = () => {}
+      if (this.worker?.cancel?.(this.active.request.id)) this.active = undefined
     }
     this.pump()
     return this.closing

@@ -1,5 +1,6 @@
 import { FffClient } from "./fff-client"
-import { FffError, formatGrep } from "./fff-types"
+import { FffError, formatGrep, workerConfig } from "./fff-types"
+import { FffPool } from "./fff-pool"
 import type { GrepOptions, Init, Picker, SearchOptions } from "./fff-types"
 import type { FileFinder, Result } from "@ff-labs/fff-bun"
 
@@ -14,27 +15,95 @@ export function available() {
 }
 
 export function create(opts: Init) {
-  // The worker improves responsiveness, but large distinct-line pages still
-  // miss the latency gate. Preserve direct native FFF unless explicitly opted in.
-  const worker = process.env.OPENCODE_EXPERIMENTAL_FFF_WORKER
-  return worker === "1" || worker === "true" ? createWorker(opts) : createDirect(opts)
+  return workerConfig(process.env).enabled && typeof Worker !== "undefined" ? new Parallel(opts) : createDirect(opts)
+}
+
+const executor = new FffPool(
+  () =>
+    new Worker(
+      typeof OPENCODE_FFF_WORKER_PATH !== "undefined"
+        ? OPENCODE_FFF_WORKER_PATH
+        : new URL("./fff.worker.ts", import.meta.url),
+      { name: "fff" },
+    ),
+  workerConfig(process.env).workers,
+)
+
+export function executorState() {
+  return executor.state
 }
 
 export function createWorker(opts: Init) {
-  return new FffClient(
-    opts,
-    () =>
-      new Worker(
-        typeof OPENCODE_FFF_WORKER_PATH !== "undefined"
-          ? OPENCODE_FFF_WORKER_PATH
-          : new URL("./fff.worker.ts", import.meta.url),
-        { name: "fff" },
-      ),
-  )
+  return new FffClient(opts, () => executor.acquire())
 }
 
 export function createDirect(opts: Init) {
   return new Direct(opts)
+}
+
+class Parallel implements Picker {
+  private readonly clients: FffClient[]
+  private closing?: Promise<void>
+  private sequence = 0
+
+  constructor(opts: Init) {
+    // At most two indexed handles per Location, on the shared bounded executor.
+    // A single-worker setting avoids duplicating an index without parallel gain.
+    this.clients = Array.from({ length: Math.min(2, workerConfig(process.env).workers) }, () => createWorker(opts))
+  }
+
+  get state() {
+    return {
+      ...this.clients[0]?.state,
+      started: this.clients.some((client) => client.state.started),
+      queued: this.clients.reduce((sum, client) => sum + client.state.queued, 0),
+      waiting: this.clients.reduce((sum, client) => sum + client.state.waiting, 0),
+      workers: executor.state.workers,
+      pickers: executor.state.pickers,
+      executorQueued: executor.state.queued,
+    }
+  }
+
+  private run<A>(call: (client: FffClient) => Promise<A>) {
+    if (this.closing) return Promise.reject(new FffError("disposed", "fff disposed"))
+    const offset = this.sequence++ % this.clients.length
+    const client = [...this.clients.slice(offset), ...this.clients.slice(0, offset)].toSorted(
+      (a, b) =>
+        a.state.queued +
+        a.state.waiting +
+        Number(!!a.state.active) -
+        b.state.queued -
+        b.state.waiting -
+        Number(!!b.state.active),
+    )[0]
+    if (!client) return Promise.reject(new FffError("defect", "fff executor has no lanes"))
+    return call(client)
+  }
+
+  destroy() {
+    return (this.closing ??= Promise.all(this.clients.map((client) => client.destroy())).then(() => {}))
+  }
+  async waitForScan(timeoutMs?: number, signal?: AbortSignal) {
+    return (await Promise.all(this.clients.map((client) => client.waitForScan(timeoutMs, signal)))).every(Boolean)
+  }
+  fileSearch(query: string, opts?: SearchOptions, signal?: AbortSignal) {
+    return this.run((client) => client.fileSearch(query, opts, signal))
+  }
+  glob(query: string, opts?: SearchOptions, signal?: AbortSignal) {
+    return this.run((client) => client.glob(query, opts, signal))
+  }
+  directorySearch(query: string, opts?: SearchOptions, signal?: AbortSignal) {
+    return this.run((client) => client.directorySearch(query, opts, signal))
+  }
+  mixedSearch(query: string, opts?: SearchOptions, signal?: AbortSignal) {
+    return this.run((client) => client.mixedSearch(query, opts, signal))
+  }
+  grep(query: string, opts?: GrepOptions, signal?: AbortSignal) {
+    return this.run((client) => client.grep(query, opts, signal))
+  }
+  grepMatches(query: string, opts?: GrepOptions, signal?: AbortSignal) {
+    return this.run((client) => client.grepMatches(query, opts, signal))
+  }
 }
 
 class Direct implements Picker {

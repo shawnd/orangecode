@@ -8,6 +8,7 @@ import { Option, Schema } from "effect"
 import { Global } from "@opencode-ai/core/global"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { workerConfig } from "@opencode-ai/core/filesystem/fff-types"
 
 export const Status = Schema.Struct({
   protocol: Schema.Number,
@@ -34,6 +35,7 @@ export function directory() {
   if (process.env.OPENCODE_DAEMON_DIR) return path.resolve(process.env.OPENCODE_DAEMON_DIR)
   // Explicit config profiles must not borrow a daemon initialized with another
   // profile. Project directories are selected per request, not part of this key.
+  const search = workerConfig(process.env)
   const profile = createHash("sha256")
     .update(
       JSON.stringify([
@@ -46,6 +48,7 @@ export function directory() {
         process.env.OPENCODE_CONFIG_DIR ? path.resolve(process.env.OPENCODE_CONFIG_DIR) : undefined,
         process.env.OPENCODE_CONFIG_CONTENT,
         process.env.OPENCODE_DB,
+        ...(search.enabled ? [search] : []),
       ]),
     )
     .digest("hex")

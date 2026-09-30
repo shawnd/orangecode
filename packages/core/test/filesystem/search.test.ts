@@ -57,14 +57,14 @@ describe("Location search", () => {
     await fs.mkdir(path.join(tmp.path, "isolated"))
     await Bun.write(path.join(tmp.path, "match.txt"), "missing_import_needle\n")
     const source = new URL("../../src/filesystem/", import.meta.url)
-    for (const name of ["fff.bun.ts", "fff-client.ts", "fff.worker.ts"]) {
+    for (const name of ["fff.bun.ts", "fff-client.ts", "fff-pool.ts", "fff.worker.ts"]) {
       await Bun.write(path.join(tmp.path, "isolated", name), await Bun.file(new URL(name, source)).text())
     }
     // Share error identity with the real service while resolving the native
     // package from an isolated directory with no node_modules. No native stub.
     await Bun.write(
       path.join(tmp.path, "isolated", "fff-types.ts"),
-      `export { FffError, formatGrep } from ${JSON.stringify(new URL("fff-types.ts", source).pathname)}`,
+      `export { FffError, formatGrep, workerConfig } from ${JSON.stringify(new URL("fff-types.ts", source).pathname)}`,
     )
     for (const factory of ["createDirect", "createWorker"]) {
       const child = Bun.spawn(
