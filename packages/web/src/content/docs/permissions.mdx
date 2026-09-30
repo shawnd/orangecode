@@ -190,13 +190,42 @@ If you don’t specify anything, OpenCode starts from permissive defaults:
 
 ## What “Ask” Does
 
-When OpenCode prompts for approval, the UI offers three outcomes:
+When OpenCode prompts for approval, the UI offers these outcomes:
 
 - `once` — approve just this request
 - `always` — approve future requests matching the suggested patterns (for the rest of the current OpenCode session)
 - `reject` — deny the request
 
 The set of patterns that `always` would approve is provided by the tool (for example, bash approvals typically whitelist a safe command prefix like `git status*`).
+
+### Persistent folder approvals (orangecode)
+
+For an `external_directory` request with suggested folder patterns, orangecode also offers **Allow global**. Confirming it saves those patterns as `allow` rules under `permission.external_directory` in your global configuration. They apply across projects and survive restarts.
+
+This approves directory access; other tool permissions still apply. Explicit configured denies remain enforced. **Allow always** remains a temporary approval cleared on restart or instance reload.
+
+Global updates use the first existing file in `~/.config/opencode/` in this order: `opencode.jsonc`, `opencode.json`, then `config.json` (or the corresponding XDG config directory). If none exists, they create `opencode.json`.
+
+---
+
+## Permissions pane (orangecode)
+
+Run `/permissions` or choose **View permissions** in the command palette to inspect rules for the current directory and session:
+
+| Tab     | Contents                                                                   | Editable |
+| ------- | -------------------------------------------------------------------------- | -------- |
+| Config  | Merged configuration rules; edits save overrides for the current directory | Yes      |
+| Global  | Saved global configuration rules, including persistent folder approvals    | Yes      |
+| Agent   | Defaults and overrides for the currently selected agent                    | No       |
+| Session | Overrides attached to the current session                                  | No       |
+| Active  | Temporary “always” approvals                                               | No       |
+| Pending | Requests awaiting a response in this instance                              | No       |
+
+Type to filter by tool, pattern, or action. Use `Tab` / `Shift+Tab` to switch tabs and `Up` / `Down` to select rules. In Config or Global, press `Enter` to edit, use `Left` / `Right` to choose `allow`, `ask`, or `deny`, and press `Enter` to save. `Backspace` returns to the rules. Rules keep their evaluation order; higher-priority configuration and agent/session overrides can still determine the effective action.
+
+Use `Ctrl+r` to refresh or `Ctrl+u` to clear the filter. Click **Auto** or press `Ctrl+t` inside this pane to toggle auto-approval for this TUI. Explicit deny rules still apply. Respond to pending requests from the session that requested them.
+
+Subagent permission prompts show the underlying tool details, such as the command, file edit, or path, so you can inspect what the child agent is asking to do.
 
 ---
 

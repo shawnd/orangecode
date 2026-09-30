@@ -761,6 +761,23 @@ You can control context compaction behavior through the `compaction` option.
 - `prune` - Remove old tool outputs to save tokens (default: `false`). Set to `true` to enable pruning.
 - `reserved` - Token buffer for compaction. Leaves enough window to avoid overflow during compaction.
 
+#### Percentage threshold (orangecode)
+
+Set `threshold_percent` to compact earlier, at a percentage of the model's full context window:
+
+```json title="opencode.json"
+{
+  "compaction": {
+    "auto": true,
+    "threshold_percent": 75
+  }
+}
+```
+
+The value must be greater than `0` and at most `100`. The effective trigger is the lower of this percentage and the existing safe input/output limit, so setting `100` does not remove the safety buffer. Omit it to use the existing token-limit behavior; `auto: false` disables automatic compaction.
+
+orangecode also provides the agent with [`context_usage` and `compact`](/docs/tools#orangecode-tools). The former reports usage from the last completed model turn; the latter schedules compaction after the active turn finishes and then continues from the summary. You can still compact manually with [`/compact`](/docs/tui#compact).
+
 ---
 
 ### Watcher

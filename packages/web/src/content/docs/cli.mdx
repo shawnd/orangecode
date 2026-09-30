@@ -5,6 +5,25 @@ description: OpenCode CLI options and commands.
 
 import { Tabs, TabItem } from "@astrojs/starlight/components"
 
+## orangecode command
+
+The orangecode fork uses **`oc`** as its user-facing command. Substitute `oc` for `opencode` in the shared CLI examples below:
+
+```bash
+oc
+oc /path/to/project
+oc --continue
+oc run "Explain how closures work in JavaScript"
+oc serve --port 4096
+oc attach http://localhost:4096 --session ses_... --dir /path/to/project
+```
+
+The build artifact is still named `opencode`; the [`oc` wrapper](https://github.com/shawnd/orangecode#installation) launches it. Config filenames, package names, and `OPENCODE_*` environment variables retain their upstream names.
+
+Inside Herdr, [`/split`](/docs/tui#split) opens a new pane and runs `oc attach` against the current backend and session.
+
+---
+
 The OpenCode CLI by default starts the [TUI](/docs/tui) when run without any arguments.
 
 ```bash

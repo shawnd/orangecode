@@ -39,6 +39,30 @@ You can also use wildcards to control multiple tools at once. For example, to re
 
 ---
 
+## orangecode tools
+
+orangecode adds these built-in tools for model discovery and context management. These are agent tools, rather than shell commands or TUI slash commands.
+
+### models
+
+List models from connected providers, including reasoning variants. Favorites appear first, then recent setups, then other connected models. Pass `provider` to limit the list to a provider ID.
+
+### models_search
+
+Search connected setups with a `query` such as `grok 4.7 max`, a short model name, or `provider/model`. Matching favorites rank ahead of otherwise equal matches. A trailing effort is reported separately so the agent can pass the result to the `task` tool's `model` and `variant` parameters. See [subagent model selection](/docs/agents#subagent-model-selection-orangecode).
+
+### context_usage
+
+Report the selected model, context window, automatic compaction threshold, and approximate usage from the last completed turn on that model. The output includes input, output, reasoning, and cache token breakdowns when available.
+
+The active turn and any new input are not included. If no completed turn has been measured on the selected model, usage is reported as unavailable.
+
+### compact
+
+Schedule compaction of the current session after the active model turn and its tool calls finish, then continue working from the summary. It does not compact synchronously inside the tool call. For manual compaction, use [`/compact`](/docs/tui#compact); for automatic thresholds, see [compaction configuration](/docs/config#compaction).
+
+---
+
 ## Built-in
 
 Here are all the built-in tools available in OpenCode.

@@ -1,4 +1,10 @@
-# Contributing to OpenCode
+# Contributing to orangecode
+
+orangecode is an independent fork of [OpenCode](https://github.com/anomalyco/opencode). Use the [orangecode repository](https://github.com/shawnd/orangecode) for fork issues and pull requests. The development commands below use `oc` for the installed fork; package paths and configuration names retain their upstream names. See [README.md](README.md#installation) for building and installing the wrapper.
+
+## Upstream contribution guidelines
+
+The following policies and issue links describe contributing changes back to upstream OpenCode.
 
 We want to make it easy for you to contribute to OpenCode. Here are the most common type of changes that get merged:
 
@@ -29,7 +35,7 @@ Want to take on an issue? Leave a comment and a maintainer may assign it to you 
 New providers shouldn't require many if ANY code changes, but if you want to add support for a new provider first make a PR to:
 https://github.com/anomalyco/models.dev
 
-## Developing OpenCode
+## Developing orangecode
 
 - Requirements: Bun 1.3+
 - Install dependencies and start the dev server from the repo root:
@@ -41,19 +47,19 @@ https://github.com/anomalyco/models.dev
 
 ### Running against a different directory
 
-By default, `bun dev` runs OpenCode in the `packages/opencode` directory. To run it against a different directory or repository:
+By default, `bun dev` runs orangecode in the `packages/opencode` directory. To run it against a different directory or repository:
 
 ```bash
 bun dev <directory>
 ```
 
-To run OpenCode in the root of the opencode repo itself:
+To run orangecode in the root of this repository:
 
 ```bash
 bun dev .
 ```
 
-### Building a "localcode"
+### Building orangecode
 
 To compile a standalone executable:
 
@@ -69,16 +75,24 @@ Then run it with:
 
 Replace `<platform>` with your platform (e.g., `darwin-arm64`, `linux-x64`).
 
+For a CLI/TUI-only rebuild with dependencies already installed, run this from `packages/opencode`:
+
+```bash
+bun run script/build.ts --single --skip-install --skip-embed-web-ui
+```
+
+Omit `--skip-embed-web-ui` when changing the embedded web app. Install the resulting binary using the atomic replacement in the [README](README.md#install-the-oc-command-linux-x64), verify `oc --version`, and restart running sessions to load the new build.
+
 - Core pieces:
   - `packages/opencode`: OpenCode core business logic & server.
-  - `packages/opencode/src/cli/cmd/tui/`: The TUI code, written in SolidJS with [opentui](https://github.com/sst/opentui)
+  - `packages/tui`: The TUI code, written in SolidJS with [opentui](https://github.com/sst/opentui)
   - `packages/app`: The shared web UI components, written in SolidJS
   - `packages/desktop`: The native desktop app, built with Electron (wraps `packages/app`)
   - `packages/plugin`: Source for `@opencode-ai/plugin`
 
-### Understanding bun dev vs opencode
+### Understanding bun dev vs oc
 
-During development, `bun dev` is the local equivalent of the built `opencode` command. Both run the same CLI interface:
+During development, `bun dev` is the local equivalent of the installed `oc` command. Both run the same CLI interface:
 
 ```bash
 # Development (from project root)
@@ -88,10 +102,10 @@ bun dev web              # Start server + open web interface
 bun dev <directory>      # Start TUI in specific directory
 
 # Production
-opencode --help          # Show all available commands
-opencode serve           # Start headless API server
-opencode web             # Start server + open web interface
-opencode <directory>     # Start TUI in specific directory
+oc --help                # Show all available commands
+oc serve                 # Start headless API server
+oc web                   # Start server + open web interface
+oc <directory>           # Start TUI in specific directory
 ```
 
 ### Running the API Server
@@ -156,7 +170,7 @@ Caveats:
   the usual `bun dev`. This is because `bun dev` runs the server in a worker thread and breakpoints might not work there.
 - If `spawn` does not work for you, you can debug the server separately:
   - Debug server: `bun run --inspect=ws://localhost:6499/ --cwd packages/opencode ./src/index.ts serve --port 4096`,
-    then attach TUI with `opencode attach http://localhost:4096`
+    then attach TUI with `oc attach http://localhost:4096`
   - Debug TUI: `bun run --inspect=ws://localhost:6499/ --cwd packages/opencode ./src/index.ts`
 
 Other tips and tricks:

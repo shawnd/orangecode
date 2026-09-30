@@ -5,6 +5,8 @@ description: Using the OpenCode terminal user interface.
 
 import { Tabs, TabItem } from "@astrojs/starlight/components"
 
+For the orangecode fork, launch the TUI with `oc` (or `oc /path/to/project`). The `opencode` examples on this page describe the shared upstream interface. orangecode adds [`/permissions`](#permissions), [`/usage`](#usage), and [`/split`](#split), plus the session and clipboard controls below.
+
 OpenCode provides an interactive terminal interface or TUI for working on your projects with an LLM.
 
 Running OpenCode starts the TUI for the current directory.
@@ -46,6 +48,24 @@ Configured [references](/docs/references) also appear in `@` autocomplete. Type 
 ```text "@docs/README.md"
 Compare our setup with @docs/README.md
 ```
+
+---
+
+## Session visibility (orangecode)
+
+- Click a session ID in the sidebar to copy it to the clipboard, for use with `oc --session <id>` or `oc attach <url> --session <id>`.
+- The sidebar footer shows additions and deletions from the session's file diffs alongside the working directory. These are session changes, not a count of all uncommitted repository changes.
+- Click the LSP sidebar's enable/disable text to toggle LSPs. The setting is saved in the current directory's configuration.
+- Click the prompt cost indicator to switch between **session** cost and **total** cost, which includes descendant subagent sessions. The same toggle is available in subagent footers. It starts in total mode.
+- Forking a session copies its conversation but starts the new session's cost at zero, so inherited history is not billed again in the fork's total.
+
+Click the prompt's token/context indicator to open [usage statistics](#usage), or click the **commands** hint to open the command palette.
+
+---
+
+## Clipboard paste (orangecode)
+
+Right-click inside the prompt to paste from the system clipboard. Clipboard images are attached to the prompt; text is inserted through the usual paste flow. This uses the same clipboard support as keyboard paste.
 
 ---
 
@@ -187,6 +207,18 @@ Start a new session. _Alias_: `/clear`
 
 ---
 
+### permissions
+
+Open orangecode's permissions management pane.
+
+```bash frame="none"
+/permissions
+```
+
+Inspect configuration, global, agent, session, temporary, and pending permissions. Edit saved rule actions or toggle auto-approval for the current TUI. See the [permissions pane guide](/docs/permissions#permissions-pane-orangecode) for controls and rule precedence.
+
+---
+
 ### redo
 
 Redo a previously undone message. Only available after using `/undo`.
@@ -225,6 +257,20 @@ Share current session. [Learn more](/docs/share).
 ```bash frame="none"
 /share
 ```
+
+---
+
+### split
+
+In orangecode, open another Herdr pane attached to the current session and backend:
+
+```bash frame="none"
+/split
+```
+
+This requires a Herdr pane (`HERDR_ENV=1`) with both `herdr` and `oc` on `PATH`. At a terminal width of at least 160 columns it splits to the right; otherwise it splits downward. The new pane opens without taking focus.
+
+For a local TUI, orangecode starts a loopback listener on the existing worker when needed. For an attached TUI, it reuses the existing server connection. The new pane runs `oc attach` with the current session ID and directory; it opens another view of that session rather than forking it. Connections using Basic authentication or no authentication are supported.
 
 ---
 
@@ -270,6 +316,20 @@ be a Git repository**.
 ```
 
 **Keybind:** `ctrl+x u`
+
+---
+
+### usage
+
+Open orangecode's usage statistics dialog:
+
+```bash frame="none"
+/usage
+```
+
+Switch between **All projects**, **This project**, and **This session** with `Tab` / `Shift+Tab`, arrow keys, or a mouse click. Each scope shows session count, recorded cost, and input, output, reasoning, cache-read, and cache-write tokens. You can also open it by clicking the token/context indicator in the prompt.
+
+The session scope counts the selected session itself; project and all-project scopes aggregate the corresponding stored sessions. For cost including a session's descendants, use the [total cost toggle](#session-visibility-orangecode).
 
 ---
 

@@ -40,6 +40,29 @@ OpenCode comes with three built-in subagents, **General**, **Explore**, and **Sc
 
 ---
 
+## Subagent model selection (orangecode)
+
+orangecode lets the primary agent select a connected model and reasoning variant for an individual `task` call. For example:
+
+```txt frame="none"
+Use the explore subagent with Grok 4.7 max to investigate the API routes.
+```
+
+The agent can use [`models` and `models_search`](/docs/tools#orangecode-tools) to discover connected setups before launching a task. Favorites are listed first, followed by recent and other connected models; search ranks matching favorites ahead of otherwise equal matches.
+
+The `task` tool accepts:
+
+- `model`: an exact `provider/model` ID or a short model name. A trailing effort word, such as `max` or `high`, selects that variant.
+- `variant`: an explicit reasoning variant. This takes precedence over an effort suffix in `model`.
+
+Supported effort words are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; the selected model must actually provide the requested variant. Ambiguous names return an error asking for `provider/model`.
+
+Without an override, the subagent uses its configured model or inherits the parent model. The parent's variant is inherited when the model is inherited; switching models does not automatically carry that variant over. A variant-only override applies to the subagent's otherwise selected model.
+
+This chooses the setup for the delegated task; it does not change the primary session's model.
+
+---
+
 ## Built-in
 
 OpenCode comes with two built-in primary agents and three built-in subagents.
