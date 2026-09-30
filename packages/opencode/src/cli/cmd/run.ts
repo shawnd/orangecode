@@ -981,6 +981,12 @@ type MiniCommandInput = {
 
 export async function runMini(input: MiniCommandInput) {
   if (!RunCommand.handler) throw new Error("Mini command handler is unavailable")
+  const connection = await (async () => {
+    if (input.attach) return undefined
+    if (!process.stdout.isTTY) throw new Error("--mini requires a TTY stdout")
+    const { Daemon } = await import("../daemon")
+    return Daemon.attach(await Daemon.ensure())
+  })()
   await RunCommand.handler({
     $0: "opencode",
     _: ["mini"],
@@ -995,10 +1001,10 @@ export async function runMini(input: MiniCommandInput) {
     format: "default",
     file: undefined,
     title: undefined,
-    attach: input.attach,
-    password: input.password,
-    username: input.username,
-    dir: input.directory,
+    attach: input.attach ?? connection?.url,
+    password: input.password ?? connection?.password,
+    username: input.username ?? (connection ? "opencode" : undefined),
+    dir: input.directory ?? (connection ? process.cwd() : undefined),
     port: undefined,
     variant: undefined,
     thinking: undefined,

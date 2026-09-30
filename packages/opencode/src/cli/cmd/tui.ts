@@ -8,46 +8,15 @@ import { errorMessage } from "@opencode-ai/tui/util/error"
 import { withTimeout } from "@/util/timeout"
 import { withNetworkOptions, resolveNetworkOptionsNoConfig, hasArg } from "@/cli/network"
 import { Filesystem } from "@/util/filesystem"
-import type { GlobalEvent } from "@opencode-ai/sdk/v2"
-import type { EventSource } from "@opencode-ai/tui/context/sdk"
 import { writeHeapSnapshot } from "v8"
 import { ServerAuth } from "@/server/auth"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
 import { restartArgs, restartProcess } from "../restart"
+import { Daemon } from "../daemon"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
-}
-
-type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
-
-function createWorkerFetch(client: RpcClient): typeof fetch {
-  const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = new Request(input, init)
-    const body = request.body ? await request.text() : undefined
-    const result = await client.call("fetch", {
-      url: request.url,
-      method: request.method,
-      headers: Object.fromEntries(request.headers.entries()),
-      body,
-    })
-    return new Response(result.body, {
-      status: result.status,
-      headers: result.headers,
-    })
-  }
-  return fn as typeof fetch
-}
-
-function createEventSource(client: RpcClient): EventSource {
-  return {
-    subscribe: async (handler) => {
-      return client.on<GlobalEvent>("global.event", (e) => {
-        handler(e)
-      })
-    },
-  }
 }
 
 async function target() {
@@ -200,7 +169,6 @@ export const TuiThreadCommand = cmd({
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
       const next = resolveThreadDirectory(args.project)
-      const file = await target()
       try {
         process.chdir(next)
       } catch {
@@ -209,88 +177,87 @@ export const TuiThreadCommand = cmd({
       }
       const cwd = Filesystem.resolve(process.cwd())
 
-      const worker = new Worker(file, {
-        env: Object.fromEntries(
-          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-        ),
-      })
-      const client = Rpc.client<typeof rpc>(worker)
-      const reload = () => {
-        client.call("reload", undefined).catch(() => {})
-      }
-      process.on("SIGUSR2", reload)
-
-      let stopped = false
-      const stop = async () => {
-        if (stopped) return
-        stopped = true
-        process.off("SIGUSR2", reload)
-        await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-        worker.terminate()
-      }
-
       const prompt = await input(args.prompt)
       const config = await TuiConfig.get()
 
       const network = resolveNetworkOptionsNoConfig(args)
       const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
 
-      const headers = external ? ServerAuth.headers() : undefined
-
-      const transport = external
-        ? {
-            url: (await client.call("server", network)).url,
-            fetch: undefined,
+      const transport = await (async () => {
+        if (!external) {
+          const client = await Daemon.ensure()
+          return {
+            ...client,
             events: undefined,
-            headers,
+            stop: async () => {},
+            reload: () => Daemon.request(client, "reload"),
+            checkUpgrade: () => Daemon.request(client, "upgrade", { directory: cwd }),
+            attach: () => Daemon.attach(client),
+            snapshot: async () => {
+              const { Schema } = await import("effect")
+              const response = await Daemon.request(client, "snapshot")
+              return Schema.decodeUnknownSync(Schema.String)(await response.json())
+            },
           }
-        : {
-            url: "http://opencode.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
-          }
-
-      // Share this worker with additional TUIs without restarting its listener.
-      let listener: Promise<{ url: string }> | undefined
-
-      try {
-        await validateSession({
-          url: transport.url,
-          sessionID: args.session,
-          directory: cwd,
-          fetch: transport.fetch,
-          headers,
+        }
+        const file = await target()
+        const worker = new Worker(file, {
+          env: Object.fromEntries(
+            Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+          ),
         })
-      } catch (error) {
-        UI.error(errorMessage(error))
-        process.exitCode = 1
-        return
+        const client = Rpc.client<typeof rpc>(worker)
+        const server = await client.call("server", network).catch((error) => {
+          worker.terminate()
+          throw error
+        })
+        return {
+          url: server.url,
+          fetch: undefined,
+          events: undefined,
+          headers: ServerAuth.headers(),
+          stop: async () => {
+            await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
+            worker.terminate()
+          },
+          reload: () => client.call("reload", undefined),
+          checkUpgrade: () => client.call("checkUpgrade", { directory: cwd }),
+          attach: async () => ({ url: server.url, headers: ServerAuth.headers() }),
+          snapshot: () => client.call("snapshot", undefined),
+        }
+      })()
+      const reload = () => {
+        transport.reload().catch(() => {})
       }
-
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-      }, 1000).unref?.()
+      process.on("SIGUSR2", reload)
 
       try {
+        try {
+          await validateSession({
+            url: transport.url,
+            sessionID: args.session,
+            directory: cwd,
+            fetch: transport.fetch,
+            headers: transport.headers,
+          })
+        } catch (error) {
+          UI.error(errorMessage(error))
+          process.exitCode = 1
+          return
+        }
+        setTimeout(() => {
+          transport.checkUpgrade().catch(() => {})
+        }, 1000).unref?.()
         const { Effect } = await import("effect")
         const { run } = await import("../tui/layer")
         const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
         const requested = await Effect.runPromise(
           run({
             url: transport.url,
-            async onAttach() {
-              if (external) return { url: transport.url, headers }
-              const server = await (listener ??= Promise.resolve(
-                client.call("server", { hostname: "127.0.0.1", port: 0 }),
-              ).catch((error) => {
-                listener = undefined
-                throw error
-              }))
-              return { url: server.url, headers: ServerAuth.headers() }
-            },
+            onAttach: transport.attach,
             async onSnapshot() {
               const tui = writeHeapSnapshot("tui.heapsnapshot")
-              const server = await client.call("snapshot", undefined)
+              const server = await transport.snapshot()
               return [tui, server]
             },
             config,
@@ -317,7 +284,8 @@ export const TuiThreadCommand = cmd({
           })
         }
       } finally {
-        await stop()
+        process.off("SIGUSR2", reload)
+        await transport.stop()
       }
     } finally {
       try {

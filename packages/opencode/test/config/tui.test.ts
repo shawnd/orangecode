@@ -1,7 +1,6 @@
 import { expect } from "bun:test"
 import path from "path"
 import { pathToFileURL } from "url"
-import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Layer } from "effect"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -72,14 +71,14 @@ const withPlatform = <A, E, R>(platform: typeof process.platform, self: Effect.E
 const getTuiConfig = (directory: string) =>
   TuiConfig.Service.use((svc) => svc.get()).pipe(
     Effect.provide(
-      AppNodeBuilder.build(TuiConfig.node).pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory))),
+      LayerNode.compile(TuiConfig.node).pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory))),
     ),
   )
 
 const getTuiPluginOrigins = (directory: string) =>
   TuiConfig.Service.use((svc) => svc.pluginOrigins()).pipe(
     Effect.provide(
-      AppNodeBuilder.build(TuiConfig.node).pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory))),
+      LayerNode.compile(TuiConfig.node).pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory))),
     ),
   )
 
