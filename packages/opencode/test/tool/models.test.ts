@@ -57,4 +57,34 @@ describe("models tool", () => {
   test("reports no match", () => {
     expect(ModelsFormat.formatSearch({ query: "not-a-model", models, saved })).toBe('No models matched "not-a-model".')
   })
+
+  test("prefers a favorite when provider naming lowers its search score", () => {
+    const text = ModelsFormat.formatSearch({
+      query: "sol 5.6",
+      models: [...models, { providerID: "opencode", modelID: "gpt-5.6-sol", name: "Sol", variants: ["high"] }],
+      saved: {
+        ...saved,
+        favorite: [{ providerID: "opencode", modelID: "gpt-5.6-sol" }],
+      },
+    })
+    expect(text.split("\n")[0]).toContain("opencode/gpt-5.6-sol")
+  })
+
+  test("ranks favorites before truncating search candidates", () => {
+    const text = ModelsFormat.formatSearch({
+      query: "sol 5.6",
+      models: Array.from({ length: 50 }, (_, index) => ({
+        providerID: `provider-${String(index).padStart(2, "0")}`,
+        modelID: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        variants: ["high"],
+      })),
+      saved: {
+        ...saved,
+        favorite: [{ providerID: "provider-49", modelID: "gpt-5.6-sol" }],
+      },
+    })
+    expect(text.split("\n")[0]).toContain("provider-49/gpt-5.6-sol")
+    expect(text.split("\n")).toHaveLength(12)
+  })
 })

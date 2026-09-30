@@ -36,7 +36,7 @@ describe("tui sync", () => {
       expect(session.at(-1)?.searchParams.get("path")).toBeNull()
       expect(session.at(-1)?.searchParams.get("roots")).toBeNull()
     } finally {
-      app.renderer.destroy()
+      await app.dispose()
     }
   })
 
@@ -59,7 +59,7 @@ describe("tui sync", () => {
 
       expect(sync.data.vcs?.branch).toBe("feature")
     } finally {
-      app.renderer.destroy()
+      await app.dispose()
     }
   })
 })

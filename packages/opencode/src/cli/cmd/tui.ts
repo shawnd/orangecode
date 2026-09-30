@@ -220,17 +220,18 @@ export const TuiThreadCommand = cmd({
       }
       process.on("SIGUSR2", reload)
 
-      let stopped = false
-      const stop = async () => {
-        if (stopped) return
-        stopped = true
-        process.off("SIGUSR2", reload)
-        await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-        worker.terminate()
-      }
-
-      const prompt = await input(args.prompt)
-      const config = await TuiConfig.get()
+      let stopping: Promise<void> | undefined
+      const stop = () =>
+        (stopping ??= (async () => {
+          process.off("SIGUSR2", reload)
+          try {
+            await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
+          } finally {
+            await worker.terminate()
+          }
+        })())
+      // Own the worker before network setup and session validation can fail.
+      await using workerLifetime = { [Symbol.asyncDispose]: stop }
 
       const network = resolveNetworkOptionsNoConfig(args)
       const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
@@ -266,6 +267,10 @@ export const TuiThreadCommand = cmd({
         process.exitCode = 1
         return
       }
+
+      // Failed validation must not acquire UI services that outlive the worker.
+      const prompt = await input(args.prompt)
+      const config = await TuiConfig.get()
 
       setTimeout(() => {
         client.call("checkUpgrade", { directory: cwd }).catch(() => {})

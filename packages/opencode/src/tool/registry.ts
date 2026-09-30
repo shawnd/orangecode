@@ -17,6 +17,7 @@ import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { ModelsSearchTool, ModelsTool } from "./models"
+import { ModelFavorites } from "@opencode-ai/core/model-favorites"
 import { CompactTool } from "./compact"
 import { ContextUsageTool } from "./context-usage"
 import { SessionActiveTool } from "./session-active"
@@ -493,6 +494,7 @@ export const node = LayerNode.make({
     MCP.node,
     Database.node,
     SessionActivity.node,
+    ModelFavorites.node,
     Ripgrep.node,
   ],
 })

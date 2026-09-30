@@ -1,9 +1,11 @@
 import { createComponent, createContext, type JSX, useContext } from "solid-js"
+import { ShutdownProvider } from "./shutdown"
 
 export type TuiPaths = Readonly<{
   cwd: string
   home: string
   state: string
+  database?: string
   worktree: string
 }>
 
@@ -31,7 +33,18 @@ function provider<T>(context: ReturnType<typeof createContext<T>>, value: T, chi
   })
 }
 
-export function TuiPathsProvider(props: { value: TuiPaths; children: JSX.Element }) {
+export function TuiPathsProvider(props: {
+  value: TuiPaths
+  children: JSX.Element
+  onDispose?: (done: Promise<void>) => void
+}) {
+  if (props.onDispose)
+    return createComponent(ShutdownProvider, {
+      track: props.onDispose,
+      get children() {
+        return provider(PathsContext, props.value, () => props.children)
+      },
+    })
   return provider(PathsContext, props.value, () => props.children)
 }
 

@@ -3,6 +3,7 @@ import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
+import { scheduler } from "node:timers/promises"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -25,6 +26,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
+    let unsubscribe: (() => void) | undefined
 
     function createSDK() {
       return createOpencodeClient({
@@ -37,6 +39,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     let sdk = createSDK()
+    let globalSDK: ReturnType<typeof createOpencodeClient> | undefined
 
     const handlers = new Set<(event: GlobalEvent) => void>()
     const emitter = {
@@ -72,6 +75,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     const handleEvent = (event: GlobalEvent) => {
+      if (abort.signal.aborted) return
       queue.push(event)
       const elapsed = Date.now() - last
 
@@ -117,7 +121,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
           // Exponential backoff
           const backoff = Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)
-          await new Promise((resolve) => setTimeout(resolve, backoff))
+          await scheduler.wait(backoff, { signal: ctrl.signal }).catch(() => {})
         }
       })().catch(() => {})
     }
@@ -125,7 +129,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     onMount(async () => {
       if (props.events) {
         const unsub = await props.events.subscribe(handleEvent)
-        onCleanup(unsub)
+        if (abort.signal.aborted) {
+          unsub()
+          return
+        }
+        unsubscribe = unsub
 
         if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
           // Start syncing workspaces, it's important to do this after
@@ -140,13 +148,23 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     onCleanup(() => {
       abort.abort()
       sse?.abort()
+      unsubscribe?.()
       if (timer) clearTimeout(timer)
+      queue = []
       handlers.clear()
     })
 
     return {
       get client() {
         return sdk
+      },
+      get globalClient() {
+        return (globalSDK ??= createOpencodeClient({
+          baseUrl: props.url,
+          signal: abort.signal,
+          fetch: props.fetch,
+          headers: props.headers,
+        }))
       },
       directory: props.directory,
       event: emitter,

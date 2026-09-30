@@ -74,6 +74,7 @@ export function DialogModel(props: { providerID?: string }) {
             value: { providerID: provider.id, modelID: model },
             title: info.name ?? model,
             releaseDate: info.release_date,
+            favorite: !!needle && favorites.some((item) => item.providerID === provider.id && item.modelID === model),
             description: favorites.some((item) => item.providerID === provider.id && item.modelID === model)
               ? "(Favorite)"
               : undefined,
@@ -138,7 +139,6 @@ export function DialogModel(props: { providerID?: string }) {
     if (!value) return "Select model"
     return value.name
   })
-
   function onSelect(providerID: string, modelID: string) {
     local.model.set({ providerID, modelID }, { recent: true })
     const list = local.model.variant.list()
@@ -183,13 +183,19 @@ export function DialogModel(props: { providerID?: string }) {
   )
 }
 
-export function sortModelOptions<T extends { footer?: string; releaseDate: string | number; title: string }>(
-  options: T[],
-  newestFirst: boolean,
-) {
-  if (newestFirst) return sortBy(options, [(option) => option.releaseDate, "desc"], (option) => option.title)
+export function sortModelOptions<
+  T extends { footer?: string; releaseDate: string | number; title: string; favorite?: boolean },
+>(options: T[], newestFirst: boolean) {
+  if (newestFirst)
+    return sortBy(
+      options,
+      (option) => !option.favorite,
+      [(option) => option.releaseDate, "desc"],
+      (option) => option.title,
+    )
   return sortBy(
     options,
+    (option) => !option.favorite,
     (option) => option.footer !== "Free",
     [(option) => option.releaseDate, "desc"],
     (option) => option.title,

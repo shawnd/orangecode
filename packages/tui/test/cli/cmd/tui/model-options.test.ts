@@ -2,6 +2,21 @@ import { describe, expect, test } from "bun:test"
 import { sortModelOptions } from "../../../../src/component/dialog-model"
 
 describe("sortModelOptions", () => {
+  test("puts filtered favorites ahead of free and newer models", () => {
+    const options = [
+      { title: "Free model", releaseDate: "2026-03-05", footer: "Free" },
+      { title: "New model", releaseDate: "2026-03-05" },
+      { title: "Favorite model", releaseDate: "2025-01-01", favorite: true },
+    ]
+
+    expect(sortModelOptions(options, false).map((model) => model.title)).toEqual([
+      "Favorite model",
+      "Free model",
+      "New model",
+    ])
+    expect(sortModelOptions(options, true)[0]?.title).toBe("Favorite model")
+  })
+
   test("orders provider-scoped model choices by newest release first", () => {
     const sorted = sortModelOptions(
       [

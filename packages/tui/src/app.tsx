@@ -198,10 +198,29 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
+      const disposals = new Set<Promise<void>>()
+      // Registered before the renderer so scoped teardown destroys the Solid
+      // tree first, then waits for preference writes admitted during its life.
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          await Promise.all(disposals)
+        }),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          try {
+            await input.pluginHost.dispose()
+          } catch (error) {
+            console.error("Failed to dispose TUI plugins", error)
+          }
+        }),
+      )
+      const shutdown = yield* Deferred.make<unknown>()
       const renderer = yield* Effect.acquireRelease(
         Effect.tryPromise({
           try: () =>
             createCliRenderer({
+              onDestroy: () => Deferred.doneUnsafe(shutdown, Effect.void),
               externalOutputMode: "passthrough",
               targetFps: 60,
               gatherStats: false,
@@ -221,29 +240,21 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
             destroyRenderer(renderer)
           }),
       )
+      if (renderer.isDestroyed) return { epilogue: exit.epilogue, reason: exit.reason, restart: exit.restart }
+      // Native destroy events still own the renderer handle; clear its title before release.
+      renderer.once("destroy", () => renderer.setTerminalTitle(""))
       win32DisableProcessedInput()
       const keymap = createDefaultOpenTuiKeymap(renderer)
       yield* Effect.acquireRelease(
         Effect.sync(() => registerOpencodeKeymap(keymap, renderer, input.config)),
         (unregister) => Effect.sync(unregister),
       )
-      yield* Effect.addFinalizer(() =>
-        Effect.promise(async () => {
-          try {
-            await input.pluginHost.dispose()
-          } catch (error) {
-            console.error("Failed to dispose TUI plugins", error)
-          }
-        }),
-      )
       yield* Effect.addFinalizer(() => Effect.sync(TuiAudio.dispose))
-      const shutdown = yield* Deferred.make<unknown>()
       const onSighup = () => destroyRenderer(renderer)
       yield* Effect.acquireRelease(
         Effect.sync(() => process.on("SIGHUP", onSighup)),
         () => Effect.sync(() => process.off("SIGHUP", onSighup)),
       )
-      renderer.once("destroy", () => Deferred.doneUnsafe(shutdown, Effect.void))
       const pluginRuntime = createPluginRuntime()
 
       yield* Effect.tryPromise(async () => {
@@ -262,13 +273,21 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                 destroyRenderer(renderer)
               }}
             >
-              <EpilogueProvider set={(value) => (exit.epilogue = value)}>
+              <EpilogueProvider
+                set={(value) => {
+                  // Route cleanup clears this while navigating, but destruction
+                  // must retain the final session's epilogue for scoped exit.
+                  if (!renderer.isDestroyed) exit.epilogue = value
+                }}
+              >
                 <ErrorBoundary fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}>
                   <TuiPathsProvider
+                    onDispose={(done) => disposals.add(done)}
                     value={{
                       cwd: process.cwd(),
                       home: global.home,
                       state: global.state,
+                      database: global.data === Global.Path.data ? undefined : `${global.data}/opencode.db`,
                       worktree: global.data + "/worktree",
                     }}
                   >

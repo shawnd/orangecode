@@ -25,6 +25,7 @@ type Ctx = { kv: ReturnType<typeof useKV>; project: ReturnType<typeof useProject
 export async function mount(override?: FetchHandler, state?: string) {
   const calls = createFetch(override)
   const events = createEventSource()
+  const disposals = new Set<Promise<void>>()
   let sync!: ReturnType<typeof useSync>
   let project!: ReturnType<typeof useProject>
   let kv!: ReturnType<typeof useKV>
@@ -45,7 +46,7 @@ export async function mount(override?: FetchHandler, state?: string) {
   }
 
   const app = await testRender(() => (
-    <TestTuiContexts paths={state ? { state } : undefined}>
+    <TestTuiContexts paths={state ? { state } : undefined} onDispose={(done) => disposals.add(done)}>
       <ArgsProvider>
         <KVProvider>
           <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={events.source}>
@@ -66,5 +67,17 @@ export async function mount(override?: FetchHandler, state?: string) {
 
   await ready
   await wait(() => sync.status === "complete")
-  return { app, emit: events.emit, kv, project, sync, session: calls.session }
+  return {
+    app: Object.assign(app, {
+      async dispose() {
+        app.renderer.destroy()
+        await Promise.all(disposals)
+      },
+    }),
+    emit: events.emit,
+    kv,
+    project,
+    sync,
+    session: calls.session,
+  }
 }

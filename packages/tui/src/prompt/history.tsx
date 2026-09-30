@@ -1,10 +1,12 @@
 import path from "path"
-import { onMount } from "solid-js"
+import { onCleanup } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
 import type { AgentPart, FilePart, TextPart } from "@opencode-ai/sdk/v2"
 import { createSimpleContext } from "../context/helper"
 import { useTuiPaths } from "../context/runtime"
-import { appendText, readText, writeText } from "../util/persistence"
+import { missing, readText, writeTextAtomic } from "../util/persistence"
+import { createPersistentState } from "../util/persistent-state"
+import { useShutdown } from "../context/shutdown"
 
 export type PromptInfo = {
   input: string
@@ -51,19 +53,27 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
   init: () => {
     const paths = useTuiPaths()
     const historyPath = path.join(paths.state, "prompt-history.jsonl")
-    onMount(async () => {
-      const lines = parsePromptHistory(await readText(historyPath).catch(() => ""))
-      setStore("history", lines)
-
-      // Rewrite valid retained entries to self-heal corruption and enforce the limit.
-      if (lines.length > 0)
-        writeText(historyPath, lines.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
-    })
-
+    const shutdown = useShutdown()
     const [store, setStore] = createStore({
       index: 0,
       history: [] as PromptInfo[],
     })
+    const state = createPersistentState({
+      file: historyPath,
+      initial: [] as PromptInfo[],
+      read: async () =>
+        parsePromptHistory(
+          await readText(historyPath).catch((error: unknown) => {
+            if (missing(error)) return ""
+            throw error
+          }),
+        ),
+      write: (value) =>
+        writeTextAtomic(historyPath, value.map((line) => JSON.stringify(line)).join("\n") + (value.length ? "\n" : "")),
+      onChange: (value) => setStore("history", value),
+      onError: (error) => console.error("Failed to persist prompt history", { error }),
+    })
+    onCleanup(() => shutdown(state.dispose()))
 
     return {
       isBrowsing(input: string) {
@@ -91,23 +101,12 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
           setStore("index", 0)
           return
         }
-        let trimmed = false
-        setStore(
-          produce((draft) => {
-            draft.history.push(entry)
-            if (draft.history.length > MAX_HISTORY_ENTRIES) {
-              draft.history = draft.history.slice(-MAX_HISTORY_ENTRIES)
-              trimmed = true
-            }
-            draft.index = 0
-          }),
-        )
-
-        if (trimmed) {
-          writeText(historyPath, store.history.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
-          return
-        }
-        appendText(historyPath, JSON.stringify(entry) + "\n").catch(() => {})
+        setStore("index", 0)
+        void state
+          .update((value) =>
+            isDuplicateEntry(value.at(-1), entry) ? value : [...value, entry].slice(-MAX_HISTORY_ENTRIES),
+          )
+          .catch(() => {})
       },
     }
   },

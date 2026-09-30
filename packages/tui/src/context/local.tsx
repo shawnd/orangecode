@@ -1,6 +1,6 @@
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
-import { batch, createEffect, createMemo } from "solid-js"
+import { batch, createEffect, createMemo, onCleanup } from "solid-js"
 import { useSync } from "./sync"
 import { useEvent } from "./event"
 import path from "path"
@@ -8,11 +8,15 @@ import { useTuiPaths } from "./runtime"
 import { useArgs } from "./args"
 import { useSDK } from "./sdk"
 import { RGBA } from "@opentui/core"
-import { readJson, writeJsonAtomic } from "../util/persistence"
+import { missing, readJson, writeJsonAtomic } from "../util/persistence"
+import { createPersistentState } from "../util/persistent-state"
+import { useShutdown } from "./shutdown"
 import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { usePermission } from "./permission"
+import { createModelState } from "../util/model-state"
+import { useRenderer } from "@opentui/solid"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -50,7 +54,7 @@ export function recentModels(
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
-  init: () => {
+  init: (props: { onDispose?: (done: Promise<void>) => void }) => {
     const sync = useSync()
     const sdk = useSDK()
     const toast = useToast()
@@ -60,6 +64,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const args = useArgs()
     const event = useEvent()
     const permission = usePermission()
+    const renderer = useRenderer()
+    const shutdown = useShutdown()
 
     function isModelValid(model: { providerID: string; modelID: string }) {
       const provider = sync.data.provider.find((item) => item.id === model.providerID)
@@ -161,38 +167,46 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         variant: {},
       })
 
-      const filePath = path.join(paths.state, "model.json")
-      const state = {
-        pending: false,
-      }
-
-      function save() {
-        if (!modelStore.ready) {
-          state.pending = true
-          return
-        }
-        state.pending = false
-        void writeJsonAtomic(filePath, {
-          recent: modelStore.recent,
-          favorite: modelStore.favorite,
-          variant: modelStore.variant,
+      const favorites = (async () => {
+        const { ModelFavorites } = await import("@opencode-ai/core/model-favorites")
+        return ModelFavorites.store({ database: paths.database, state: paths.state })
+      })()
+      const state = createModelState({
+        file: path.join(paths.state, "model.json"),
+        favorites: {
+          list: async () => (await favorites).list(),
+          set: async (model, favorite) => (await favorites).set(model, favorite),
+          dispose: async () => (await favorites).dispose(),
+        },
+        onChange(value) {
+          batch(() => {
+            setModelStore("recent", value.recent)
+            setModelStore("favorite", value.favorite)
+            setModelStore("variant", reconcile(value.variant))
+          })
+        },
+        onError(error) {
+          console.error("Failed to refresh model state", { error })
+        },
+      })
+      function save(write: Promise<void>) {
+        void write.catch((error) => {
+          console.error("Failed to save model state", { error })
+          toast.show({ variant: "error", message: "Failed to save model preferences" })
         })
       }
-
-      readJson<unknown>(filePath)
-        .then((x) => {
-          if (!x || typeof x !== "object") return
-          const value = x as Record<string, unknown>
-          if (Array.isArray(value.recent)) setModelStore("recent", value.recent)
-          if (Array.isArray(value.favorite)) setModelStore("favorite", value.favorite)
-          if (typeof value.variant === "object" && value.variant !== null)
-            setModelStore("variant", value.variant as Record<string, string | undefined>)
-        })
-        .catch(() => {})
-        .finally(() => {
-          setModelStore("ready", true)
-          if (state.pending) save()
-        })
+      const refresh = () =>
+        void state.refresh().catch((error) => console.error("Failed to refresh model state", { error }))
+      renderer.on("focus", refresh)
+      onCleanup(() => {
+        renderer.off("focus", refresh)
+        const closing = state.dispose().catch((error) => console.error("Failed to close model preferences", { error }))
+        props.onDispose?.(closing)
+        shutdown(closing)
+      })
+      void state.ready
+        .catch((error) => console.error("Failed to read model state", { error }))
+        .finally(() => setModelStore("ready", true))
 
       const fallbackModel = createMemo(() => {
         if (args.model) {
@@ -324,8 +338,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const a = agent.current()
           if (!a) return
           setModelStore("model", a.name, { ...next })
-          setModelStore("recent", recentModels(next, modelStore.recent))
-          save()
+          save(state.update((value) => ({ ...value, recent: recentModels(next, value.recent) })))
         },
         set(model: { providerID: string; modelID: string }, options?: { recent?: boolean }) {
           batch(() => {
@@ -341,8 +354,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             if (!a) return
             setModelStore("model", a.name, model)
             if (options?.recent) {
-              setModelStore("recent", recentModels(model, modelStore.recent))
-              save()
+              save(state.update((value) => ({ ...value, recent: recentModels(model, value.recent) })))
             }
           })
         },
@@ -359,14 +371,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             const exists = modelStore.favorite.some(
               (x) => x.providerID === model.providerID && x.modelID === model.modelID,
             )
-            const next = exists
-              ? modelStore.favorite.filter((x) => x.providerID !== model.providerID || x.modelID !== model.modelID)
-              : [model, ...modelStore.favorite]
-            setModelStore(
-              "favorite",
-              next.map((x) => ({ providerID: x.providerID, modelID: x.modelID })),
-            )
-            save()
+            save(state.setFavorite(model, !exists))
           })
         },
         variant: {
@@ -394,8 +399,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             const m = currentModel()
             if (!m) return
             const key = `${m.providerID}/${m.modelID}`
-            setModelStore("variant", key, value ?? "default")
-            save()
+            save(state.update((state) => ({ ...state, variant: { ...state.variant, [key]: value ?? "default" } })))
           },
           cycle(direction: 1 | -1 = 1) {
             const variants = this.list()
@@ -420,35 +424,31 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
 
       const filePath = path.join(paths.state, "session.json")
-      const state = {
-        pending: false,
-      }
-
-      function save() {
-        if (!sessionStore.ready) {
-          state.pending = true
-          return
-        }
-        state.pending = false
-        void writeJsonAtomic(filePath, {
-          pinned: sessionStore.pinned,
-        })
-      }
-
-      readJson<unknown>(filePath)
-        .then((x) => {
-          if (!x || typeof x !== "object") return
-          const pinned = (x as Record<string, unknown>).pinned
-          if (Array.isArray(pinned))
-            setSessionStore(
-              "pinned",
-              pinned.filter((item): item is string => typeof item === "string"),
-            )
-        })
+      const state = createPersistentState({
+        file: filePath,
+        initial: [] as string[],
+        read: async () => {
+          const value = await readJson<unknown>(filePath).catch((error: unknown) => {
+            if (missing(error)) return undefined
+            throw error
+          })
+          if (typeof value !== "object" || value === null || !("pinned" in value) || !Array.isArray(value.pinned))
+            return []
+          return value.pinned.filter((item: unknown): item is string => typeof item === "string")
+        },
+        write: (pinned) => writeJsonAtomic(filePath, { pinned }),
+        onChange: (value) => setSessionStore("pinned", value),
+        onError: (error) => console.error("Failed to persist pinned sessions", { error }),
+      })
+      onCleanup(() => {
+        const closing = state.dispose()
+        props.onDispose?.(closing)
+        shutdown(closing)
+      })
+      void state.ready
         .catch(() => {})
         .finally(() => {
           setSessionStore("ready", true)
-          if (state.pending) save()
         })
 
       const slots = createMemo(() => {
@@ -458,13 +458,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       function prune(sessionID: string) {
         batch(() => {
-          if (sessionStore.pinned.includes(sessionID)) {
-            setSessionStore(
-              "pinned",
-              sessionStore.pinned.filter((x) => x !== sessionID),
-            )
-          }
-          save()
+          void state.update((value) => value.filter((id) => id !== sessionID)).catch(() => {})
         })
       }
 
@@ -486,11 +480,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         togglePin(sessionID: string) {
           batch(() => {
             const exists = sessionStore.pinned.includes(sessionID)
-            const next = exists
-              ? sessionStore.pinned.filter((x) => x !== sessionID)
-              : [...sessionStore.pinned, sessionID]
-            setSessionStore("pinned", next)
-            save()
+            void state
+              .update((value) => [...value.filter((id) => id !== sessionID), ...(exists ? [] : [sessionID])])
+              .catch(() => {})
           })
         },
         quickSwitch(slot: number) {

@@ -1,9 +1,11 @@
 import path from "path"
-import { onMount } from "solid-js"
-import { createStore } from "solid-js/store"
+import { onCleanup } from "solid-js"
+import { createStore, reconcile } from "solid-js/store"
 import { createSimpleContext } from "../context/helper"
 import { useTuiPaths } from "../context/runtime"
-import { appendText, readText, writeText } from "../util/persistence"
+import { missing, readText, writeTextAtomic } from "../util/persistence"
+import { createPersistentState } from "../util/persistent-state"
+import { useShutdown } from "../context/shutdown"
 
 type FrecencyEntry = { path: string; frequency: number; lastOpen: number }
 
@@ -40,35 +42,50 @@ export const { use: useFrecency, provider: FrecencyProvider } = createSimpleCont
   init: () => {
     const paths = useTuiPaths()
     const frecencyPath = path.join(paths.state, "frecency.jsonl")
-    onMount(async () => {
-      const lines = parseFrecency(await readText(frecencyPath).catch(() => ""))
-      setStore(
-        "data",
-        Object.fromEntries(
-          lines.map((entry) => [entry.path, { frequency: entry.frequency, lastOpen: entry.lastOpen }]),
-        ),
-      )
-      if (lines.length > 0)
-        writeText(frecencyPath, lines.map((entry) => JSON.stringify(entry)).join("\n") + "\n").catch(() => {})
-    })
-
+    const shutdown = useShutdown()
     const [store, setStore] = createStore({ data: {} as Record<string, { frequency: number; lastOpen: number }> })
+    const state = createPersistentState({
+      file: frecencyPath,
+      initial: {} as Record<string, { frequency: number; lastOpen: number }>,
+      read: async () =>
+        Object.fromEntries(
+          parseFrecency(
+            await readText(frecencyPath).catch((error: unknown) => {
+              if (missing(error)) return ""
+              throw error
+            }),
+          ).map((entry) => [entry.path, { frequency: entry.frequency, lastOpen: entry.lastOpen }]),
+        ),
+      write: (value) =>
+        writeTextAtomic(
+          frecencyPath,
+          Object.entries(value)
+            .map(([path, entry]) => JSON.stringify({ path, ...entry }))
+            .join("\n") + (Object.keys(value).length ? "\n" : ""),
+        ),
+      onChange: (value) => setStore("data", reconcile(value)),
+      onError: (error) => console.error("Failed to persist file usage", { error }),
+    })
+    onCleanup(() => shutdown(state.dispose()))
 
     function updateFrecency(filePath: string) {
       const absolutePath = path.resolve(paths.cwd, filePath)
-      const newEntry = { frequency: (store.data[absolutePath]?.frequency || 0) + 1, lastOpen: Date.now() }
-      setStore("data", absolutePath, newEntry)
-      appendText(frecencyPath, JSON.stringify({ path: absolutePath, ...newEntry }) + "\n").catch(() => {})
-
-      if (Object.keys(store.data).length <= MAX_FRECENCY_ENTRIES) return
-      const sorted = Object.entries(store.data)
-        .sort(([, a], [, b]) => b.lastOpen - a.lastOpen)
-        .slice(0, MAX_FRECENCY_ENTRIES)
-      setStore("data", Object.fromEntries(sorted))
-      writeText(
-        frecencyPath,
-        sorted.map(([entryPath, entry]) => JSON.stringify({ path: entryPath, ...entry })).join("\n") + "\n",
-      ).catch(() => {})
+      const now = Date.now()
+      void state
+        .update((value) =>
+          Object.fromEntries(
+            Object.entries({
+              ...value,
+              [absolutePath]: {
+                frequency: (value[absolutePath]?.frequency ?? 0) + 1,
+                lastOpen: Math.max(value[absolutePath]?.lastOpen ?? 0, now),
+              },
+            })
+              .sort(([, a], [, b]) => b.lastOpen - a.lastOpen)
+              .slice(0, MAX_FRECENCY_ENTRIES),
+          ),
+        )
+        .catch(() => {})
     }
 
     return {

@@ -2,6 +2,7 @@ import path from "path"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Global } from "@opencode-ai/core/global"
+import { ModelFavorites } from "@opencode-ai/core/model-favorites"
 import { Provider } from "@/provider/provider"
 import * as Tool from "./tool"
 import { ModelsFormat } from "./models-format"
@@ -26,12 +27,13 @@ export const ModelsTool = Tool.define(
   Effect.gen(function* () {
     const provider = yield* Provider.Service
     const fs = yield* FSUtil.Service
+    const favorites = yield* ModelFavorites.Service
     return {
       description: LIST,
       parameters: ListParameters,
       execute: (params: Schema.Schema.Type<typeof ListParameters>) =>
         Effect.gen(function* () {
-          const saved = yield* readSaved(fs)
+          const saved = yield* readSaved(fs, Global.Path.state, favorites)
           const output = ModelsFormat.formatList({
             models: candidates(yield* provider.list()),
             saved,
@@ -52,12 +54,13 @@ export const ModelsSearchTool = Tool.define(
   Effect.gen(function* () {
     const provider = yield* Provider.Service
     const fs = yield* FSUtil.Service
+    const favorites = yield* ModelFavorites.Service
     return {
       description: SEARCH,
       parameters: SearchParameters,
       execute: (params: Schema.Schema.Type<typeof SearchParameters>) =>
         Effect.gen(function* () {
-          const saved = yield* readSaved(fs)
+          const saved = yield* readSaved(fs, Global.Path.state, favorites)
           const output = ModelsFormat.formatSearch({
             query: params.query,
             models: candidates(yield* provider.list()),
@@ -73,12 +76,17 @@ export const ModelsSearchTool = Tool.define(
   }),
 )
 
-function readSaved(fs: FSUtil.Interface) {
-  return fs.readJson(path.join(Global.Path.state, "model.json")).pipe(
+export const readSaved = Effect.fn("Models.readSaved")(function* (
+  fs: FSUtil.Interface,
+  directory: string,
+  favorites: ModelFavorites.Interface,
+) {
+  const saved = yield* fs.readJson(path.join(directory, "model.json")).pipe(
     Effect.map(ModelsFormat.parseSaved),
     Effect.catch(() => Effect.succeed(ModelsFormat.parseSaved(undefined))),
   )
-}
+  return { ...saved, favorite: yield* favorites.list() }
+})
 
 function candidates(providers: Record<string, Provider.Info>): TaskModel.Candidate[] {
   return Object.values(providers).flatMap((item) =>

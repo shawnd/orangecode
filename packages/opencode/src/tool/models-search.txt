@@ -1,6 +1,6 @@
 Search connected LLM setups by the wording the user used.
 
 Use this when the user names a setup such as grok 4.7 max, astra, or sol 5.6 and you need the provider/model id.
-Matching favorites are listed before other equal matches.
+Matching favorites are listed first, even when provider naming differs. Prefer the favorited setup when multiple providers offer the requested model, unless the user specifies a provider.
 Pass provider/model from the result to the Task tool model parameter.
 A trailing effort such as max is reported separately and should be passed as variant.
