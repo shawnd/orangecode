@@ -1,12 +1,14 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { describe, expect } from "bun:test"
+import { describe, expect, spyOn } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer } from "effect"
+import { TestClock } from "effect/testing"
 import { provideTmpdirInstance, testInstanceStoreLayer, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Format } from "../../src/format"
 import * as Formatter from "../../src/format/formatter"
+import { InstanceStore } from "../../src/project/instance-store"
 
 const it = testEffect(
   Layer.mergeAll(LayerNode.compile(LayerNode.group([Format.node, CrossSpawnSpawner.node])), NodeFileSystem.layer),
@@ -188,6 +190,140 @@ describe("Format", () => {
         expect(max).toBe(2)
       }),
     { config: { formatter: { gofmt: {}, mix: {} } } },
+  )
+
+  it.instance(
+    "shares missing discovery across concurrent files and status until a newly installed formatter can be discovered",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const fmt = yield* Format.Service
+        const file = `${test.directory}/test.go`
+        const marker = `${test.directory}/installed`
+        yield* Effect.promise(() => Bun.write(file, "original"))
+        const enabled = spyOn(Formatter.gofmt, "enabled").mockImplementation(async () => {
+          if (!(await Bun.file(marker).exists())) return false
+          return ["sh", "-c", 'printf formatted > "$1"', "formatter", "$FILE"]
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => enabled.mockRestore()))
+
+        const results = yield* Effect.all([fmt.status(), ...Array.from({ length: 20 }, () => fmt.file(file))], {
+          concurrency: "unbounded",
+        })
+        expect(results.slice(1)).toEqual(Array(20).fill(false))
+        expect(enabled).toHaveBeenCalledTimes(1)
+        yield* Effect.promise(() => Bun.write(marker, "installed"))
+        expect(yield* fmt.file(file)).toBe(false)
+        expect((yield* fmt.status()).find((item) => item.name === "gofmt")?.enabled).toBe(false)
+        expect(enabled).toHaveBeenCalledTimes(1)
+
+        yield* TestClock.adjust("6 seconds")
+        expect(yield* fmt.file(file)).toBe(true)
+        expect(yield* Effect.promise(() => Bun.file(file).text())).toBe("formatted")
+        expect((yield* fmt.status()).find((item) => item.name === "gofmt")?.enabled).toBe(true)
+        expect(enabled).toHaveBeenCalledTimes(2)
+        yield* TestClock.adjust("1 minute")
+        expect(yield* fmt.file(file)).toBe(true)
+        expect(enabled).toHaveBeenCalledTimes(2)
+      }).pipe(Effect.provide(TestClock.layer())),
+    { config: { formatter: true } },
+  )
+
+  it.instance(
+    "shares successful discovery without skipping any concurrent file formatting",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const fmt = yield* Format.Service
+        const file = `${test.directory}/test.go`
+        yield* Effect.promise(() => Bun.write(file, ""))
+        const enabled = spyOn(Formatter.gofmt, "enabled").mockImplementation(async () => {
+          await Promise.resolve()
+          return ["sh", "-c", 'printf x >> "$1"', "formatter", "$FILE"]
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => enabled.mockRestore()))
+        expect(
+          yield* Effect.forEach(Array.from({ length: 12 }), () => fmt.file(file), {
+            concurrency: "unbounded",
+          }),
+        ).toEqual(Array(12).fill(true))
+        expect(enabled).toHaveBeenCalledTimes(1)
+        expect(yield* Effect.promise(() => Bun.file(file).text())).toBe("x".repeat(12))
+      }),
+    { config: { formatter: true } },
+  )
+
+  it.instance(
+    "retries failed discovery immediately",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const fmt = yield* Format.Service
+        const enabled = spyOn(Formatter.gofmt, "enabled")
+          .mockRejectedValueOnce(new Error("temporary discovery failure"))
+          .mockResolvedValue(false)
+        yield* Effect.addFinalizer(() => Effect.sync(() => enabled.mockRestore()))
+        expect(Exit.isFailure(yield* Effect.exit(fmt.file(`${test.directory}/one.go`)))).toBe(true)
+        expect(yield* fmt.file(`${test.directory}/two.go`)).toBe(false)
+        expect(enabled).toHaveBeenCalledTimes(2)
+        expect(yield* fmt.file(`${test.directory}/three.go`)).toBe(false)
+        expect(enabled).toHaveBeenCalledTimes(2)
+      }),
+    { config: { formatter: true } },
+  )
+
+  it.instance(
+    "retries discovery after its caller is interrupted",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const fmt = yield* Format.Service
+        const started = Promise.withResolvers<void>()
+        const pending = Promise.withResolvers<false>()
+        const enabled = spyOn(Formatter.gofmt, "enabled")
+          .mockImplementationOnce(() => {
+            started.resolve()
+            return pending.promise
+          })
+          .mockResolvedValue(false)
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            pending.resolve(false)
+            enabled.mockRestore()
+          }),
+        )
+        const fiber = yield* fmt.file(`${test.directory}/one.go`).pipe(Effect.forkChild)
+        yield* Effect.promise(() => started.promise)
+        yield* Fiber.interrupt(fiber)
+        expect(yield* fmt.file(`${test.directory}/two.go`)).toBe(false)
+        expect(enabled).toHaveBeenCalledTimes(2)
+      }),
+    { config: { formatter: true } },
+  )
+
+  it.instance(
+    "disposal clears negative discovery and reload respects manually disabled formatters",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const fmt = yield* Format.Service
+        const store = yield* InstanceStore.Service
+        const enabled = spyOn(Formatter.gofmt, "enabled").mockResolvedValue(false)
+        yield* Effect.addFinalizer(() => Effect.sync(() => enabled.mockRestore()))
+        expect(yield* fmt.file(`${test.directory}/one.go`)).toBe(false)
+        expect(enabled).toHaveBeenCalledTimes(1)
+        yield* store.reload({ directory: test.directory })
+        expect(yield* fmt.file(`${test.directory}/two.go`)).toBe(false)
+        expect(enabled).toHaveBeenCalledTimes(2)
+        yield* Effect.promise(() =>
+          Bun.write(`${test.directory}/opencode.json`, JSON.stringify({ formatter: { gofmt: { disabled: true } } })),
+        )
+        yield* store.reload({ directory: test.directory })
+        expect(yield* fmt.file(`${test.directory}/three.go`)).toBe(false)
+        expect((yield* fmt.status()).find((item) => item.name === "gofmt")).toBeUndefined()
+        expect(enabled).toHaveBeenCalledTimes(2)
+      }),
+    { config: { formatter: true } },
   )
 
   it.instance(

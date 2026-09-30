@@ -21,10 +21,10 @@ import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 import { type SelectedLineRange } from "@pierre/diffs"
 import { Dynamic } from "solid-js/web"
 import { mediaKindFromPath } from "../pierre/media"
-import { cloneSelectedLineRange, previewSelectedLines } from "../pierre/selection-bridge"
+import { cloneSelectedLineRange } from "../pierre/selection-bridge"
 import { createLineCommentController } from "./line-comment-annotations"
 import type { LineCommentEditorProps } from "./line-comment"
-import { normalize, text, type ViewDiff } from "./session-diff"
+import { normalize, selectionPreview, text, type ViewDiff } from "./session-diff"
 
 const MAX_DIFF_CHANGED_LINES = 500
 const REVIEW_MOUNT_MARGIN = 300
@@ -275,14 +275,6 @@ export const SessionReview = (props: SessionReviewProps) => {
   const openFileLabel = () => i18n.t("ui.sessionReview.openFile")
 
   const selectionSide = (range: SelectedLineRange) => range.endSide ?? range.side ?? "additions"
-
-  const selectionPreview = (diff: ViewDiff, range: SelectedLineRange) => {
-    const side = selectionSide(range)
-    const contents = text(diff, side)
-    if (contents.length === 0) return undefined
-
-    return previewSelectedLines(contents, range)
-  }
 
   createEffect(() => {
     const focus = props.focusedComment

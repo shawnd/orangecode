@@ -5,13 +5,13 @@ import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { useFileComponent } from "@opencode-ai/ui/context/file"
 import { useI18n } from "@opencode-ai/ui/context/i18n"
 import { mediaKindFromPath } from "../../pierre/media"
-import { cloneSelectedLineRange, previewSelectedLines } from "../../pierre/selection-bridge"
+import { cloneSelectedLineRange } from "../../pierre/selection-bridge"
 import type { FileContent, SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
 import { createEffect, createMemo, onCleanup, Show, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
-import { normalize, text, type ViewDiff } from "../../components/session-diff"
+import { normalize, selectionPreview, type ViewDiff } from "../../components/session-diff"
 import type {
   SessionReviewComment,
   SessionReviewCommentActions,
@@ -59,13 +59,6 @@ function statusType(status: ViewDiff["status"]) {
 
 function selectionSide(range: SelectedLineRange) {
   return range.endSide ?? range.side ?? "additions"
-}
-
-function selectionPreview(diff: ViewDiff, range: SelectedLineRange) {
-  const side = selectionSide(range)
-  const contents = text(diff, side)
-  if (contents.length === 0) return undefined
-  return previewSelectedLines(contents, range)
 }
 
 function ReviewCommentMenuV2(props: {

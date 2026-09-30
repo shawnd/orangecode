@@ -1,4 +1,4 @@
-import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs"
+import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs"
 import { parsePatch } from "diff"
 import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
@@ -52,6 +52,34 @@ export function text(diff: ViewDiff, side: "deletions" | "additions") {
   return diff.fileDiff.additionLines.join("")
 }
 
+export function selectionPreview(diff: ViewDiff, range: SelectedLineRange) {
+  const side = range.endSide ?? range.side ?? "additions"
+  const lines = side === "deletions" ? diff.fileDiff.deletionLines : diff.fileDiff.additionLines
+  const start = Math.max(1, Math.min(range.start, range.end))
+  const end = Math.min(Math.max(range.start, range.end), start + 1)
+  const selected: string[] = []
+  for (let line = start; line <= end; line++) {
+    const hunk = diff.fileDiff.isPartial
+      ? diff.fileDiff.hunks.find((hunk) => {
+          const first = side === "deletions" ? hunk.deletionStart : hunk.additionStart
+          const count = side === "deletions" ? hunk.deletionCount : hunk.additionCount
+          return line >= first && line < first + count
+        })
+      : undefined
+    // Partial line arrays concatenate hunks; their offsets are not file line numbers.
+    if (diff.fileDiff.isPartial && !hunk) return
+    const index = hunk
+      ? side === "deletions"
+        ? hunk.deletionLineIndex + line - hunk.deletionStart
+        : hunk.additionLineIndex + line - hunk.additionStart
+      : line - 1
+    const value = lines[index]
+    if (value === undefined) break
+    selected.push(value.replace(/\n$/, ""))
+  }
+  return selected.length ? selected.join("\n") : undefined
+}
+
 function fileDiffFromPatch(file: string, patch: string) {
   const key = `${file}\0${patch}`
   const hit = patchFileDiffCache.get(key)
@@ -66,6 +94,9 @@ function fileDiffFromPatch(file: string, patch: string) {
   const value = contents
     ? fileDiffFromContent(file, contents.before, contents.after)
     : ((input ? parsePatchFiles(input)[0]?.files[0] : undefined) ?? emptyFileDiff(file))
+  // Patch parsers may unquote or split unusual names. The enclosing file field
+  // is authoritative, including tabs/newlines and names that begin with quotes.
+  value.name = file
   patchFileDiffCache.set(key, value)
   while (patchFileDiffCache.size > diffCacheLimit) patchFileDiffCache.delete(patchFileDiffCache.keys().next().value!)
   return value

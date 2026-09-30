@@ -47,7 +47,7 @@ describe("lsp.spawn", () => {
           }
         }),
       ),
-    { config: { lsp: true } },
+    { git: true, config: { lsp: true } },
   )
 
   it.instance("does not spawn builtin LSP for files inside instance when LSP is unset", () =>

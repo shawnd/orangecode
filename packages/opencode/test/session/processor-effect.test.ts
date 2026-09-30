@@ -26,6 +26,9 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { LLMEvent } from "@opencode-ai/llm"
+import { Snapshot } from "../../src/snapshot"
+import { InstanceRef } from "../../src/effect/instance-ref"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -226,6 +229,46 @@ const fragmentFailureLLM = Layer.succeed(
 const fragmentFailureEnv = LayerNode.compile(root, [...replacements, [LLM.node, fragmentFailureLLM]])
 const itFragmentFailure = testEffect(fragmentFailureEnv)
 
+const completionSnapshot = Layer.effect(
+  Snapshot.Service,
+  Effect.gen(function* () {
+    const snapshot = yield* Snapshot.Service
+    const fs = yield* FSUtil.Service
+    const calls = { count: 0 }
+    return Snapshot.Service.of({
+      ...snapshot,
+      track: () =>
+        Effect.gen(function* () {
+          calls.count++
+          if (calls.count !== 2) return yield* snapshot.track()
+          const instance = yield* InstanceRef
+          if (!instance) return yield* Effect.die("InstanceRef not provided")
+          yield* fs.writeFileString(`${instance.directory}/edited.txt`, "step edit\n")
+          const completed = yield* snapshot.track()
+          yield* fs.writeFileString(`${instance.directory}/late.txt`, "external edit after capture\n")
+          return completed
+        }).pipe(Effect.orDie),
+    })
+  }),
+).pipe(Layer.provide(LayerNode.compile(LayerNode.group([Snapshot.node, FSUtil.node]))))
+const itCompletion = testEffect(
+  LayerNode.compile(LayerNode.group([root, Snapshot.node]), [
+    ...replacements,
+    [Snapshot.node, completionSnapshot],
+    [
+      LLM.node,
+      Layer.mock(LLM.Service, {
+        stream: () =>
+          Stream.make(
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+            LLMEvent.finish({ reason: "stop" }),
+          ),
+      }),
+    ],
+  ]),
+)
+
 const boot = Effect.fn("test.boot")(function* () {
   const processors = yield* SessionProcessor.Service
   const session = yield* Session.Service
@@ -236,6 +279,45 @@ const boot = Effect.fn("test.boot")(function* () {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+itCompletion.live("step finish persists a patch against its captured tree and original undo baseline", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const snapshot = yield* Snapshot.Service
+        yield* Effect.promise(() => Bun.write(`${dir}/edited.txt`, "original\n"))
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "edit")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const model = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+        yield* handle.process({
+          user: parent,
+          sessionID: chat.id,
+          model,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "edit" }],
+          tools: {},
+        })
+        const parts = yield* MessageV2.parts(msg.id)
+        const start = parts.find((part) => part.type === "step-start")
+        const finish = parts.find((part) => part.type === "step-finish")
+        const patch = parts.find((part) => part.type === "patch")
+        expect(start?.snapshot).toBeTruthy()
+        expect(finish?.snapshot).toBeTruthy()
+        expect(finish?.snapshot).not.toBe(start?.snapshot)
+        expect(patch?.hash).toBe(start?.snapshot)
+        expect(patch?.files).toEqual([path.join(dir, "edited.txt").replaceAll("\\", "/")])
+        if (!patch) throw new Error("expected step patch")
+        yield* snapshot.revert([patch])
+        expect(yield* Effect.promise(() => Bun.file(`${dir}/edited.txt`).text())).toBe("original\n")
+        expect(yield* Effect.promise(() => Bun.file(`${dir}/late.txt`).text())).toBe("external edit after capture\n")
+      }),
+    { git: true, config: cfg },
+  ),
+)
 
 it.live("session.processor effect tests capture llm input cleanly", () =>
   provideTmpdirServer(

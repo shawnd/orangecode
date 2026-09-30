@@ -1,11 +1,16 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Effect, Layer, Context, Schema, Fiber, Scope } from "effect"
+import { and, eq, or, sql } from "drizzle-orm"
+import { isDeepStrictEqual } from "node:util"
+import { Database } from "@opencode-ai/core/database/database"
+import { MessageTable, PartTable } from "@opencode-ai/core/session/sql"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { SessionID, MessageID } from "./schema"
 import { Config } from "@/config/config"
+import { InstanceState } from "@/effect/instance-state"
 
 function unquoteGitPath(input: string) {
   if (!input.startsWith('"')) return input
@@ -78,6 +83,61 @@ const layer = Layer.effect(
     const snapshot = yield* Snapshot.Service
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
+    const database = yield* Database.Service
+    const state = yield* InstanceState.make(() =>
+      Effect.gen(function* () {
+        return {
+          scope: yield* Scope.Scope,
+          active: new Map<
+            string,
+            { work: { dirty: boolean; revision: number }; users: number; fiber: Fiber.Fiber<void> }
+          >(),
+        }
+      }),
+    )
+
+    const message = Effect.fnUntraced(function* (input: { sessionID: SessionID; messageID: MessageID }) {
+      const row = yield* database.db
+        .select()
+        .from(MessageTable)
+        .where(and(eq(MessageTable.session_id, input.sessionID), eq(MessageTable.id, input.messageID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return
+      return { ...row.data, id: row.id, sessionID: row.session_id } as SessionV1.Info
+    })
+
+    const snapshots = Effect.fnUntraced(function* (input: { sessionID: SessionID; messageID: MessageID }) {
+      // Keep the same message/part ordering as Session.messages, without hydrating tool/text bodies.
+      const parts = yield* database.db
+        .select({
+          type: sql<string>`json_extract(${PartTable.data}, '$.type')`,
+          snapshot: sql<string>`json_extract(${PartTable.data}, '$.snapshot')`,
+        })
+        .from(MessageTable)
+        .innerJoin(PartTable, eq(PartTable.message_id, MessageTable.id))
+        .where(
+          and(
+            eq(MessageTable.session_id, input.sessionID),
+            or(
+              eq(MessageTable.id, input.messageID),
+              and(
+                sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+                sql`json_extract(${MessageTable.data}, '$.parentID') = ${input.messageID}`,
+              ),
+            ),
+            sql`json_extract(${PartTable.data}, '$.type') in ('step-start', 'step-finish')`,
+            sql`json_extract(${PartTable.data}, '$.snapshot') is not null`,
+          ),
+        )
+        .orderBy(MessageTable.time_created, MessageTable.id, PartTable.id)
+        .all()
+        .pipe(Effect.orDie)
+      return {
+        from: parts.find((part) => part.type === "step-start" && part.snapshot)?.snapshot,
+        to: parts.findLast((part) => part.type === "step-finish" && part.snapshot)?.snapshot,
+      }
+    })
 
     const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: SessionV1.WithParts[] }) {
       let from: string | undefined
@@ -99,10 +159,13 @@ const layer = Layer.effect(
       return []
     })
 
-    const summarize = Effect.fn("SessionSummary.summarize")(function* (input: {
-      sessionID: SessionID
-      messageID: MessageID
-    }) {
+    const refresh = Effect.fnUntraced(function* (
+      input: {
+        sessionID: SessionID
+        messageID: MessageID
+      },
+      work: { dirty: boolean; revision: number },
+    ) {
       yield* sessions.setSummary({
         sessionID: input.sessionID,
         summary: {
@@ -113,26 +176,108 @@ const layer = Layer.effect(
       })
       yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: [] })
       if ((yield* config.get()).snapshot === false) return
-      const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
-      if (!all.length) return
+      if ((yield* message(input))?.role !== "user") return
+      // Only retain one pair for this active refresh. diffFull also consults current ignore rules,
+      // so retaining results across independent calls would incorrectly hide ignore-file changes.
+      let previous:
+        | {
+            from?: string
+            to?: string
+            revision: number
+            diff: Effect.Effect<{ diffs: Snapshot.FileDiff[]; revision: number }>
+          }
+        | undefined
+      do {
+        work.dirty = false
+        const pair = yield* snapshots(input)
+        if (!previous || previous.from !== pair.from || previous.to !== pair.to || previous.revision < work.revision) {
+          const revision = work.revision
+          previous = {
+            ...pair,
+            revision,
+            diff: yield* (pair.from && pair.to ? snapshot.diffFull(pair.from, pair.to) : Effect.succeed([])).pipe(
+              // Ignore rules may be observed before diffFull returns. Only requests already
+              // present at computation start are covered by this result.
+              Effect.map((diffs) => ({ diffs, revision })),
+              Effect.cached,
+            ),
+          }
+        }
+        const result = yield* previous.diff
+        previous.revision = result.revision
+        if (work.dirty) continue
+        // A revert can remove parts while diffFull is waiting on the snapshot lock.
+        const current = yield* snapshots(input)
+        if (current.from !== pair.from || current.to !== pair.to) {
+          work.dirty = true
+          continue
+        }
+        // Reload before publishing: preserve concurrently edited summary/title fields and never
+        // resurrect a user message removed by revert/compaction during snapshot work.
+        const target = yield* message(input)
+        if (!target || target.role !== "user") return
+        if (work.dirty) continue
+        if (!isDeepStrictEqual(target.summary?.diffs, result.diffs)) {
+          yield* sessions.updateMessage({ ...target, summary: { ...target.summary, diffs: result.diffs } })
+        }
+      } while (work.dirty)
+    })
 
-      const messages = all.filter(
-        (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
+    const summarize = Effect.fn("SessionSummary.summarize")(function* (input: {
+      sessionID: SessionID
+      messageID: MessageID
+    }) {
+      const local = yield* InstanceState.get(state)
+      const key = JSON.stringify([input.sessionID, input.messageID])
+      yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const existing = local.active.get(key)
+          const entry =
+            existing ??
+            (yield* Effect.gen(function* () {
+              const work = { dirty: true, revision: 0 }
+              const fiber = yield* refresh(input, work).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (local.active.get(key)?.work === work) local.active.delete(key)
+                  }),
+                ),
+                Effect.forkIn(local.scope),
+              )
+              const entry = { work, users: 0, fiber }
+              local.active.set(key, entry)
+              return entry
+            }))
+          entry.work.dirty = true
+          entry.work.revision++
+          entry.users++
+          // Await the Exit as a value before propagating interruption. Effect v4's
+          // direct join can remove its observer during interrupted-worker notification,
+          // skipping another waiter (including forkIn's scope-close finalizer).
+          yield* restore(Fiber.await(entry.fiber)).pipe(
+            Effect.flatMap((exit) => exit),
+            Effect.ensuring(
+              Effect.suspend(() => {
+                entry.users--
+                if (entry.users !== 0) return Effect.void
+                if (local.active.get(key) === entry) local.active.delete(key)
+                return Fiber.interrupt(entry.fiber)
+              }),
+            ),
+          )
+        }),
       )
-      const target = messages.find((m) => m.info.id === input.messageID)
-      if (!target || target.info.role !== "user") return
-      const msgDiffs = yield* computeDiff({ messages })
-      target.info.summary = { ...target.info.summary, diffs: msgDiffs }
-      yield* sessions.updateMessage(target.info)
     })
 
     const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
       if (!input.messageID) return []
-      const message = (yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
-        (item) => item.info.id === input.messageID,
-      )
-      if (!message || message.info.role !== "user") return []
-      const diffs = message.info.summary?.diffs ?? []
+      const target = yield* message({ sessionID: input.sessionID, messageID: input.messageID })
+      if (!target) {
+        yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+        return []
+      }
+      if (target.role !== "user") return []
+      const diffs = target.summary?.diffs ?? []
       return diffs.map((item) => {
         if (item.file === undefined) return item
         const file = unquoteGitPath(item.file)
@@ -154,7 +299,7 @@ export type DiffInput = Schema.Schema.Type<typeof DiffInput>
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Session.node, Snapshot.node, EventV2Bridge.node, Config.node],
+  deps: [Session.node, Snapshot.node, EventV2Bridge.node, Config.node, Database.node],
 })
 
 export * as SessionSummary from "./summary"

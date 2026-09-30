@@ -1,7 +1,30 @@
 import { describe, expect, test } from "bun:test"
-import { normalize, resolveFileDiff, text } from "./session-diff"
+import { normalize, resolveFileDiff, selectionPreview, text } from "./session-diff"
 
 describe("session diff", () => {
+  test("partial selection previews use source lines rather than concatenated hunk offsets", () => {
+    const view = normalize({
+      file: "example.ts",
+      patch:
+        "--- example.ts\n+++ example.ts\n@@ -1,2 +1,3 @@\n first\n+inserted\n second\n@@ -100,2 +101,2 @@\n-old\n+חדש🙂\n last\n",
+      additions: 2,
+      deletions: 1,
+    })
+    expect(view.fileDiff.isPartial).toBe(true)
+    expect(selectionPreview(view, { start: 101, end: 102 })).toBe("חדש🙂\nlast")
+    expect(selectionPreview(view, { start: 102, end: 101 })).toBe("חדש🙂\nlast")
+    expect(selectionPreview(view, { start: 100, end: 101, side: "deletions" })).toBe("old\nlast")
+    expect(selectionPreview(view, { start: 50, end: 51 })).toBeUndefined()
+    expect(selectionPreview(view, { start: 3, end: 101 })).toBeUndefined()
+  })
+
+  test("complete selection previews preserve missing final newlines", () => {
+    const view = normalize({ file: "example.ts", before: "old", after: "one\ntwo\nthree", additions: 3, deletions: 1 })
+    expect(selectionPreview(view, { start: 3, end: 3 })).toBe("three")
+    expect(selectionPreview(view, { start: 1, end: 3 })).toBe("one\ntwo")
+    expect(selectionPreview(view, { start: 1, end: 1, side: "deletions" })).toBe("old")
+  })
+
   test("renders whole-file unified patches as complete diffs", () => {
     const diff = {
       file: "a.ts",

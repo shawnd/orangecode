@@ -17,8 +17,13 @@ const DIAGNOSTICS_REQUEST_TIMEOUT_MS = 3_000
 
 const INITIALIZE_TIMEOUT_MS = 45_000
 
+// Per server: enough for an active working set without retaining an entire repo.
+// UTF-16 bytes conservatively account for the retained JS strings. Active waits
+// and requests may temporarily exceed these limits; trim as soon as they finish.
+const MAX_OPEN_DOCUMENTS = 64
+const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
+
 // LSP spec constants
-const FILE_CHANGE_CREATED = 1
 const FILE_CHANGE_CHANGED = 2
 const TEXT_DOCUMENT_SYNC_INCREMENTAL = 2
 
@@ -141,8 +146,12 @@ export async function create(input: {
   const published = new Map<string, { at: number; version?: number }>()
   const diagnosticRegistrations = new Map<string, CapabilityRegistration>()
   const registrationListeners = new Set<() => void>()
+  const shutdownListeners = new Set<() => void>()
   const diagnosticListeners = new Set<(input: { path: string; serverID: string }) => void>()
+  const files = new Map<string, { version: number; text: string; changedAt: number; pins: number; waited: boolean }>()
+  const completedDiagnostics = new Map<string, { items: Diagnostic[]; timer: ReturnType<typeof setTimeout> }>()
   const mergedDiagnostics = (filePath: string) =>
+    (!files.has(filePath) ? completedDiagnostics.get(filePath)?.items : undefined) ??
     dedupeDiagnostics([...(pushDiagnostics.get(filePath) ?? []), ...(pullDiagnostics.get(filePath) ?? [])])
   const updatePushDiagnostics = (filePath: string, next: Diagnostic[]) => {
     pushDiagnostics.set(filePath, next)
@@ -160,6 +169,8 @@ export async function create(input: {
   connection.onNotification("textDocument/publishDiagnostics", (params) => {
     const filePath = getFilePath(params.uri)
     if (!filePath) return
+    const document = files.get(filePath)
+    if (document && typeof params.version === "number" && params.version !== document.version) return
     published.set(filePath, {
       at: Date.now(),
       version: typeof params.version === "number" ? params.version : undefined,
@@ -265,7 +276,134 @@ export async function create(input: {
     })
   }
 
-  const files: Record<string, { version: number; text: string }> = {}
+  let bytes = 0
+  let version = -1
+  let stopping = false
+  let activeRequests = 0
+  const documentRequests = new Map<string, number>()
+  let pendingOperations = 0
+  let operations = Promise.resolve()
+  let trimTimer: ReturnType<typeof setImmediate> | undefined
+  const opening = new Set<string>()
+  let openTimer: ReturnType<typeof setImmediate> | undefined
+
+  function handoff(filePath: string) {
+    // An already-queued open can start trimming before the previous open's
+    // Promise has reached its caller. Protect that handoff for one event turn.
+    opening.add(filePath)
+    if (openTimer) return
+    openTimer = setImmediate(() => {
+      openTimer = undefined
+      opening.clear()
+      scheduleTrim()
+    })
+  }
+
+  function serialize<T>(fn: () => Promise<T>) {
+    pendingOperations++
+    const task = operations.then(fn)
+    operations = task.then(
+      () => {
+        pendingOperations--
+      },
+      () => {
+        pendingOperations--
+      },
+    )
+    return task
+  }
+
+  async function close(filePath: string) {
+    const document = files.get(filePath)
+    if (!document) return
+    if (!stopping && document.waited && (pushDiagnostics.has(filePath) || pullDiagnostics.has(filePath))) {
+      rememberDiagnostics(filePath)
+    }
+    await connection.sendNotification("textDocument/didClose", { textDocument: { uri: pathToFileURL(filePath).href } })
+    files.delete(filePath)
+    bytes -= document.text.length * 2
+    published.delete(filePath)
+    pushDiagnostics.delete(filePath)
+    pullDiagnostics.delete(filePath)
+  }
+
+  function forgetDiagnostics(filePath: string) {
+    const completed = completedDiagnostics.get(filePath)
+    if (completed) clearTimeout(completed.timer)
+    completedDiagnostics.delete(filePath)
+  }
+
+  function rememberDiagnostics(filePath: string) {
+    // A faster server can close an oversized document while touchFile is still
+    // waiting on another server. Retain only its completed diagnostic result,
+    // never source text, for the bounded wait/collection handoff.
+    forgetDiagnostics(filePath)
+    completedDiagnostics.set(filePath, {
+      items: mergedDiagnostics(filePath),
+      timer: setTimeout(() => forgetDiagnostics(filePath), DIAGNOSTICS_FULL_WAIT_TIMEOUT_MS),
+    })
+    if (completedDiagnostics.size > MAX_OPEN_DOCUMENTS) {
+      const oldest = completedDiagnostics.keys().next().value
+      if (oldest !== undefined) forgetDiagnostics(oldest)
+    }
+  }
+
+  async function trim(protectedPath?: string) {
+    if (stopping || activeRequests) return
+    for (const [filePath, document] of files) {
+      if (files.size <= MAX_OPEN_DOCUMENTS && bytes <= MAX_DOCUMENT_BYTES) break
+      if (document.pins || opening.has(filePath) || documentRequests.has(filePath) || filePath === protectedPath)
+        continue
+      await close(filePath)
+    }
+  }
+
+  function scheduleTrim() {
+    if (stopping || trimTimer) return
+    // Callers immediately following open() with a diagnostic wait get a chance
+    // to pin the document before eviction (including a single oversized file).
+    trimTimer = setImmediate(() => {
+      trimTimer = undefined
+      // Do not queue a trim directly behind an open that is still reading: that
+      // could run before the open's caller resumes and pins its diagnostic wait.
+      if (pendingOperations) {
+        void operations.then(scheduleTrim)
+        return
+      }
+      void serialize(() => trim()).catch((error) =>
+        Effect.runSync(Effect.logError("failed to close idle LSP document", error)),
+      )
+    })
+  }
+
+  // Consumers issue requests through connection directly. Keep their documents
+  // open through the actual RPC response, including pulls that outlive our wait
+  // timeout or the first matching identifier. Workspace requests pin the set.
+  const sendRequest = connection.sendRequest.bind(connection)
+  connection.sendRequest = new Proxy(sendRequest, {
+    apply(target, thisArg, args) {
+      if (stopping) return Promise.reject(new Error("LSP client is shutting down"))
+      const params = args[1] as { textDocument?: { uri?: string }; item?: { uri?: string } } | undefined
+      const uri = params?.textDocument?.uri ?? params?.item?.uri
+      const filePath = uri ? getFilePath(uri) : undefined
+      if (filePath) documentRequests.set(filePath, (documentRequests.get(filePath) ?? 0) + 1)
+      if (!filePath) activeRequests++
+      return (async () => {
+        // A query may arrive long after a background read's document was evicted.
+        await operations
+        if (filePath && !files.has(filePath)) await result.notify.open({ path: filePath })
+        return await Reflect.apply(target, thisArg, args)
+      })().finally(() => {
+        if (filePath) {
+          const count = (documentRequests.get(filePath) ?? 1) - 1
+          if (count) documentRequests.set(filePath, count)
+          if (!count) documentRequests.delete(filePath)
+        }
+        if (!filePath) activeRequests--
+        scheduleTrim()
+      })
+    },
+  })
 
   // --- Diagnostic helpers ---
 
@@ -291,6 +429,7 @@ export async function create(input: {
   }
 
   async function requestDiagnosticReport(filePath: string, identifier?: string): Promise<DiagnosticRequestResult> {
+    const version = files.get(filePath)?.version
     const report = await withTimeout(
       connection.sendRequest<DocumentDiagnosticReport | null>("textDocument/diagnostic", {
         ...(identifier ? { identifier } : {}),
@@ -300,7 +439,9 @@ export async function create(input: {
       }),
       DIAGNOSTICS_REQUEST_TIMEOUT_MS,
     ).catch(() => null)
-    if (!report) return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() }
+    if (!report || stopping || files.get(filePath)?.version !== version) {
+      return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() }
+    }
 
     const byFile = new Map<string, Diagnostic[]>()
     const push = (target: string, items: Diagnostic[]) => {
@@ -337,7 +478,7 @@ export async function create(input: {
       }),
       DIAGNOSTICS_REQUEST_TIMEOUT_MS,
     ).catch(() => null)
-    if (!report) return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() }
+    if (!report || stopping) return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() }
 
     const byFile = new Map<string, Diagnostic[]>()
     let matched = false
@@ -453,10 +594,13 @@ export async function create(input: {
         finished = true
         if (timer) clearTimeout(timer)
         registrationListeners.delete(listener)
+        shutdownListeners.delete(cancel)
         resolve(result)
       }
       const listener = () => finish(true)
+      const cancel = () => finish(false)
       registrationListeners.add(listener)
+      shutdownListeners.add(cancel)
       timer = setTimeout(() => finish(false), timeout)
     })
   }
@@ -474,13 +618,20 @@ export async function create(input: {
         if (debounceTimer) clearTimeout(debounceTimer)
         if (timeoutTimer) clearTimeout(timeoutTimer)
         unsub?.()
+        shutdownListeners.delete(cancel)
         resolve(result)
       }
+      const cancel = () => finish(false)
+      shutdownListeners.add(cancel)
       const schedule = () => {
         const hit = published.get(request.path)
         if (!hit) return
-        if (typeof hit.version === "number" && hit.version !== request.version) return
-        if (hit.at < request.after && hit.version !== request.version) return
+        // A concurrent edit supersedes the requested snapshot. Wait for the
+        // current document instead of a version the server will never publish.
+        const current = files.get(request.path)
+        const version = current?.version ?? request.version
+        if (typeof hit.version === "number" && hit.version !== version) return
+        if (hit.at < (current?.changedAt ?? request.after) && hit.version !== version) return
         if (debounceTimer) clearTimeout(debounceTimer)
         debounceTimer = setTimeout(() => finish(true), Math.max(0, DIAGNOSTICS_DEBOUNCE_MS - (Date.now() - hit.at)))
       }
@@ -497,16 +648,19 @@ export async function create(input: {
   }
 
   async function waitForDocumentDiagnostics(request: { path: string; version: number; after?: number }) {
-    const startedAt = request.after ?? Date.now()
+    const startedAt = Date.now()
     const pushWait = waitForFreshPush({
       path: request.path,
       version: request.version,
-      after: startedAt,
+      after: request.after ?? startedAt,
       timeout: DIAGNOSTICS_DOCUMENT_WAIT_TIMEOUT_MS,
     })
 
-    while (Date.now() - startedAt < DIAGNOSTICS_DOCUMENT_WAIT_TIMEOUT_MS) {
+    while (!stopping && Date.now() - startedAt < DIAGNOSTICS_DOCUMENT_WAIT_TIMEOUT_MS) {
+      const version = files.get(request.path)?.version
       const result = await requestDocumentDiagnostics(request.path)
+      if (stopping) return
+      if (files.get(request.path)?.version !== version) continue
       if (result.matched) return
       const remaining = DIAGNOSTICS_DOCUMENT_WAIT_TIMEOUT_MS - (Date.now() - startedAt)
       if (remaining <= 0) return
@@ -519,16 +673,19 @@ export async function create(input: {
   }
 
   async function waitForFullDiagnostics(request: { path: string; version: number; after?: number }) {
-    const startedAt = request.after ?? Date.now()
+    const startedAt = Date.now()
     const pushWait = waitForFreshPush({
       path: request.path,
       version: request.version,
-      after: startedAt,
+      after: request.after ?? startedAt,
       timeout: DIAGNOSTICS_FULL_WAIT_TIMEOUT_MS,
     })
 
-    while (Date.now() - startedAt < DIAGNOSTICS_FULL_WAIT_TIMEOUT_MS) {
+    while (!stopping && Date.now() - startedAt < DIAGNOSTICS_FULL_WAIT_TIMEOUT_MS) {
+      const version = files.get(request.path)?.version
       const result = await requestFullDiagnostics(request.path)
+      if (stopping) return
+      if (files.get(request.path)?.version !== version) continue
       if (result.handled || result.matched) return
       const remaining = DIAGNOSTICS_FULL_WAIT_TIMEOUT_MS - (Date.now() - startedAt)
       if (remaining <= 0) return
@@ -552,77 +709,96 @@ export async function create(input: {
     },
     notify: {
       async open(request: { path: string }) {
-        request.path = Filesystem.normalizePath(
+        const filePath = Filesystem.normalizePath(
           path.isAbsolute(request.path) ? request.path : path.resolve(input.directory, request.path),
         )
-        const text = await Filesystem.readText(request.path)
-        const extension = path.extname(request.path)
-        const languageId = LANGUAGE_EXTENSIONS[extension] ?? "plaintext"
+        return serialize(async () => {
+          if (stopping) throw new Error("LSP client is shutting down")
+          await trim(filePath)
+          // Read inside the serialized operation: concurrent opens must not send
+          // duplicate didOpen or overwrite a newer snapshot with an older read.
+          const text = await Filesystem.readText(filePath)
+          if (stopping) throw new Error("LSP client is shutting down")
+          const document = files.get(filePath)
+          if (document?.text === text) {
+            files.delete(filePath)
+            files.set(filePath, document)
+            handoff(filePath)
+            scheduleTrim()
+            return document.version
+          }
 
-        const document = files[request.path]
-        if (document !== undefined) {
-          // Do not wipe diagnostics on didChange. Some servers (e.g. clangd) only
-          // re-emit diagnostics when the content actually changes, so clearing
-          // here would lose errors for no-op touchFile calls. Let the server's
-          // next push/pull overwrite naturally.
+          const changedAt = Date.now()
+          const next = ++version
+          // Opening an existing file (including reopening after eviction) is not
+          // a filesystem creation. No-op reads don't signal watched-file changes.
           await connection.sendNotification("workspace/didChangeWatchedFiles", {
-            changes: [
-              {
-                uri: pathToFileURL(request.path).href,
-                type: FILE_CHANGE_CHANGED,
+            changes: [{ uri: pathToFileURL(filePath).href, type: FILE_CHANGE_CHANGED }],
+          })
+          published.delete(filePath)
+          forgetDiagnostics(filePath)
+          if (!document) {
+            pushDiagnostics.delete(filePath)
+            pullDiagnostics.delete(filePath)
+          }
+          files.delete(filePath)
+          files.set(filePath, { version: next, text, changedAt, pins: document?.pins ?? 0, waited: false })
+          bytes += (text.length - (document?.text.length ?? 0)) * 2
+          if (document) {
+            await connection.sendNotification("textDocument/didChange", {
+              textDocument: { uri: pathToFileURL(filePath).href, version: next },
+              contentChanges:
+                syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
+                  ? [{ range: { start: { line: 0, character: 0 }, end: endPosition(document.text) }, text }]
+                  : [{ text }],
+            })
+          }
+          if (!document) {
+            await connection.sendNotification("textDocument/didOpen", {
+              textDocument: {
+                uri: pathToFileURL(filePath).href,
+                languageId: LANGUAGE_EXTENSIONS[path.extname(filePath)] ?? "plaintext",
+                version: next,
+                text,
               },
-            ],
-          })
-
-          const next = document.version + 1
-          files[request.path] = { version: next, text }
-          await connection.sendNotification("textDocument/didChange", {
-            textDocument: {
-              uri: pathToFileURL(request.path).href,
-              version: next,
-            },
-            contentChanges:
-              syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
-                ? [
-                    {
-                      range: {
-                        start: { line: 0, character: 0 },
-                        end: endPosition(document.text),
-                      },
-                      text,
-                    },
-                  ]
-                : [{ text }],
-          })
+            })
+          }
+          handoff(filePath)
+          scheduleTrim()
           return next
-        }
-
-        await connection.sendNotification("workspace/didChangeWatchedFiles", {
-          changes: [
-            {
-              uri: pathToFileURL(request.path).href,
-              type: FILE_CHANGE_CREATED,
-            },
-          ],
         })
-
-        pushDiagnostics.delete(request.path)
-        pullDiagnostics.delete(request.path)
-        await connection.sendNotification("textDocument/didOpen", {
-          textDocument: {
-            uri: pathToFileURL(request.path).href,
-            languageId,
-            version: 0,
-            text,
-          },
-        })
-        files[request.path] = { version: 0, text }
-        return 0
       },
+    },
+    // Scoped retrieval must not materialize/deduplicate the whole workspace.
+    diagnosticsFor(file: string) {
+      if (!pushDiagnostics.has(file) && !pullDiagnostics.has(file) && !completedDiagnostics.has(file)) return undefined
+      return mergedDiagnostics(file)
+    },
+    *diagnosticFiles() {
+      yield* pushDiagnostics.keys()
+      for (const file of pullDiagnostics.keys()) {
+        if (!pushDiagnostics.has(file)) yield file
+      }
+      for (const file of completedDiagnostics.keys()) {
+        if (!pushDiagnostics.has(file) && !pullDiagnostics.has(file)) yield file
+      }
+    },
+    hasDiagnosticErrors(file: string) {
+      const completed = !files.has(file) ? completedDiagnostics.get(file) : undefined
+      if (completed) return completed.items.some((item) => item.severity === 1)
+      return (
+        pushDiagnostics.get(file)?.some((item) => item.severity === 1) ||
+        pullDiagnostics.get(file)?.some((item) => item.severity === 1) ||
+        false
+      )
     },
     get diagnostics() {
       const result = new Map<string, Diagnostic[]>()
-      for (const key of new Set([...pushDiagnostics.keys(), ...pullDiagnostics.keys()])) {
+      for (const key of new Set([
+        ...pushDiagnostics.keys(),
+        ...pullDiagnostics.keys(),
+        ...completedDiagnostics.keys(),
+      ])) {
         result.set(key, mergedDiagnostics(key))
       }
       return result
@@ -631,15 +807,56 @@ export async function create(input: {
       const normalizedPath = Filesystem.normalizePath(
         path.isAbsolute(request.path) ? request.path : path.resolve(input.directory, request.path),
       )
-      if (request.mode === "document") {
-        await waitForDocumentDiagnostics({ path: normalizedPath, version: request.version, after: request.after })
+      if (stopping) return
+      const version = files.get(normalizedPath)?.version ?? (await result.notify.open({ path: normalizedPath }))
+      const document = files.get(normalizedPath)
+      if (!document) return
+      if (
+        document.waited &&
+        !documentPullState().supported &&
+        (request.mode === "document" || !workspacePullState().supported)
+      )
         return
+      document.pins++
+      try {
+        const wait = request.mode === "document" ? waitForDocumentDiagnostics : waitForFullDiagnostics
+        await wait({ path: normalizedPath, version, after: document.changedAt })
+        document.waited = true
+      } finally {
+        // A concurrent edit keeps the pin count on the current document.
+        const current = files.get(normalizedPath)
+        if (current) current.pins--
+        scheduleTrim()
       }
-      await waitForFullDiagnostics({ path: normalizedPath, version: request.version, after: request.after })
     },
     async shutdown() {
+      if (stopping) return
+      stopping = true
+      if (trimTimer) clearImmediate(trimTimer)
+      if (openTimer) clearImmediate(openTimer)
+      opening.clear()
+      for (const cancel of shutdownListeners) cancel()
+      await operations
+      for (const filePath of files.keys()) {
+        await close(filePath).catch((error) =>
+          Effect.runSync(Effect.logDebug("LSP document close during shutdown failed", error)),
+        )
+      }
+      // Use the original request function: the public connection now rejects
+      // new work. The timeout bounds teardown of a nonresponsive server.
+      await withTimeout(sendRequest("shutdown"), 1_000).catch(() => {})
+      await connection.sendNotification("exit").catch(() => {})
       connection.end()
       connection.dispose()
+      files.clear()
+      for (const filePath of completedDiagnostics.keys()) forgetDiagnostics(filePath)
+      bytes = 0
+      pushDiagnostics.clear()
+      pullDiagnostics.clear()
+      published.clear()
+      diagnosticRegistrations.clear()
+      diagnosticListeners.clear()
+      registrationListeners.clear()
       await Process.stop(input.server.process)
     },
   }
