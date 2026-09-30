@@ -34,6 +34,11 @@ export const Flag = {
   OPENCODE_DISABLE_FFF: fff === undefined ? process.platform === "win32" : truthy("OPENCODE_DISABLE_FFF"),
 
   // Experimental
+  // Opt-in only: invalid, zero and negative values preserve Location lifetime.
+  get OPENCODE_EXPERIMENTAL_SEARCH_IDLE_MS() {
+    const value = Number(process.env["OPENCODE_EXPERIMENTAL_SEARCH_IDLE_MS"])
+    return Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647 ? value : undefined
+  },
   OPENCODE_EXPERIMENTAL_FILEWATCHER: Config.boolean("OPENCODE_EXPERIMENTAL_FILEWATCHER").pipe(
     Config.withDefault(false),
   ),

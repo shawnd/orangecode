@@ -138,6 +138,65 @@ const withDirect = <A, E, R>(run: (picker: ReturnType<typeof Fff.createDirect>) 
   )
 
 describe("fff source worker", () => {
+  scoped.live("idle lease pins real initialization and destroys a cancelled late-created picker", () =>
+    withHarness(true, (gate) =>
+      Effect.gen(function* () {
+        const service = yield* FileSystemSearch.makeIdle(
+          FileSystemSearch.makeFff(() => gate.client),
+          30,
+        )
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (gate.client.state.started) gate.command("release-init")
+          }),
+        )
+        const first = yield* service.find({ query: "search" }).pipe(Effect.forkScoped)
+        const second = yield* service.find({ query: "space" }).pipe(Effect.forkScoped)
+        yield* Effect.promise(() => gate.wait("init-held"))
+        yield* Fiber.interrupt(first)
+        yield* Effect.sleep(100)
+        expect(gate.client.state).toMatchObject({ active: "init", closing: false })
+        yield* Fiber.interrupt(second)
+        yield* Effect.sleep(100)
+        expect(gate.client.state).toMatchObject({ active: "init", closing: true, started: true })
+        gate.command("release-init")
+        yield* Effect.promise(() => gate.client.destroy())
+        expect(gate.client.state).toMatchObject({ started: false, destroyed: true })
+        const events = (yield* Effect.promise(() => Bun.file(gate.marker).text()))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+        expect(events.map((event) => event.op)).toEqual(["init", "dispose"])
+        expect(events[1].destroyed).toBe(true)
+      }),
+    ),
+  )
+
+  scoped.live("idle lease protects held native grep delivery through materialization", () =>
+    withHarness(false, (gate) =>
+      Effect.gen(function* () {
+        const service = yield* FileSystemSearch.makeIdle(
+          FileSystemSearch.makeFff(() => gate.client),
+          30,
+        )
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (gate.client.state.active === "grep") gate.command("release-grep")
+          }),
+        )
+        expect(yield* Effect.promise(() => gate.client.waitForScan(5000))).toBe(true)
+        const query = yield* service.grep({ pattern: "needle", limit: 1000 }).pipe(Effect.forkScoped)
+        yield* Effect.promise(() => gate.wait("grep-result-held"))
+        yield* Effect.sleep(100)
+        expect(gate.client.state.closing).toBe(false)
+        gate.command("release-grep")
+        expect((yield* Fiber.join(query)).length).toBeGreaterThan(128)
+        yield* Effect.sleep(150)
+        expect(gate.client.state).toMatchObject({ started: false, destroyed: true })
+      }),
+    ),
+  )
+
   test("lazy startup, exact direct parity, raw page/cursor/regex behavior and worker formatting", async () => {
     await using tmp = await fixture()
     const direct = FileFinder.create(options(tmp.path))

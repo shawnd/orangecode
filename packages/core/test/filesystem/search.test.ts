@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Exit, Fiber, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { AbsolutePath, RelativePath } from "@opencode-ai/core/schema"
@@ -52,6 +52,136 @@ describe("Ripgrep", () => {
 const search = testEffect(Layer.mergeAll(LayerNode.compile(FSUtil.node), LayerNode.compile(Ripgrep.node)))
 
 describe("Location search", () => {
+  for (const backend of [Fff.createDirect, Fff.createWorker]) {
+    search.live(`idle search leases active native queries (${backend.name})`, () =>
+      withTmp((directory) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => Bun.write(path.join(directory, "match.txt"), "needle\n"))
+          const started = Promise.withResolvers<void>()
+          const finish = Promise.withResolvers<void>()
+          const reopened = Promise.withResolvers<void>()
+          const finishReopened = Promise.withResolvers<void>()
+          const owner = yield* Scope.make()
+          yield* Effect.addFinalizer(() => {
+            finish.resolve()
+            finishReopened.resolve()
+            return Scope.close(owner, Exit.void)
+          })
+          const pickers: ReturnType<typeof backend>[] = []
+          const service = yield* FileSystemSearch.makeIdle(
+            FileSystemSearch.makeFff((opts) => {
+              const picker = backend(opts)
+              const index = pickers.length
+              pickers.push(picker)
+              const native = picker.fileSearch.bind(picker)
+              picker.fileSearch = async (query, options, signal) => {
+                await picker.waitForScan(5000, signal)
+                const result = await native(query, options, signal)
+                if (index === 0) {
+                  started.resolve()
+                  await finish.promise
+                }
+                if (index === 1) {
+                  reopened.resolve()
+                  await finishReopened.promise
+                }
+                return result
+              }
+              return picker
+            }),
+            30,
+          ).pipe(Scope.provide(owner))
+          // Shared Location services are not the retired scope.
+          const unrelated = yield* Effect.never.pipe(Effect.forkScoped)
+          const calls = yield* Effect.forEach(Array.from({ length: 20 }), () =>
+            service.find({ query: "match", type: "file" }).pipe(Effect.forkScoped),
+          )
+          yield* Effect.promise(() => started.promise)
+          yield* Effect.sleep(100)
+          expect(pickers).toHaveLength(1)
+          expect(pickers[0].state.closing).toBe(false)
+          finish.resolve()
+          const results = yield* Effect.forEach(calls, (fiber) => Fiber.join(fiber))
+          expect(results.every((rows) => rows[0]?.path === "match.txt")).toBe(true)
+          yield* Effect.sleep(150)
+          expect(pickers[0].state.destroyed).toBe(true)
+          expect(unrelated.pollUnsafe()).toBeUndefined()
+          yield* Effect.promise(() => Bun.write(path.join(directory, "fresh.txt"), "changed\n"))
+          const freshQuery = yield* service.find({ query: "fresh", type: "file" }).pipe(Effect.forkScoped)
+          yield* Effect.promise(() => reopened.promise)
+          const closing = yield* Scope.close(owner, Exit.void).pipe(Effect.forkScoped)
+          yield* Effect.sleep(100)
+          expect(closing.pollUnsafe()).toBeUndefined()
+          expect(pickers[1].state.closing).toBe(false)
+          finishReopened.resolve()
+          const fresh = yield* Fiber.join(freshQuery)
+          yield* Fiber.join(closing)
+          expect(fresh.map((row) => row.path)).toEqual([RelativePath.make("fresh.txt")])
+          expect(pickers).toHaveLength(2)
+          expect(pickers[1].state.destroyed).toBe(true)
+        }).pipe(Effect.provideService(Location.Service, location({ directory }))),
+      ),
+    )
+
+    search.live(`idle destruction fences reopening and cancelled admission (${backend.name})`, () =>
+      withTmp((directory) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => Bun.write(path.join(directory, "match.txt"), "needle\n"))
+          const retiring = Promise.withResolvers<void>()
+          const finish = Promise.withResolvers<void>()
+          const pickers: ReturnType<typeof backend>[] = []
+          const destructions: number[] = []
+          const owner = yield* Scope.make()
+          const service = yield* FileSystemSearch.makeIdle(
+            FileSystemSearch.makeFff((opts) => {
+              const picker = backend(opts)
+              const index = pickers.length
+              pickers.push(picker)
+              destructions.push(0)
+              const native = picker.fileSearch.bind(picker)
+              picker.fileSearch = async (query, options, signal) => {
+                await picker.waitForScan(5000, signal)
+                return native(query, options, signal)
+              }
+              const destroy = picker.destroy.bind(picker)
+              picker.destroy = async () => {
+                destructions[index]++
+                if (index === 0) {
+                  retiring.resolve()
+                  await finish.promise
+                }
+                await destroy()
+              }
+              return picker
+            }),
+            30,
+          ).pipe(Scope.provide(owner))
+          yield* Effect.addFinalizer(() => {
+            finish.resolve()
+            return Scope.close(owner, Exit.void)
+          })
+          expect(yield* service.find({ query: "match", type: "file" })).toHaveLength(1)
+          yield* Effect.promise(() => retiring.promise)
+          const cancelled = yield* service.find({ query: "match" }).pipe(Effect.forkScoped)
+          const late = yield* service.find({ query: "match", type: "file" }).pipe(Effect.forkScoped)
+          yield* Effect.sleep(50)
+          yield* Fiber.interrupt(cancelled)
+          expect(Exit.hasInterrupts(yield* Fiber.await(cancelled))).toBe(true)
+          expect(pickers).toHaveLength(1)
+          finish.resolve()
+          expect(yield* Fiber.join(late)).toHaveLength(1)
+          expect(pickers).toHaveLength(2)
+          expect(pickers[0].state.destroyed).toBe(true)
+          yield* Scope.close(owner, Exit.void)
+          expect(destructions).toEqual([1, 1])
+          expect(pickers.every((picker) => picker.state.destroyed)).toBe(true)
+          expect(Exit.hasInterrupts(yield* service.find({ query: "match" }).pipe(Effect.exit))).toBe(true)
+          expect(pickers).toHaveLength(2)
+        }).pipe(Effect.provideService(Location.Service, location({ directory }))),
+      ),
+    )
+  }
+
   test("physically missing native import uses real ripgrep in both native modes", async () => {
     await using tmp = await tmpdir()
     await fs.mkdir(path.join(tmp.path, "isolated"))

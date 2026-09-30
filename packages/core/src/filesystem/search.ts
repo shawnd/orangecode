@@ -2,7 +2,7 @@ export * as FileSystemSearch from "./search"
 
 import { makeLocationNode } from "../effect/app-node"
 import path from "path"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Semaphore } from "effect"
 import { Fff } from "#fff"
 import fuzzysort from "fuzzysort"
 import { Entry, Match } from "@opencode-ai/schema/filesystem"
@@ -252,7 +252,115 @@ export const makeFff = (create: (opts: Fff.Init) => Fff.Picker = Fff.create) =>
     })
   })
 
-export const fffLayer = Layer.effect(Service, makeFff())
+// Only search resources are retired. Location services (runs, jobs, PTYs and
+// approvals) keep their existing ownership and lifetime.
+export const makeIdle = (make: ReturnType<typeof makeFff>, idleMs: number) =>
+  Effect.gen(function* () {
+    const context = yield* Effect.context<FSUtil.Service | Location.Service | Ripgrep.Service>()
+    const owner = yield* Scope.Scope
+    const gate = yield* Semaphore.make(1)
+    const state = {
+      closed: false,
+      current: undefined as
+        | { scope: Scope.Closeable; service: Interface; leases: number; drained: Deferred.Deferred<void> }
+        | undefined,
+      timer: undefined as Fiber.Fiber<void> | undefined,
+    }
+    const close = Effect.gen(function* () {
+      if (!state.current) return
+      const entry = state.current
+      // Keep the gate until native destruction acknowledges completion. Admission
+      // cannot overlap the old index's teardown, even after caller interruption.
+      yield* Scope.close(entry.scope, Exit.void).pipe(
+        Effect.onError(() =>
+          Effect.sync(() => {
+            state.closed = true
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            state.current = undefined
+          }),
+        ),
+        Effect.ensuring(Deferred.succeed(entry.drained, undefined)),
+      )
+    })
+    yield* Effect.addFinalizer(() =>
+      gate
+        .withPermit(
+          Effect.gen(function* () {
+            state.closed = true
+            state.timer?.interruptUnsafe()
+            const entry = state.current
+            if (entry?.leases === 0) yield* close
+            return entry?.drained
+          }),
+        )
+        .pipe(Effect.flatMap((drained) => (drained ? Deferred.await(drained) : Effect.void))),
+    )
+    const borrow = gate
+      .withPermit(
+        Effect.acquireRelease(
+          Effect.gen(function* () {
+            if (state.closed) return yield* Effect.interrupt
+            state.timer?.interruptUnsafe()
+            state.timer = undefined
+            if (!state.current) {
+              const scope = yield* Scope.make()
+              // Captured contexts also contain the owner Scope. Override it inside
+              // context provision so picker/fallback finalizers belong to this entry.
+              const service = yield* make.pipe(
+                Scope.provide(scope),
+                Effect.provideContext(context),
+                Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)),
+              )
+              state.current = { scope, service, leases: 0, drained: yield* Deferred.make<void>() }
+            }
+            state.current.leases++
+            return state.current
+          }),
+          (entry) =>
+            gate.withPermit(
+              Effect.gen(function* () {
+                entry.leases--
+                if (entry.leases) return
+                if (state.closed) return yield* close
+                const timer = yield* Effect.sleep(idleMs).pipe(
+                  Effect.andThen(
+                    gate.withPermit(
+                      Effect.gen(function* () {
+                        if (state.current !== entry || entry.leases || state.timer !== timer) return
+                        yield* close
+                      }).pipe(Effect.uninterruptible),
+                    ),
+                  ),
+                  Effect.forkIn(owner),
+                )
+                state.timer = timer
+              }),
+            ),
+        ),
+      )
+      .pipe(Effect.interruptible)
+    const run = <A>(f: (service: Interface) => Effect.Effect<A>) =>
+      borrow.pipe(
+        Effect.flatMap((entry) => f(entry.service)),
+        Effect.scoped,
+      )
+    return Service.of({
+      find: (input) => run((service) => service.find(input)),
+      glob: (input) => run((service) => service.glob(input)),
+      grep: (input) => run((service) => service.grep(input)),
+    })
+  })
+
+export const fffLayer = Layer.effect(
+  Service,
+  Effect.suspend(() => {
+    const idleMs = Flag.OPENCODE_EXPERIMENTAL_SEARCH_IDLE_MS
+    return idleMs === undefined ? makeFff() : makeIdle(makeFff(), idleMs)
+  }),
+)
 
 // Schema construction can itself occupy the caller for tens of milliseconds on
 // a large page. Yield between small batches without changing order or limits.
