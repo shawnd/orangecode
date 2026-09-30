@@ -2068,7 +2068,11 @@ function Shell(props: ToolProps) {
   const { theme } = useTheme()
   const pathFormatter = usePathFormatter()
   const ctx = use()
-  const isRunning = createMemo(() => props.part.state.status === "running")
+  const isRunning = createMemo(() =>
+    props.metadata.background === true
+      ? props.metadata.shellStatus === "running"
+      : props.part.state.status === "running",
+  )
   const output = createMemo(() => stripAnsi(stringValue(props.metadata.output)?.trim() ?? ""))
   const [expanded, setExpanded] = createSignal(false)
   const maxLines = 10
@@ -2102,6 +2106,11 @@ function Shell(props: ToolProps) {
           onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
         >
           <box gap={1}>
+            <Show when={props.metadata.background === true}>
+              <text fg={theme.textMuted}>
+                Background shell · {stringValue(props.metadata.shellStatus)} · {stringValue(props.metadata.jobId)}
+              </text>
+            </Show>
             <Show when={isRunning()} fallback={<text fg={theme.text}>$ {stringValue(props.input.command)}</text>}>
               <Spinner color={theme.text}>{stringValue(props.input.command)}</Spinner>
             </Show>

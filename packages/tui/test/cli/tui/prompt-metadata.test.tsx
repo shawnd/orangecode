@@ -15,28 +15,31 @@ import { ClipboardProvider } from "../../../src/context/clipboard"
 import { DataProvider } from "../../../src/context/data"
 import { EditorContextProvider } from "../../../src/context/editor"
 import { ExitProvider } from "../../../src/context/exit"
-import { KVProvider } from "../../../src/context/kv"
+import { KVProvider, useKV } from "../../../src/context/kv"
 import { LocalProvider, useLocal } from "../../../src/context/local"
 import { LocationProvider } from "../../../src/context/location"
 import { PermissionProvider } from "../../../src/context/permission"
 import { ProjectProvider } from "../../../src/context/project"
-import { RouteProvider } from "../../../src/context/route"
+import { RouteProvider, useRoute } from "../../../src/context/route"
 import { SDKProvider } from "../../../src/context/sdk"
 import { SyncProvider, useSync } from "../../../src/context/sync"
 import { ThemeProvider } from "../../../src/context/theme"
 import { OpencodeKeymapProvider, registerOpencodeKeymap, useBindings } from "../../../src/keymap"
-import { PromptHistoryProvider } from "../../../src/prompt/history"
+import { PromptHistoryProvider, usePromptHistory } from "../../../src/prompt/history"
 import { PromptStashProvider } from "../../../src/prompt/stash"
 import { useDialog } from "../../../src/ui/dialog"
 import { ToastProvider } from "../../../src/ui/toast"
 import { tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { createFetch, directory, eventSource, json, worktree } from "../../fixture/tui-sdk"
+import { createFetch, createEventSource, directory, json, worktree } from "../../fixture/tui-sdk"
+import type { ToolPart } from "@opencode-ai/sdk/v2"
 import { RemindersProvider } from "../../../src/context/reminders"
 import { NativeReminders } from "@opencode-ai/core/native/reminders"
 
 async function mount(root: string, sessionID?: string, variants = true) {
+  const events = createEventSource()
+  const aborted: string[] = []
   const dialogUI = await import("../../../src/ui/dialog")
   await Bun.write(`${root}/kv.json`, JSON.stringify({ animations_enabled: false }))
   const provider = {
@@ -68,6 +71,10 @@ async function mount(root: string, sessionID?: string, variants = true) {
   )
   const other = { ...provider, id: "other-provider", name: "Other Provider" }
   const calls = createFetch((url) => {
+    if (url.pathname.endsWith("/abort")) {
+      aborted.push(url.pathname)
+      return json(true)
+    }
     if (url.pathname === "/config") return json({ model: "metadata-provider/metadata-model" })
     if (url.pathname === "/config/providers")
       return json({ providers: [provider, other], default: { "metadata-provider": "metadata-model" } })
@@ -81,13 +88,21 @@ async function mount(root: string, sessionID?: string, variants = true) {
       return json(["build", "plan"].map((name) => ({ name, mode: "primary", permission: [], options: {} })))
     if (url.pathname.startsWith("/session/")) return json([])
   })
-  let context: { local: ReturnType<typeof useLocal>; dialog: ReturnType<typeof useDialog> } | undefined
+  let context:
+    | {
+        local: ReturnType<typeof useLocal>
+        dialog: ReturnType<typeof useDialog>
+        route: ReturnType<typeof useRoute>
+        history: ReturnType<typeof usePromptHistory>
+        kv: ReturnType<typeof useKV>
+      }
+    | undefined
   let prompt: PromptRef | undefined
   function Controls() {
     const local = useLocal()
     const dialog = useDialog()
     const sync = useSync()
-    context = { local, dialog }
+    context = { local, dialog, route: useRoute(), history: usePromptHistory(), kv: useKV() }
     // Register app-level commands so clicks exercise real keymap dispatch and picker components.
     useBindings(() => ({
       commands: [
@@ -134,7 +149,7 @@ async function mount(root: string, sessionID?: string, variants = true) {
               <KVProvider>
                 <ThemeProvider mode="dark">
                   <ToastProvider>
-                    <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={eventSource()}>
+                    <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={events.source}>
                       <PermissionProvider>
                         <ProjectProvider>
                           <ExitProvider
@@ -193,6 +208,8 @@ async function mount(root: string, sessionID?: string, variants = true) {
   }
   return {
     app,
+    events,
+    aborted,
     prompt() {
       if (!prompt) throw new Error("Prompt not ready")
       return prompt
@@ -213,6 +230,332 @@ async function mount(root: string, sessionID?: string, variants = true) {
     },
   }
 }
+
+function runningTask(view: Awaited<ReturnType<typeof mount>>) {
+  view.events.emit({
+    directory,
+    payload: { id: "busy", type: "session.status", properties: { sessionID: "child", status: { type: "busy" } } },
+  })
+  const part: ToolPart = {
+    id: "task-part",
+    sessionID: "parent",
+    messageID: "parent-message",
+    callID: "task-call",
+    type: "tool",
+    tool: "task",
+    state: {
+      status: "completed",
+      input: {},
+      output: "started",
+      title: "Inspect cache",
+      metadata: { sessionId: "child", background: true },
+      time: { start: 1, end: 2 },
+    },
+  }
+  view.events.emit({
+    directory,
+    payload: {
+      id: "task-started",
+      type: "message.part.updated",
+      properties: { part, sessionID: part.sessionID, time: 2 },
+    },
+  })
+  return part
+}
+
+test("idle parent keeps background count beside path and Escape aborts the entire session", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  runningTask(view)
+  const frame = await view.waitForFrame((frame) => frame.includes("1 background agent"))
+  expect(frame.split("\n").find((line) => line.includes("1 background agent"))).toContain(directory)
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame((frame) => frame.includes("again to interrupt"))
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame(() => view.aborted.length === 1)
+  expect(view.aborted).toEqual(["/session/parent/abort"])
+  view.events.emit({
+    directory,
+    payload: { id: "idle", type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } },
+  })
+  await view.waitForFrame((frame) => !frame.includes("background agent"))
+  view.events.emit({
+    directory,
+    payload: {
+      id: "parent-working",
+      type: "session.status",
+      properties: { sessionID: "parent", status: { type: "busy" } },
+    },
+  })
+  const working = await view.waitForFrame((frame) => frame.includes("[⋯]"))
+  const lines = working.split("\n")
+  const pathRow = lines.findIndex((line) => line.includes(directory))
+  const progressRow = lines.findIndex((line) => line.includes("[⋯]"))
+  expect(pathRow).toBeGreaterThanOrEqual(0)
+  expect(progressRow).toBe(pathRow + 1)
+  expect(lines[progressRow]).toContain("esc interrupt")
+  expect(working).not.toContain("interrupt all")
+})
+
+test("agent count opens a live list by click or Down/Enter and switches to the selected agent", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  runningTask(view)
+  await view.click("1 background agent")
+  await view.waitForFrame((frame) => frame.includes("Background agents") && frame.includes("Inspect cache"))
+  view.ctx().dialog.clear()
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("up")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.app.renderOnce()
+  expect(view.ctx().dialog.stack).toHaveLength(0)
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("Background agents"))
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame(() => view.ctx().route.data.type === "session")
+  expect(view.ctx().route.data).toMatchObject({ type: "session", sessionID: "child" })
+})
+
+test("background agent activity keeps animating before Escape while the parent is idle", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.ctx().kv.set("animations_enabled", true)
+  runningTask(view)
+  const beforeEscape = (frame: string) => {
+    const line = frame.split("\n").find((line) => line.includes("esc interrupt")) ?? ""
+    return line.slice(0, line.indexOf("esc interrupt")).trim()
+  }
+  const first = await view.waitForFrame(
+    (frame) =>
+      frame.includes("1 background agent") && beforeEscape(frame).length > 0 && !beforeEscape(frame).includes("[⋯]"),
+  )
+  const next = await view.waitForFrame(
+    (frame) =>
+      frame.includes("1 background agent") &&
+      beforeEscape(frame).length > 0 &&
+      beforeEscape(frame) !== beforeEscape(first),
+  )
+  expect(beforeEscape(next)).not.toBe(beforeEscape(first))
+  view.events.emit({
+    directory,
+    payload: { id: "agent-idle", type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } },
+  })
+  await view.waitForFrame((frame) => !frame.includes("background agent") && !frame.includes("esc interrupt"))
+})
+
+test("input history keeps arrow priority until returning to the draft, then Down enters background agents", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.prompt().reset()
+  view.ctx().history.append({ input: "older prompt", parts: [] })
+  view.ctx().history.append({ input: "newer prompt", parts: [] })
+  runningTask(view)
+  await view.waitForFrame((frame) => frame.includes("1 background agent"))
+  view.app.mockInput.pressArrow("up")
+  await view.waitForFrame(() => view.prompt().current.input === "newer prompt")
+  view.app.mockInput.pressArrow("up")
+  await view.waitForFrame(() => view.prompt().current.input === "older prompt")
+  // The first Down reaches the end of the recalled line; the next advances history.
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.waitForFrame(() => view.prompt().current.input === "newer prompt")
+  view.app.mockInput.pressArrow("down")
+  await view.waitForFrame(() => view.prompt().current.input === "")
+  expect(view.ctx().dialog.stack).toHaveLength(0)
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("Background agents"))
+  view.ctx().dialog.clear()
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("up")
+  await view.waitForFrame(() => view.prompt().current.input === "newer prompt")
+  view.prompt().set({ input: "edited recalled prompt", parts: [] })
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("Background agents"))
+  expect(view.prompt().current.input).toBe("edited recalled prompt")
+  view.ctx().dialog.clear()
+  view.prompt().reset()
+})
+
+test("shell footer selection opens live command output without submitting the draft", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  runningTask(view)
+  const part: ToolPart = {
+    id: "shell-part",
+    sessionID: "child",
+    messageID: "child-message",
+    callID: "shell-call",
+    type: "tool",
+    tool: "bash",
+    state: {
+      status: "running",
+      input: { command: "bun test" },
+      title: "Tests",
+      metadata: { output: "Starting tests" },
+      time: { start: 3 },
+    },
+  }
+  view.events.emit({
+    directory,
+    payload: {
+      id: "shell-started",
+      type: "message.part.updated",
+      properties: { part, sessionID: part.sessionID, time: 3 },
+    },
+  })
+  for (const type of ["busy", "idle"] as const) {
+    view.events.emit({
+      directory,
+      payload: { id: `parent-${type}`, type: "session.status", properties: { sessionID: "parent", status: { type } } },
+    })
+    const frame = await view.waitForFrame(
+      (frame) => frame.includes("1 shell") && frame.includes("1 background agent") && frame.includes("[⋯]"),
+    )
+    const lines = frame.split("\n")
+    const agentRow = lines.findIndex((line) => line.includes("1 background agent"))
+    const shellRow = lines.findIndex((line) => line.includes("1 shell"))
+    expect(lines[agentRow]).toContain(directory)
+    expect(shellRow).toBe(agentRow + 1)
+    expect(lines[shellRow].indexOf("1 shell")).toBe(lines[agentRow].indexOf("1 background agent"))
+    expect(lines[shellRow]).toContain("esc interrupt")
+    expect(lines[shellRow].indexOf("[⋯]")).toBeLessThan(lines[shellRow].indexOf("esc interrupt"))
+  }
+  await view.click("1 shell")
+  await view.waitForFrame((frame) => frame.includes("Running shells") && frame.includes("bun test"))
+  view.ctx().dialog.clear()
+  view.prompt().set({ input: "keep this draft", parts: [] })
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("up")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("Background agents"))
+  view.ctx().dialog.clear()
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressArrow("down")
+  await view.app.renderOnce()
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("Running shells") && frame.includes("bun test"))
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame((frame) => frame.includes("Starting tests"))
+  expect(view.prompt().current.input).toBe("keep this draft")
+  view.events.emit({
+    directory,
+    payload: {
+      id: "shell-completed",
+      type: "message.part.updated",
+      properties: {
+        sessionID: part.sessionID,
+        time: 4,
+        part: {
+          ...part,
+          state: {
+            status: "completed",
+            input: part.state.input,
+            title: "Tests",
+            output: "All tests passed",
+            metadata: {},
+            time: { start: 3, end: 4 },
+          },
+        },
+      },
+    },
+  })
+  await view.waitForFrame((frame) => frame.includes("All tests passed"))
+  view.ctx().dialog.clear()
+  await view.waitForFrame((frame) => !frame.includes("1 shell"))
+  view.prompt().reset()
+})
+
+test("a real background shell is inspectable and interruptible while its owner is idle", async () => {
+  await using tmp = await tmpdir()
+  using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  const part: ToolPart = {
+    id: "background-shell",
+    sessionID: "parent",
+    messageID: "shell-message",
+    callID: "shell-call",
+    type: "tool",
+    tool: "bash",
+    state: {
+      status: "completed",
+      input: { command: "bun run build", background: true },
+      title: "Build",
+      output: "Job started",
+      time: { start: 1, end: 2 },
+      metadata: {
+        background: true,
+        jobId: "job_build",
+        shellStatus: "running",
+        stdinOpen: true,
+        output: "Building module A",
+        outputPath: "/tmp/build.log",
+      },
+    },
+  }
+  view.events.emit({
+    directory,
+    payload: {
+      id: "bg-shell-started",
+      type: "message.part.updated",
+      properties: { sessionID: part.sessionID, part, time: 3 },
+    },
+  })
+  const active = await view.waitForFrame((frame) => frame.includes("1 shell"))
+  expect(active.split("\n").find((line) => line.includes("esc interrupt"))).toContain("[⋯]")
+  await view.click("1 shell")
+  await view.waitForFrame((frame) => frame.includes("Running shells"))
+  view.app.mockInput.pressEnter()
+  const frame = await view.waitForFrame((frame) => frame.includes("Building module A"))
+  expect(frame).toContain("Shell · running")
+  expect(frame).toContain("stdin open")
+  expect(frame).toContain("/tmp/build.log")
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame((frame) => !frame.includes("Building module A"))
+  expect(view.aborted).toEqual([])
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame((frame) => frame.includes("again to interrupt"))
+  view.app.mockInput.pressEscape()
+  await view.waitForFrame(() => view.aborted.length === 1)
+  if (part.state.status !== "completed") throw new Error("Expected completed source call")
+  view.events.emit({
+    directory,
+    payload: {
+      id: "bg-shell-cancelled",
+      type: "message.part.updated",
+      properties: {
+        sessionID: part.sessionID,
+        time: 4,
+        part: { ...part, state: { ...part.state, metadata: { ...part.state.metadata, shellStatus: "cancelled" } } },
+      },
+    },
+  })
+  await view.waitForFrame((frame) => !frame.includes("1 shell"))
+})
 
 for (const sessionID of [undefined, "metadata-session"]) {
   test(`prompt metadata controls work on ${sessionID ? "chat session" : "home"}`, async () => {

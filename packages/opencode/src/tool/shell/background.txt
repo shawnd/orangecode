@@ -1,0 +1,43 @@
+# Background shells
+
+Use a background shell for a long build, test suite, server, or another command that should continue while you work. It is a process job, not a subagent.
+
+## Launch
+
+Call bash with `background: true`:
+
+    { "command": "bun run build", "background": true, "workdir": "/path/to/project" }
+
+The call returns immediately with a job ID and three durable log paths: combined output, stdout, and stderr. Background shells do not inherit the foreground shell timeout. Set `timeout` explicitly for a deadline. Permissions and working-directory checks still apply before launch.
+
+Jobs belong to the current session and can also be inspected or stopped by its ancestor sessions. They keep running after the agent gives its final response. They stop when explicitly cancelled, when their owning session/ancestor is interrupted or removed, or when this OpenCode process exits. They are not restartable across a process restart; saved logs remain readable afterwards.
+
+## Monitor and search
+
+- `shell_list` finds jobs and their current status, exit code, and log paths.
+- `shell_output` reads a bounded, line-numbered window. `query` performs a case-insensitive text search across the entire chosen log, not just the preview. Choose `stream: "stdout"`, `"stderr"`, or `"all"` (the default).
+- Use `offset` and the returned `nextOffset` to continue reading. `more` indicates additional matching lines. Each returned line is capped at 2000 characters; use Read on the saved log for the full line.
+- `wait_ms` optionally waits up to 30 seconds for completion before reading. Prefer the automatic completion notification to repeated polling. Do not run sleep commands just to wait.
+- Read and Grep can also inspect the saved log paths, including after cancellation or a process restart.
+
+Example: find failures in a running build:
+
+    shell_output({ "job_id": "<returned job ID>", "stream": "stderr", "query": "error", "limit": 50 })
+
+Completion is reported automatically to the primary session, including when the shell was started by a subagent that has already finished. Exit code 0 means completed; a nonzero exit or timeout means error. Cancellation does not produce a completion prompt.
+
+## Stdio
+
+Launch with `stdin: true` to keep the input pipe open. The default is closed input so ordinary builds cannot hang waiting for input.
+
+    bash({ "command": "python script.py", "background": true, "stdin": true })
+    shell_input({ "job_id": "<returned job ID>", "text": "answer\n" })
+    shell_input({ "job_id": "<returned job ID>", "eof": true })
+
+`text` is written exactly as supplied: include a newline when sending a line. `eof: true` closes stdin after the queued text is written; it cannot be reopened. Each input call accepts at most 64 KiB. Input is pipe-based, not a terminal or PTY: full-screen programs, terminal prompts, and terminal control sequences may not work. Sending `\u0003` is data, not SIGINT; use `shell_stop` to terminate a job.
+
+## Stop
+
+    shell_stop({ "job_id": "<returned job ID>" })
+
+Stops the shell and its process group, escalating termination if necessary. Output already written is retained and searchable. The TUI also shows live shell counts and logs; Escape interruption includes these background shell jobs.

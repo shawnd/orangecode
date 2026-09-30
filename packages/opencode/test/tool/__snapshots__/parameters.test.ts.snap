@@ -36,9 +36,17 @@ exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Run asynchronously and return a shell job ID immediately. Ideal for long builds, tests, and dev servers. Background jobs have no default timeout; set timeout explicitly if needed. Load shell_tools to inspect/search output, send stdin, or stop the job.",
+      "type": "boolean",
+    },
     "command": {
       "description": "The command to execute",
       "type": "string",
+    },
+    "stdin": {
+      "description": "Keep piped stdin open for a background job so shell_input can send text and EOF. Defaults to false. Requires background=true; this is pipe I/O, not a PTY.",
+      "type": "boolean",
     },
     "timeout": {
       "description": "Optional timeout in milliseconds",

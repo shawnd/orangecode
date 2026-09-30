@@ -120,6 +120,11 @@ const cancelBackgroundJobs = Effect.fn("SessionRunState.cancelBackgroundJobs")(f
     if (cancelled.has(job.id)) return false
     if (pending.has(job.id)) return true
     if (typeof job.metadata?.sessionId === "string" && pending.has(job.metadata.sessionId)) return true
+    if (
+      Array.isArray(job.metadata?.ancestorSessionIds) &&
+      job.metadata.ancestorSessionIds.some((id) => typeof id === "string" && pending.has(id))
+    )
+      return true
     return typeof job.metadata?.parentSessionId === "string" && pending.has(job.metadata.parentSessionId)
   }
   let batch = jobs.filter(matches)

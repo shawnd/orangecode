@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect"
+import { Effect, Option, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
@@ -21,6 +21,10 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { BackgroundShell } from "@/background/shell"
+import { Session } from "@/session/session"
+import type { SessionID } from "@/session/schema"
+import type { TaskPromptOps } from "./task"
 
 export { Parameters } from "./shell/prompt"
 
@@ -80,6 +84,13 @@ type Chunk = {
   text: string
   size: number
 }
+
+type ShellMetadata = {
+  output: string
+  exit: number | null
+  truncated: boolean
+  outputPath?: string
+} & Partial<ReturnType<typeof BackgroundShell.metadata>>
 
 const resolveWasm = (asset: string) => {
   if (asset.startsWith("file://")) return fileURLToPath(asset)
@@ -344,6 +355,8 @@ export const ShellTool = Tool.define(
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
+    const background = yield* BackgroundShell.Service
+    const sessions = Option.getOrUndefined(yield* Effect.serviceOption(Session.Service))
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
@@ -606,7 +619,7 @@ export const ShellTool = Tool.define(
         return {
           description: prompt.description,
           parameters: prompt.parameters,
-          execute: (params: Parameters, ctx: Tool.Context) =>
+          execute: (params: Parameters, ctx: Tool.Context): Effect.Effect<Tool.ExecuteResult<ShellMetadata>> =>
             Effect.gen(function* () {
               const instanceCtx = yield* InstanceState.context
               const cwd = params.workdir
@@ -616,6 +629,7 @@ export const ShellTool = Tool.define(
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
               const timeout = params.timeout ?? defaultTimeoutMs
+              if (params.stdin && !params.background) throw new Error("stdin=true requires background=true")
               const ps = Shell.ps(shell)
               yield* Effect.scoped(
                 Effect.gen(function* () {
@@ -628,6 +642,96 @@ export const ShellTool = Tool.define(
                 }),
               )
 
+              if (params.background) {
+                const ancestors: SessionID[] = []
+                if (sessions) {
+                  let current = yield* sessions.get(ctx.sessionID)
+                  while (current.parentID) {
+                    ancestors.push(current.parentID)
+                    current = yield* sessions.get(current.parentID)
+                  }
+                }
+                const message = sessions
+                  ? Option.getOrUndefined(
+                      yield* sessions.findMessage(ctx.sessionID, (message) => message.info.id === ctx.messageID),
+                    )
+                  : undefined
+                const part = message?.parts.find((part) => part.type === "tool" && part.callID === ctx.callID)
+                const info = yield* background.start({
+                  sessionID: ctx.sessionID,
+                  ancestors,
+                  shell,
+                  command: params.command,
+                  cwd,
+                  env: yield* shellEnv(ctx, cwd),
+                  timeout: params.timeout,
+                  stdin: params.stdin,
+                  onUpdate:
+                    sessions && part
+                      ? (info) =>
+                          Effect.gen(function* () {
+                            const current = yield* sessions.getPart({
+                              sessionID: ctx.sessionID,
+                              messageID: ctx.messageID,
+                              partID: part.id,
+                            })
+                            if (!current || current.type !== "tool") return true
+                            if (current.state.status === "pending" || current.state.status === "running") {
+                              yield* ctx.metadata({ title: params.command, metadata: BackgroundShell.metadata(info) })
+                              return false
+                            }
+                            yield* sessions.updatePart({
+                              ...current,
+                              state: {
+                                ...current.state,
+                                metadata: { ...current.state.metadata, ...BackgroundShell.metadata(info) },
+                              },
+                            })
+                            return true
+                          })
+                      : undefined,
+                  onComplete: (info) => {
+                    const ops = ctx.extra?.promptOps as TaskPromptOps | undefined
+                    if (!ops) return Effect.void
+                    return Effect.gen(function* () {
+                      // A subagent can finish while its shell is still building.
+                      // Deliver late results to the primary session rather than waking an orphaned child turn.
+                      const sessionID = ancestors.at(-1) ?? ctx.sessionID
+                      const current = sessions ? yield* sessions.get(sessionID) : undefined
+                      yield* ops.prompt({
+                        sessionID,
+                        agent: current?.agent ?? ctx.agent,
+                        parts: [
+                          {
+                            type: "text",
+                            synthetic: true,
+                            text: [
+                              `Background shell ${info.status}: ${params.command}`,
+                              `Job ID: ${info.id}; exit code: ${info.exit ?? "none"}${info.error ? `; error: ${info.error}` : ""}`,
+                              `Full output: ${info.outputPath}`,
+                              "Load shell_tools to read or search the logs if needed.",
+                            ].join("\n"),
+                          },
+                        ],
+                      })
+                    }).pipe(Effect.asVoid, Effect.ignore)
+                  },
+                })
+                return {
+                  title: params.command,
+                  metadata: BackgroundShell.metadata(info),
+                  output: [
+                    `Background shell started: ${info.id}`,
+                    `Command: ${params.command}`,
+                    `Full output: ${info.outputPath}`,
+                    `Stdout: ${info.stdoutPath}`,
+                    `Stderr: ${info.stderrPath}`,
+                    `Stdin: ${info.stdinOpen ? "open (piped)" : "closed"}`,
+                    "Load shell_tools for the workflow guide and tools to inspect/search output, send stdin, or stop this job.",
+                    "You will be notified when it finishes. Do not sleep or repeatedly poll; continue independent work or end your response.",
+                  ].join("\n"),
+                }
+              }
               return yield* run(
                 {
                   shell,
@@ -638,7 +742,7 @@ export const ShellTool = Tool.define(
                 },
                 ctx,
               )
-            }),
+            }).pipe(Effect.orDie),
         }
       })
   }),

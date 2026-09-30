@@ -21,6 +21,8 @@ import { CompactTool } from "./compact"
 import { ContextUsageTool } from "./context-usage"
 import { McpManagementTools, managementRequested } from "./mcp-manage"
 import { ReminderManagementTools, reminderManagementRequested } from "./reminder-manage"
+import { ShellManagementTools, shellManagementRequested } from "./shell-manage"
+import { BackgroundShell } from "@/background/shell"
 import { Global } from "@opencode-ai/core/global"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import * as Tool from "./tool"
@@ -128,6 +130,7 @@ const layer = Layer.effect(
     const contextUsage = yield* ContextUsageTool
     const mcpManagement = yield* McpManagementTools
     const reminderManagement = yield* ReminderManagementTools
+    const shellManagement = yield* ShellManagementTools
     const agent = yield* Agent.Service
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
     const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
@@ -245,6 +248,7 @@ const layer = Layer.effect(
         })
         const management = yield* Effect.forEach(mcpManagement, (tool) => Tool.init(tool))
         const reminders = yield* Effect.forEach(reminderManagement, (tool) => Tool.init(tool))
+        const shells = yield* Effect.forEach(shellManagement, (tool) => Tool.init(tool))
 
         return {
           custom,
@@ -268,6 +272,7 @@ const layer = Layer.effect(
             tool.contextUsage,
             ...management,
             ...reminders,
+            ...shells,
             tool.patch,
             ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
@@ -317,9 +322,11 @@ const layer = Layer.effect(
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const management = managementRequested(input.messages ?? [])
       const reminders = reminderManagementRequested(input.messages ?? [])
+      const shells = shellManagementRequested(input.messages ?? [])
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id !== "mcp_tools" && mcpManagement.some((item) => item.id === tool.id)) return management
         if (tool.id !== "reminder_tools" && reminderManagement.some((item) => item.id === tool.id)) return reminders
+        if (tool.id !== "shell_tools" && shellManagement.some((item) => item.id === tool.id)) return shells
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }
@@ -467,6 +474,7 @@ export const node = LayerNode.make({
     Skill.node,
     Session.node,
     BackgroundJob.node,
+    BackgroundShell.node,
     Provider.node,
     LSP.node,
     Instruction.node,

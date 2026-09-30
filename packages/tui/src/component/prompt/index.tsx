@@ -55,6 +55,8 @@ import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
+import { sessionTasks } from "../../util/session-background"
+import { DialogTasks } from "../dialog-tasks"
 import { formatDuration } from "../../util/format"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
@@ -173,6 +175,78 @@ export function Prompt(props: PromptProps) {
   const toast = useToast()
   const reminders = useContext(RemindersContext)
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const tasks = createMemo(() => sessionTasks(props.sessionID, sync.data))
+  const background = createMemo(() => tasks().agents.length)
+  const taskKinds = createMemo(() => [
+    ...(background() > 0 ? ["agents" as const] : []),
+    ...(tasks().shells.length > 0 ? ["shells" as const] : []),
+  ])
+  const [taskSelection, setTaskSelection] = createSignal<"agents" | "shells">()
+  function openTasks(kind: "agents" | "shells") {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    setTaskSelection(undefined)
+    dialog.replace(() => <DialogTasks sessionID={sessionID} kind={kind} />)
+  }
+  function moveTaskSelection(direction: -1 | 1) {
+    const kinds = taskKinds()
+    const selected = taskSelection()
+    const index = selected ? kinds.indexOf(selected) : -1
+    setTaskSelection(kinds[Math.min(index + direction, kinds.length - 1)])
+  }
+  function TaskIndicators() {
+    return (
+      <box flexDirection="column" flexShrink={0}>
+        <Show when={background() > 0}>
+          <text
+            fg={taskSelection() === "agents" ? theme.selectedListItemText : theme.accent}
+            bg={taskSelection() === "agents" ? theme.primary : undefined}
+            wrapMode="none"
+            onMouseUp={() => openTasks("agents")}
+          >
+            {background()} background {background() === 1 ? "agent" : "agents"}
+          </text>
+        </Show>
+        <Show when={tasks().shells.length > 0}>
+          <text
+            fg={taskSelection() === "shells" ? theme.selectedListItemText : theme.accent}
+            bg={taskSelection() === "shells" ? theme.primary : undefined}
+            wrapMode="none"
+            onMouseUp={() => openTasks("shells")}
+          >
+            {tasks().shells.length} {tasks().shells.length === 1 ? "shell" : "shells"}
+          </text>
+        </Show>
+      </box>
+    )
+  }
+  function ActivitySpinner() {
+    return (
+      <Show when={animationsEnabled()} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
+        <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+      </Show>
+    )
+  }
+  function InterruptHint() {
+    return (
+      <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
+        esc{" "}
+        <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
+          {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
+        </span>
+      </text>
+    )
+  }
+  createEffect(() => {
+    const selected = taskSelection()
+    if (selected && !taskKinds().includes(selected)) setTaskSelection(undefined)
+  })
+  createEffect(
+    on(
+      () => props.sessionID,
+      () => setTaskSelection(undefined),
+    ),
+  )
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -361,6 +435,11 @@ export function Prompt(props: PromptProps) {
         hidden: true,
         run: async () => {
           if (!input.focused) return
+          const selected = taskSelection()
+          if (selected) {
+            openTasks(selected)
+            return
+          }
           const handled = await submit()
           if (!handled) return
 
@@ -393,7 +472,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: status().type !== "idle" || taskKinds().length > 0,
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -576,6 +655,34 @@ export function Prompt(props: PromptProps) {
       "workspace.set",
       "session.move",
     ]),
+  }))
+
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: taskSelection() !== undefined && !auto()?.visible && !props.disabled,
+    bindings: [
+      ...["left", "right"].map((key) => ({
+        key,
+        desc: "Select running tasks",
+        group: "Prompt",
+        cmd: () => {
+          const kinds = taskKinds()
+          const index = kinds.indexOf(taskSelection() ?? kinds[0])
+          setTaskSelection(kinds[(index + (key === "right" ? 1 : kinds.length - 1)) % kinds.length])
+        },
+      })),
+      { key: "up", desc: "Previous task or return to prompt", group: "Prompt", cmd: () => moveTaskSelection(-1) },
+      { key: "down", desc: "Next running task", group: "Prompt", cmd: () => moveTaskSelection(1) },
+      {
+        key: "return",
+        desc: "Inspect running tasks",
+        group: "Prompt",
+        cmd: () => {
+          const selected = taskSelection()
+          if (selected) openTasks(selected)
+        },
+      },
+    ],
   }))
 
   const ref: PromptRef = {
@@ -871,6 +978,10 @@ export function Prompt(props: PromptProps) {
           title: "Previous prompt history",
           category: "Prompt",
           run() {
+            if (taskSelection()) {
+              moveTaskSelection(-1)
+              return
+            }
             if (input.cursorOffset !== 0) {
               if (input.scrollY + input.visualCursor.visualRow === 0) input.cursorOffset = 0
               return false
@@ -903,6 +1014,15 @@ export function Prompt(props: PromptProps) {
           title: "Next prompt history",
           category: "Prompt",
           run() {
+            if (
+              taskKinds().length > 0 &&
+              !history.isBrowsing(input.plainText) &&
+              input.scrollY + input.visualCursor.visualRow ===
+                Math.max(0, input.editorView.getTotalVirtualLineCount() - 1)
+            ) {
+              moveTaskSelection(1)
+              return
+            }
             if (input.cursorOffset !== input.plainText.length) {
               if (
                 input.scrollY + input.visualCursor.visualRow ===
@@ -1408,6 +1528,7 @@ export function Prompt(props: PromptProps) {
               minHeight={1}
               maxHeight={maxHeight()}
               onContentChange={() => {
+                setTaskSelection(undefined)
                 const value = input.plainText
                 setStore("prompt", "input", value)
                 auto()?.onInput(value)
@@ -1587,147 +1708,153 @@ export function Prompt(props: PromptProps) {
           />
         </box>
         <box width="100%" flexDirection="row" justifyContent="space-between">
-          <Switch>
-            <Match when={status().type !== "idle"}>
-              <box
-                flexDirection="row"
-                gap={1}
-                flexGrow={1}
-                justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
-              >
-                <box flexShrink={0} flexDirection="row" gap={1}>
-                  <box marginLeft={1}>
-                    <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
-                      <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+          <box flexDirection="row" gap={2} flexGrow={status().type === "retry" ? 1 : undefined}>
+            <box flexDirection="column" flexGrow={status().type === "retry" ? 1 : undefined}>
+              <Show when={props.sessionID}>
+                <box marginLeft={1}>
+                  <text fg={theme.textMuted}>{location()?.directory ?? paths.cwd}</text>
+                </box>
+              </Show>
+              <Switch>
+                <Match when={status().type !== "idle"}>
+                  <box
+                    flexDirection="row"
+                    gap={1}
+                    flexGrow={1}
+                    justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
+                  >
+                    <box flexShrink={0} flexDirection="row" gap={1}>
+                      <box marginLeft={1}>
+                        <ActivitySpinner />
+                      </box>
+                      <box flexDirection="row" gap={1} flexShrink={0}>
+                        {(() => {
+                          const retry = createMemo(() => {
+                            const s = status()
+                            if (s.type !== "retry") return
+                            return s
+                          })
+                          const message = createMemo(() => {
+                            const r = retry()
+                            if (!r) return
+                            if (r.message.includes("exceeded your current quota") && r.message.includes("gemini"))
+                              return "gemini is way too hot right now"
+                            if (r.message.length > 80) return r.message.slice(0, 80) + "…"
+                            return r.message
+                          })
+                          const isTruncated = createMemo(() => {
+                            const r = retry()
+                            if (!r) return false
+                            return r.message.length > 120
+                          })
+                          const [seconds, setSeconds] = createSignal(0)
+                          onMount(() => {
+                            const timer = setInterval(() => {
+                              const next = retry()?.next
+                              if (next) setSeconds(Math.round((next - Date.now()) / 1000))
+                            }, 1000)
+
+                            onCleanup(() => {
+                              clearInterval(timer)
+                            })
+                          })
+                          const handleMessageClick = () => {
+                            const r = retry()
+                            if (!r) return
+                            if (isTruncated()) {
+                              void DialogAlert.show(dialog, "Retry Error", r.message)
+                            }
+                          }
+
+                          const retryText = () => {
+                            const r = retry()
+                            if (!r) return ""
+                            const baseMessage = message()
+                            const truncatedHint = isTruncated() ? " (click to expand)" : ""
+                            const duration = formatDuration(seconds())
+                            const retryInfo = ` [retrying ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`
+                            return baseMessage + truncatedHint + retryInfo
+                          }
+
+                          return (
+                            <Show when={retry()}>
+                              <box onMouseUp={handleMessageClick}>
+                                <text fg={theme.error}>{retryText()}</text>
+                              </box>
+                            </Show>
+                          )
+                        })()}
+                      </box>
+                    </box>
+                    <InterruptHint />
+                  </box>
+                </Match>
+                <Match when={workspace.notice()}>
+                  {(notice) => (
+                    <box paddingLeft={3}>
+                      <text fg={theme.accent}>{notice()}</text>
+                    </box>
+                  )}
+                </Match>
+                <Match when={workspace.label()}>
+                  {(label) => (
+                    <box paddingLeft={3} flexDirection="row" gap={1}>
+                      <Show when={workspace.creating()}>
+                        <Spinner color={theme.accent} />
+                      </Show>
+                      <text fg={workspace.creating() ? theme.accent : theme.text}>
+                        {(() => {
+                          const item = label()
+                          if (item.type === "new") {
+                            if (workspace.creating())
+                              return `Creating ${item.workspaceType}${".".repeat(workspace.creatingDots())}`
+                            return (
+                              <>
+                                Workspace <span style={{ fg: theme.textMuted }}>(new {item.workspaceType})</span>
+                              </>
+                            )
+                          }
+                          return (
+                            <>
+                              Workspace <span style={{ fg: theme.textMuted }}>{item.workspaceName}</span>
+                            </>
+                          )
+                        })()}
+                      </text>
+                    </box>
+                  )}
+                </Match>
+                <Match when={move.progress()}>
+                  {(progress) => (
+                    <box paddingLeft={3}>
+                      <Spinner color={theme.accent}>
+                        {progress()}
+                        <span style={{ fg: theme.textMuted }}>{".".repeat(move.creatingDots())}</span>
+                      </Spinner>
+                    </box>
+                  )}
+                </Match>
+                <Match when={move.pendingNew()}>
+                  <box paddingLeft={3}>
+                    <text fg={theme.accent}>(new working copy)</text>
+                  </box>
+                </Match>
+                <Match when={true}>
+                  {props.hint ?? (
+                    <Show when={props.sessionID && taskKinds().length > 0}>
+                      <box marginLeft={1} flexDirection="row" gap={1}>
+                        <ActivitySpinner />
+                        <InterruptHint />
+                      </box>
                     </Show>
-                  </box>
-                  <box flexDirection="row" gap={1} flexShrink={0}>
-                    {(() => {
-                      const retry = createMemo(() => {
-                        const s = status()
-                        if (s.type !== "retry") return
-                        return s
-                      })
-                      const message = createMemo(() => {
-                        const r = retry()
-                        if (!r) return
-                        if (r.message.includes("exceeded your current quota") && r.message.includes("gemini"))
-                          return "gemini is way too hot right now"
-                        if (r.message.length > 80) return r.message.slice(0, 80) + "…"
-                        return r.message
-                      })
-                      const isTruncated = createMemo(() => {
-                        const r = retry()
-                        if (!r) return false
-                        return r.message.length > 120
-                      })
-                      const [seconds, setSeconds] = createSignal(0)
-                      onMount(() => {
-                        const timer = setInterval(() => {
-                          const next = retry()?.next
-                          if (next) setSeconds(Math.round((next - Date.now()) / 1000))
-                        }, 1000)
-
-                        onCleanup(() => {
-                          clearInterval(timer)
-                        })
-                      })
-                      const handleMessageClick = () => {
-                        const r = retry()
-                        if (!r) return
-                        if (isTruncated()) {
-                          void DialogAlert.show(dialog, "Retry Error", r.message)
-                        }
-                      }
-
-                      const retryText = () => {
-                        const r = retry()
-                        if (!r) return ""
-                        const baseMessage = message()
-                        const truncatedHint = isTruncated() ? " (click to expand)" : ""
-                        const duration = formatDuration(seconds())
-                        const retryInfo = ` [retrying ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`
-                        return baseMessage + truncatedHint + retryInfo
-                      }
-
-                      return (
-                        <Show when={retry()}>
-                          <box onMouseUp={handleMessageClick}>
-                            <text fg={theme.error}>{retryText()}</text>
-                          </box>
-                        </Show>
-                      )
-                    })()}
-                  </box>
-                </box>
-                <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
-                  esc{" "}
-                  <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
-                    {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
-                  </span>
-                </text>
-              </box>
-            </Match>
-            <Match when={workspace.notice()}>
-              {(notice) => (
-                <box paddingLeft={3}>
-                  <text fg={theme.accent}>{notice()}</text>
-                </box>
-              )}
-            </Match>
-            <Match when={workspace.label()}>
-              {(label) => (
-                <box paddingLeft={3} flexDirection="row" gap={1}>
-                  <Show when={workspace.creating()}>
-                    <Spinner color={theme.accent} />
-                  </Show>
-                  <text fg={workspace.creating() ? theme.accent : theme.text}>
-                    {(() => {
-                      const item = label()
-                      if (item.type === "new") {
-                        if (workspace.creating())
-                          return `Creating ${item.workspaceType}${".".repeat(workspace.creatingDots())}`
-                        return (
-                          <>
-                            Workspace <span style={{ fg: theme.textMuted }}>(new {item.workspaceType})</span>
-                          </>
-                        )
-                      }
-                      return (
-                        <>
-                          Workspace <span style={{ fg: theme.textMuted }}>{item.workspaceName}</span>
-                        </>
-                      )
-                    })()}
-                  </text>
-                </box>
-              )}
-            </Match>
-            <Match when={move.progress()}>
-              {(progress) => (
-                <box paddingLeft={3}>
-                  <Spinner color={theme.accent}>
-                    {progress()}
-                    <span style={{ fg: theme.textMuted }}>{".".repeat(move.creatingDots())}</span>
-                  </Spinner>
-                </box>
-              )}
-            </Match>
-            <Match when={move.pendingNew()}>
-              <box paddingLeft={3}>
-                <text fg={theme.accent}>(new working copy)</text>
-              </box>
-            </Match>
-            <Match when={true}>
-              {props.hint ?? (
-                <Show when={props.sessionID} fallback={<text />}>
-                  <box marginLeft={1}>
-                    <text fg={theme.textMuted}>{location()?.directory ?? paths.cwd}</text>
-                  </box>
-                </Show>
-              )}
-            </Match>
-          </Switch>
+                  )}
+                </Match>
+              </Switch>
+            </box>
+            <Show when={taskKinds().length > 0}>
+              <TaskIndicators />
+            </Show>
+          </box>
           <Show when={status().type !== "retry"}>
             <box gap={2} flexDirection="row">
               <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>

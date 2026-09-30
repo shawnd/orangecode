@@ -16,6 +16,14 @@ export function parameterSchema() {
   return Schema.Struct({
     command: Schema.String.annotate({ description: "The command to execute" }),
     timeout: Schema.optional(PositiveInt).annotate({ description: "Optional timeout in milliseconds" }),
+    background: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Run asynchronously and return a shell job ID immediately. Ideal for long builds, tests, and dev servers. Background jobs have no default timeout; set timeout explicitly if needed. Load shell_tools to inspect/search output, send stdin, or stop the job.",
+    }),
+    stdin: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Keep piped stdin open for a background job so shell_input can send text and EOF. Defaults to false. Requires background=true; this is pipe I/O, not a PTY.",
+    }),
     workdir: Schema.optional(Schema.String).annotate({
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
     }),
@@ -273,19 +281,21 @@ function profile(name: string, platform: NodeJS.Platform, limits: Limits, defaul
 export function render(name: string, platform: NodeJS.Platform, limits: Limits, defaultTimeoutMs: number) {
   const selected = profile(name, platform, limits, defaultTimeoutMs)
   return {
-    description: renderPrompt(DESCRIPTION, {
-      intro: selected.intro,
-      os: platform,
-      shell: name,
-      tmp: Global.Path.tmp,
-      workdirSection: selected.workdirSection,
-      commandSection: selected.commandSection,
-      gitCommands: selected.gitCommands,
-      toolName: ShellID.ToolID,
-      gitCommandRestriction: selected.gitCommandRestriction,
-      createPrInstruction: selected.createPrInstruction,
-      createPrExample: selected.createPrExample,
-    }),
+    description:
+      renderPrompt(DESCRIPTION, {
+        intro: selected.intro,
+        os: platform,
+        shell: name,
+        tmp: Global.Path.tmp,
+        workdirSection: selected.workdirSection,
+        commandSection: selected.commandSection,
+        gitCommands: selected.gitCommands,
+        toolName: ShellID.ToolID,
+        gitCommandRestriction: selected.gitCommandRestriction,
+        createPrInstruction: selected.createPrInstruction,
+        createPrExample: selected.createPrExample,
+      }) +
+      "\n\nFor long-running builds, tests, and servers, use background=true to return immediately with a job ID and searchable stdout/stderr log files. Background jobs have no default timeout. Use stdin=true for programs accepting piped input. Load shell_tools for the background-shell workflow resource and follow-up tool schemas. You will receive a completion notification; do not sleep or repeatedly poll while waiting.",
     parameters: parameterSchema(),
   }
 }

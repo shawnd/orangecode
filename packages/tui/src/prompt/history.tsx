@@ -66,6 +66,9 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
     })
 
     return {
+      isBrowsing(input: string) {
+        return store.index < 0 && store.history.at(store.index)?.input === input
+      },
       move(direction: 1 | -1, input: string) {
         if (!store.history.length) return undefined
         const current = store.history.at(store.index)
