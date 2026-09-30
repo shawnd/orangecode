@@ -502,32 +502,8 @@ const layer = Layer.effect(
           instructions: {},
         }
 
-        yield* Effect.forEach(
-          Object.entries(config),
-          ([key, mcp]) =>
-            Effect.gen(function* () {
-              if (!isMcpConfigured(mcp)) {
-                yield* Effect.logError("Ignoring MCP config entry without type", { key })
-                return
-              }
-
-              if (mcp.enabled === false) {
-                s.status[key] = { status: "disabled" }
-                return
-              }
-
-              const result = yield* create(key, mcp)
-              s.status[key] = result.status
-              if (result.mcpClient) {
-                s.clients[key] = result.mcpClient
-                s.defs[key] = result.defs!
-                if (result.instructions) s.instructions[key] = result.instructions
-                watch(s, key, result.mcpClient, bridge, mcp.timeout)
-              }
-            }),
-          { concurrency: "unbounded" },
-        )
-
+        // Own connected clients before starting parallel initialization so a
+        // cancellation while another server is still connecting closes them too.
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const clients = Object.values(s.clients)
@@ -553,6 +529,32 @@ const layer = Layer.effect(
             )
             pendingOAuthTransports.clear()
           }),
+        )
+
+        yield* Effect.forEach(
+          Object.entries(config),
+          ([key, mcp]) =>
+            Effect.gen(function* () {
+              if (!isMcpConfigured(mcp)) {
+                yield* Effect.logError("Ignoring MCP config entry without type", { key })
+                return
+              }
+
+              if (mcp.enabled === false) {
+                s.status[key] = { status: "disabled" }
+                return
+              }
+
+              const result = yield* create(key, mcp)
+              s.status[key] = result.status
+              if (result.mcpClient) {
+                s.clients[key] = result.mcpClient
+                s.defs[key] = result.defs!
+                if (result.instructions) s.instructions[key] = result.instructions
+                watch(s, key, result.mcpClient, bridge, mcp.timeout)
+              }
+            }),
+          { concurrency: "unbounded" },
         )
 
         return s
