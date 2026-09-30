@@ -14,14 +14,15 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Cause, Effect, Exit } from "effect"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Cause, Effect, Exit, Fiber } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 import { MCP } from "../../src/mcp/index"
 import { McpOAuthCallback } from "../../src/mcp/oauth-callback"
-import { TestInstance } from "../fixture/fixture"
-import { pollWithTimeout, testEffect } from "../lib/effect"
+import { provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 
-const it = testEffect(LayerNode.compile(MCP.node))
+const it = testEffect(LayerNode.compile(LayerNode.group([MCP.node, CrossSpawnSpawner.node])))
 const stdioFixture = path.join(import.meta.dir, "../fixture/mcp-lifecycle-stdio.ts")
 
 type Page<T> = { items: T[]; nextCursor?: string }
@@ -153,11 +154,13 @@ function hangingLifecycleServer() {
       await protocol.connect(transport)
       const requests: string[] = []
       let aborted = 0
+      let hanging = true
       const http = Bun.serve({
         port: 0,
         fetch(request) {
           requests.push(request.method)
           request.signal.addEventListener("abort", () => aborted++)
+          if (!hanging) return transport.handleRequest(request)
           return new Promise<Response>(() => {})
         },
       })
@@ -165,6 +168,9 @@ function hangingLifecycleServer() {
         requests,
         aborted: () => aborted,
         url: http.url.toString(),
+        resume: () => {
+          hanging = false
+        },
         close: async () => {
           await protocol.close().catch(() => {})
           http.stop(true)
@@ -181,6 +187,40 @@ function statusName(status: Record<string, MCPNS.Status> | MCPNS.Status, server:
 }
 
 const remote = (url: string, timeout?: number) => ({ type: "remote" as const, url, oauth: false as const, timeout })
+
+it.instance("cancelled initialization closes connected clients and heals on the next request", () =>
+  Effect.gen(function* () {
+    const connected = yield* lifecycleServer()
+    const hanging = yield* hangingLifecycleServer()
+    const directory = yield* tmpdirScoped({
+      config: { mcp: { connected: remote(connected.url), hanging: remote(hanging.url, 30_000) } },
+    })
+    const mcp = yield* MCP.Service
+    yield* Effect.gen(function* () {
+      const first = yield* mcp.status().pipe(Effect.forkChild)
+      yield* pollWithTimeout(
+        Effect.sync(() =>
+          connected.state.requests.filter((method) => method === "POST").length >= 3 && hanging.requests.length > 0
+            ? true
+            : undefined,
+        ),
+        "MCP initialization did not connect one client while waiting for the other",
+      )
+      yield* Fiber.interrupt(first)
+      expect(Exit.hasInterrupts(yield* Fiber.await(first))).toBe(true)
+      yield* pollWithTimeout(
+        Effect.sync(() => (connected.state.aborted > 0 ? true : undefined)),
+        "connected MCP transport leaked after cancelled initialization",
+      )
+
+      yield* Effect.promise(connected.restart)
+      yield* Effect.sync(hanging.resume)
+      const status = yield* awaitWithTimeout(mcp.status(), "MCP did not heal after cancelled initialization")
+      expect(status).toEqual({ connected: { status: "connected" }, hanging: { status: "connected" } })
+      expect(Object.keys(yield* mcp.clients()).sort()).toEqual(["connected", "hanging"])
+    }).pipe(provideInstanceEffect(directory))
+  }),
+)
 
 it.instance("advertises and lists the instance directory as its root", () =>
   Effect.gen(function* () {
