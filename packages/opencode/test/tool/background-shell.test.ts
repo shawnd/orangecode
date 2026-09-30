@@ -16,6 +16,7 @@ import { BackgroundShell } from "@/background/shell"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { SessionRunState } from "@/session/run-state"
+import { SessionWorkState } from "@/session/work-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShellTool, type Parameters } from "@/tool/shell"
 import { ToolRegistry } from "@/tool/registry"
@@ -29,6 +30,7 @@ const it = testEffect(
     LayerNode.group([
       ToolRegistry.node,
       SessionRunState.node,
+      SessionWorkState.node,
       BackgroundShell.node,
       BackgroundJob.node,
       Session.node,
@@ -157,6 +159,7 @@ describe("background shells", () => {
         const jobs = yield* BackgroundJob.Service
         const fs = yield* FSUtil.Service
         const sessions = yield* Session.Service
+        const activity = yield* SessionWorkState.Service
         const setup = yield* fixture({
           background: true,
           stdin: true,
@@ -173,6 +176,12 @@ describe("background shells", () => {
         )
         const waiting = yield* shells.output({ sessionID: setup.chat.id, id: setup.info.id, wait: 50 })
         expect(waiting.info.status).toBe("running")
+        expect(yield* activity.get(setup.chat.id)).toEqual({
+          type: "working",
+          foreground: "idle",
+          agents: 0,
+          shells: 1,
+        })
         expect(waiting.info.output).not.toContain("early needle")
         const search = yield* shells.output({
           sessionID: setup.chat.id,
@@ -185,6 +194,7 @@ describe("background shells", () => {
         expect(stderr.lines.map((line) => line.text)).toContain("build warning")
         yield* shells.input(setup.chat.id, setup.info.id, "hello\n", true)
         expect((yield* jobs.wait({ id: setup.info.id, timeout: 2000 })).info?.status).toBe("completed")
+        expect(yield* activity.get(setup.chat.id)).toEqual({ type: "idle", foreground: "idle", agents: 0, shells: 0 })
         expect(yield* fs.readFileString(setup.info.stdoutPath)).toContain("input:hello")
         expect(yield* fs.readFileString(setup.info.stderrPath)).not.toContain("input:hello")
         expect((yield* shells.get(setup.chat.id, setup.info.id)).stdinOpen).toBe(false)
@@ -214,11 +224,13 @@ describe("background shells", () => {
     Effect.gen(function* () {
       const shells = yield* BackgroundShell.Service
       const jobs = yield* BackgroundJob.Service
+      const activity = yield* SessionWorkState.Service
       const setup = yield* fixture({
         background: true,
         command: code('console.log("one\\ntwo\\nthree");console.error("failure");process.exitCode=7'),
       })
       expect((yield* jobs.wait({ id: setup.info.id, timeout: 2000 })).info?.status).toBe("error")
+      expect(yield* activity.get(setup.chat.id)).toEqual({ type: "idle", foreground: "idle", agents: 0, shells: 0 })
       const output = yield* shells.output({ sessionID: setup.chat.id, id: setup.info.id, stream: "stdout", limit: 2 })
       expect(output.info.exit).toBe(7)
       expect(output.lines.map((line) => line.text)).toEqual(["one", "two"])
@@ -233,6 +245,7 @@ describe("background shells", () => {
       const timed = yield* fixture({ background: true, timeout: 50, command: code("setInterval(() => {}, 1000)") })
       yield* jobs.wait({ id: timed.info.id, timeout: 2000 })
       expect((yield* shells.get(timed.chat.id, timed.info.id)).error).toContain("timed out")
+      expect(yield* activity.get(timed.chat.id)).toEqual({ type: "idle", foreground: "idle", agents: 0, shells: 0 })
     }),
   )
 
@@ -244,6 +257,7 @@ describe("background shells", () => {
           const sessions = yield* Session.Service
           const shells = yield* BackgroundShell.Service
           const runState = yield* SessionRunState.Service
+          const activity = yield* SessionWorkState.Service
           const parent = yield* sessions.create({ title: "Parent" })
           const child = yield* sessions.create({ parentID: parent.id, title: "Finished subagent" })
           const setup = yield* fixture(
@@ -269,8 +283,10 @@ describe("background shells", () => {
             .filter((line) => /^(?:child)?pid:/.test(line.text))
             .map((line) => Number(line.text.split(":")[1]))
           expect(pids.length).toBe(2)
+          expect(yield* activity.get(parent.id)).toEqual({ type: "working", foreground: "idle", agents: 0, shells: 1 })
           yield* runState.cancel(parent.id)
           expect((yield* shells.get(parent.id, setup.info.id)).status).toBe("cancelled")
+          expect(yield* activity.get(parent.id)).toEqual({ type: "idle", foreground: "idle", agents: 0, shells: 0 })
           for (const pid of pids) {
             yield* pollWithTimeout(
               Effect.try({

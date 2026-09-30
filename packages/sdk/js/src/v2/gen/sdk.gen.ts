@@ -179,6 +179,8 @@ import type {
   QuestionV2Reply,
   SessionAbortErrors,
   SessionAbortResponses,
+  SessionActivityErrors,
+  SessionActivityResponses,
   SessionChildrenErrors,
   SessionChildrenResponses,
   SessionCommandErrors,
@@ -339,6 +341,8 @@ import type {
   V2ReferenceListResponses,
   V2SessionActiveErrors,
   V2SessionActiveResponses,
+  V2SessionActivityErrors,
+  V2SessionActivityResponses,
   V2SessionCompactErrors,
   V2SessionCompactResponses,
   V2SessionContextErrors,
@@ -3526,6 +3530,38 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Get session activity
+   *
+   * Aggregate foreground execution, active descendant agents, background shells, and pending interactions. Blocked takes precedence over working; idle means the entire subtree has no active work. Counts reflect live work owned by this process, not persisted tool history.
+   */
+  public activity<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionActivityResponses, SessionActivityErrors, ThrowOnError>({
+      url: "/session/{sessionID}/activity",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Delete session
    *
    * Delete a session and permanently remove all associated data, including messages and history.
@@ -5529,11 +5565,12 @@ export class Session3 extends HeyApiClient {
   /**
    * List sessions
    *
-   * Retrieve sessions in the requested order. Items keep that order across pages; use cursor.next or cursor.previous to move through the ordered list.
+   * Retrieve sessions in the requested order, optionally filtered by agent. Items keep that order across pages; use cursor.next or cursor.previous to move through the ordered list.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
       workspace?: string
+      agent?: string
       limit?: number
       order?: "asc" | "desc"
       search?: string
@@ -5550,6 +5587,7 @@ export class Session3 extends HeyApiClient {
         {
           args: [
             { in: "query", key: "workspace" },
+            { in: "query", key: "agent" },
             { in: "query", key: "limit" },
             { in: "query", key: "order" },
             { in: "query", key: "search" },
@@ -5616,6 +5654,25 @@ export class Session3 extends HeyApiClient {
     return (options?.client ?? this.client).get<V2SessionActiveResponses, V2SessionActiveErrors, ThrowOnError>({
       url: "/api/session/active",
       ...options,
+    })
+  }
+
+  /**
+   * Get session activity
+   *
+   * Aggregate foreground execution, active descendant agents, background shells, and pending interactions. Blocked takes precedence over working; idle means the entire subtree has no active work. Counts reflect live work owned by this process, not persisted tool history.
+   */
+  public activity<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<V2SessionActivityResponses, V2SessionActivityErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/activity",
+      ...options,
+      ...params,
     })
   }
 

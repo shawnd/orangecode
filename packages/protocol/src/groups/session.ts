@@ -21,6 +21,7 @@ import { Model } from "@opencode-ai/schema/model"
 import { Location } from "@opencode-ai/schema/location"
 import { Revert } from "@opencode-ai/schema/revert"
 import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { SessionWorkState } from "@opencode-ai/schema/session-work-state"
 
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
@@ -169,6 +170,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           summary: "List active sessions",
           description:
             "Retrieve foreground Session drains currently owned by this OpenCode process. Sessions absent from the result are inactive.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.activity", "/api/session/:sessionID/activity", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionWorkState.Info }),
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.activity",
+          summary: "Get session activity",
+          description:
+            "Aggregate foreground execution, active descendant agents, background shells, and pending interactions. Blocked takes precedence over working; idle means the entire subtree has no active work. Counts reflect live work owned by this process, not persisted tool history.",
         }),
       ),
     )

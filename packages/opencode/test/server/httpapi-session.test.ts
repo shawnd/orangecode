@@ -4,7 +4,10 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { createServer, type Socket } from "node:net"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { createHerdrActivityReporter } from "../../../tui/src/util/herdr-activity"
+import { Cause, Config, Effect, Exit, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -24,6 +27,7 @@ import * as HttpSessionError from "../../src/server/routes/instance/httpapi/hand
 import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/groups/experimental"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
+import { BackgroundJob } from "@/background/job"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
@@ -35,7 +39,7 @@ import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
-import { TestLLMServer } from "../lib/llm-server"
+import { Reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
@@ -45,7 +49,15 @@ const noopBootstrapLayer = Layer.succeed(
   InstanceBootstrapService.Service.of({ run: Effect.void }),
 )
 const appLayer = AppNodeBuilder.build(
-  LayerNode.group([InstanceStore.node, Project.node, Session.node, Workspace.node, Database.node, Ripgrep.node]),
+  LayerNode.group([
+    InstanceStore.node,
+    Project.node,
+    Session.node,
+    BackgroundJob.node,
+    Workspace.node,
+    Database.node,
+    Ripgrep.node,
+  ]),
   [[InstanceStore.bootstrapNode, noopBootstrapLayer]],
 )
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
@@ -236,6 +248,215 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.live(
+    "keeps aggregate activity working after a real background agent outlives its parent",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const release = Promise.withResolvers<void>()
+        const parentRequest = (hit: { body: Record<string, unknown> }) =>
+          JSON.stringify(hit.body.messages).includes("Start a background task")
+        yield* llm.toolMatch(parentRequest, "task", {
+          description: "Inspect child",
+          prompt: "inspect child",
+          subagent_type: "general",
+          background: true,
+        })
+        yield* llm.pushMatch(
+          (hit) => !parentRequest(hit),
+          new Reply().text("child finished").wait(release.promise).stop(),
+        )
+        yield* llm.textMatch(parentRequest, "Waiting for the child")
+        yield* llm.textMatch(parentRequest, "All done")
+        const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+        const root = yield* createSession({ title: "real agent activity" }).pipe(provideInstanceEffect(directory))
+        yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()))
+        const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+        const response = yield* request(pathFor(SessionPaths.prompt, { sessionID: root.id }), {
+          headers,
+          method: "POST",
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text: "Start a background task" }],
+          }),
+        })
+        expect(response.status).toBe(200)
+        yield* responseJson(response)
+        yield* llm.wait(3)
+        const url = pathFor(SessionPaths.activity, { sessionID: root.id })
+        expect(yield* requestJson(url, { headers })).toEqual({
+          type: "working",
+          foreground: "idle",
+          agents: 1,
+          shells: 0,
+        })
+        expect((yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers }))[root.id]).toBeUndefined()
+        const children = yield* requestJson<Session.Info[]>(pathFor(SessionPaths.children, { sessionID: root.id }), {
+          headers,
+        })
+        expect(children).toHaveLength(1)
+        const child = children[0]
+        if (!child) return yield* Effect.die("Background task did not create a child session")
+        expect(child.parentID).toBe(root.id)
+        expect(yield* requestJson(pathFor(SessionPaths.activity, { sessionID: child.id }), { headers })).toEqual({
+          type: "working",
+          foreground: "working",
+          agents: 0,
+          shells: 0,
+        })
+        const reports: Array<{ method: string; params: { agent_session_id: string; state?: string; seq?: number } }> =
+          []
+        const decode = Schema.decodeUnknownSync(
+          Schema.fromJsonString(
+            Schema.Struct({
+              method: Schema.String,
+              params: Schema.Struct({
+                agent_session_id: Schema.String,
+                state: Schema.optional(Schema.String),
+                seq: Schema.optional(Schema.Number),
+              }),
+            }),
+          ),
+        )
+        const socketPath = path.join(directory, "herdr.sock")
+        const sockets = new Set<Socket>()
+        yield* Effect.acquireRelease(
+          Effect.promise(
+            () =>
+              new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
+                const server = createServer((socket) => {
+                  sockets.add(socket)
+                  socket.once("close", () => sockets.delete(socket))
+                  socket.on("error", () => socket.destroy())
+                  let frame = ""
+                  socket.on("data", (buffer) => {
+                    frame += buffer.toString()
+                    const end = frame.indexOf("\n")
+                    if (end < 0) return
+                    reports.push(decode(frame.slice(0, end)))
+                    socket.end('{"result":{}}\n')
+                  })
+                })
+                server.once("error", reject)
+                server.listen(socketPath, () => resolve(server))
+              }),
+          ),
+          (server) =>
+            Effect.promise(
+              () =>
+                new Promise<void>((resolve) => {
+                  sockets.forEach((socket) => socket.destroy())
+                  server.close(() => resolve())
+                }),
+            ),
+        )
+        const http = yield* HttpServer.HttpServer
+        if (http.address._tag !== "TcpAddress") return yield* Effect.die("Expected TCP HTTP server")
+        const client = createOpencodeClient({ baseUrl: `http://127.0.0.1:${http.address.port}` })
+        const dispose = createHerdrActivityReporter({
+          current: () => root.id,
+          paneID: "test:p1",
+          socketPath,
+          interval: 20,
+          async read(sessionID, signal) {
+            const result = await client.session.activity({ sessionID, directory }, { signal, throwOnError: true })
+            if (!result.data) throw new Error("Activity response missing")
+            return result.data
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(dispose))
+        const working = yield* pollWithTimeout(
+          Effect.sync(() => reports.find((report) => report.params.state === "working")),
+          "Herdr working report missing",
+        )
+        expect(working.params.agent_session_id).toBe(root.id)
+        expect(reports[0]?.method).toBe("pane.report_agent_session")
+        release.resolve()
+        // Completion wakes the parent after a brief idle gap. Wait for its final
+        // persisted reply before checking idle, rather than accepting that gap.
+        yield* pollWithTimeout(
+          requestJson<SessionV1.WithParts[]>(pathFor(SessionPaths.messages, { sessionID: root.id }), { headers }).pipe(
+            Effect.map((messages) =>
+              messages.find(
+                (message) =>
+                  message.info.role === "assistant" &&
+                  message.info.time.completed &&
+                  message.parts.some((part) => part.type === "text" && part.text === "All done"),
+              ),
+            ),
+          ),
+          "parent did not complete the child notification turn",
+        )
+        const activity = yield* pollWithTimeout(
+          requestJson<{ type: string; foreground: string; agents: number; shells: number }>(url, { headers }).pipe(
+            Effect.map((activity) => (activity.type === "idle" ? activity : undefined)),
+          ),
+          "agent and completion turn did not finish",
+        )
+        expect(activity).toEqual({ type: "idle", foreground: "idle", agents: 0, shells: 0 })
+        const messages = yield* requestJson<SessionV1.WithParts[]>(
+          pathFor(SessionPaths.messages, { sessionID: child.id }),
+          {
+            headers,
+          },
+        )
+        expect(
+          messages.some(
+            (message) =>
+              message.info.role === "assistant" &&
+              message.info.time.completed &&
+              message.parts.some((part) => part.type === "text" && part.text === "child finished"),
+          ),
+        ).toBe(true)
+        const idle = yield* pollWithTimeout(
+          Effect.sync(() => {
+            const report = reports.findLast((report) => report.params.state !== undefined)
+            return report?.params.state === "idle" ? report : undefined
+          }),
+          "Herdr idle report missing",
+        )
+        expect(idle.params.agent_session_id).toBe(root.id)
+        expect(idle.params.seq).toBeGreaterThan(working.params.seq ?? 0)
+        expect(idle.method).toBe("pane.report_agent")
+        expect(yield* llm.pending).toBe(0)
+        expect(yield* llm.misses).toEqual([])
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+    20_000,
+  )
+
+  it.instance("reports aggregate shell activity separately from foreground status", () =>
+    Effect.gen(function* () {
+      const instance = yield* TestInstance
+      const jobs = yield* BackgroundJob.Service
+      const root = yield* createSession({ title: "background activity" })
+      const child = yield* createSession({ parentID: root.id })
+      const headers = { "x-opencode-directory": instance.directory }
+      const job = yield* jobs.start({
+        type: "shell",
+        metadata: { sessionId: child.id, background: true },
+        run: Effect.never,
+      })
+      const url = pathFor(SessionPaths.activity, { sessionID: root.id })
+      expect(yield* requestJson(url, { headers })).toEqual({
+        type: "working",
+        foreground: "idle",
+        agents: 0,
+        shells: 1,
+      })
+      expect(yield* requestJson(SessionPaths.status, { headers })).toEqual({})
+      yield* jobs.cancel(job.id)
+      expect(yield* requestJson(url, { headers })).toEqual({ type: "idle", foreground: "idle", agents: 0, shells: 0 })
+
+      const missing = yield* request(pathFor(SessionPaths.activity, { sessionID: SessionID.create() }), { headers })
+      expect(missing.status).toBe(404)
+      const current = yield* requestJson(`/api/session/${root.id}/activity`, { headers })
+      expect(current).toEqual({ data: { type: "idle", foreground: "idle", agents: 0, shells: 0 } })
+      const missingCurrent = yield* request(`/api/session/${SessionID.create()}/activity`, { headers })
+      expect(missingCurrent.status).toBe(404)
+    }),
+  )
+
   it.effect("maps busy sessions to public session busy errors", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.descending()
@@ -729,19 +950,25 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
-    "serves sessions with migrated summary diffs missing file details",
+    "normalizes migrated summary diffs and refreshes changes for an empty session",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const session = yield* createSession({ title: "legacy diff" })
         yield* setLegacySummaryDiff(session.id)
+        expect((yield* Session.use.get(session.id)).summary?.diffs).toEqual([{ additions: 1, deletions: 0 }])
 
         const response = yield* request(pathFor(SessionPaths.get, { sessionID: session.id }), {
           headers: { "x-opencode-directory": test.directory },
         })
 
         expect(response.status).toBe(200)
-        expect((yield* json<Session.Info>(response)).summary?.diffs).toEqual([{ additions: 1, deletions: 0 }])
+        expect((yield* json<Session.Info>(response)).summary).toEqual({
+          additions: 0,
+          deletions: 0,
+          files: 0,
+          diffs: [],
+        })
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

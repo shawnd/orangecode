@@ -1,4 +1,5 @@
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionWork } from "@opencode-ai/core/session/work"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -19,6 +20,7 @@ const DefaultSessionHistoryLimit = 50
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
+    const work = yield* SessionWork.Service
 
     return handlers
       .handle(
@@ -95,6 +97,28 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           return {
             data: Object.fromEntries(
               Array.from(yield* session.active, (sessionID) => [sessionID, { type: "running" as const }]),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "session.activity",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* work.get(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+              Effect.mapError((error) =>
+                error instanceof SessionNotFoundError
+                  ? error
+                  : new ServiceUnavailableError({ message: "Session activity is unavailable" }),
+              ),
             ),
           }
         }),

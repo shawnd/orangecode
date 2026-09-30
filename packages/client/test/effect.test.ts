@@ -15,6 +15,19 @@ test("sessions.get returns the decoded Effect projection", async () => {
   expect(DateTime.toEpochMillis(result.time.created)).toBe(1_717_171_717_000)
 })
 
+test("sessions.activity decodes aggregate activity and background counts", async () => {
+  const activity = { type: "working", foreground: "idle", agents: 2, shells: 1 }
+  const httpClient = HttpClient.make((request) => {
+    expect(request.url).toBe("http://localhost:3000/api/session/ses_test/activity")
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: activity })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* OpenCode.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.sessions.activity({ sessionID: Session.ID.make("ses_test") })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+  expect(result).toEqual(activity)
+})
+
 test("events.subscribe exposes and decodes the native Effect event stream", async () => {
   const httpClient = HttpClient.make((request) =>
     Effect.succeed(

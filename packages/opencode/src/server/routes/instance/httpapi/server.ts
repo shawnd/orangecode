@@ -8,6 +8,8 @@ import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
+import { SessionWorkState } from "@/session/work-state"
+import { SessionWork } from "@opencode-ai/core/session/work"
 import { Command } from "@/command"
 import { Config } from "@/config/config"
 import { Workspace } from "@/control-plane/workspace"
@@ -235,6 +237,7 @@ const app = LayerNode.group([
   Session.node,
   SessionProjector.node,
   SessionStatus.node,
+  SessionWorkState.node,
   BackgroundJob.node,
   RuntimeFlags.node,
   EventV2Bridge.node,
@@ -298,7 +301,7 @@ export function createRoutes(
     Layer.provide(locationLayer),
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
-      AppNodeBuilderV1.build(SessionV2.node, [
+      AppNodeBuilderV1.build(LayerNode.group([SessionV2.node, SessionWork.node]), [
         [LocationServiceMap.node, locationServiceMapV2],
         [SessionExecution.node, SessionExecutionLocal.node],
       ]),
