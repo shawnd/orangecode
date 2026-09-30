@@ -1,17 +1,125 @@
-import { expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, test } from "bun:test"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { CliRendererConfig } from "@opentui/core"
-import { Effect } from "effect"
-import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { Effect, Layer } from "effect"
 import { Global } from "@opencode-ai/core/global"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { createEventSource, createFetch, directory, json } from "./fixture/tui-sdk"
+import { tmpdir } from "./fixture/fixture"
+import path from "path"
+import type { EarlyInput } from "../src/context/runtime"
+
+let root: Awaited<ReturnType<typeof tmpdir>>
+beforeEach(async () => {
+  root = await tmpdir()
+})
+afterEach(async () => {
+  await root[Symbol.asyncDispose]()
+})
+const testGlobal = () =>
+  Layer.succeed(Global.Service, { ...Global.Path, home: root.path, state: root.path, data: root.path })
+
+test.each(["renderer", "takeover"])(
+  "startup failure during %s releases the plugin host before it starts",
+  async (phase) => {
+    const core = await import("@opentui/core")
+    let rendererCalls = 0
+    mock.module("@opentui/core", () => ({
+      ...core,
+      createCliRenderer: async () => {
+        rendererCalls++
+        throw new Error("renderer setup failed")
+      },
+    }))
+    let started = 0
+    let disposed = 0
+    let inputDisposed = 0
+    const early: EarlyInput = {
+      active: true,
+      read: () => ({ text: "", cursor: 0 }),
+      subscribe: () => () => {},
+      takeover: async () => {
+        throw new Error("input takeover failed")
+      },
+      onCancel() {},
+      claim: () => undefined,
+      dispose() {
+        inputDisposed++
+      },
+    }
+    try {
+      const { run } = await import("../src/app")
+      await expect(
+        Effect.runPromise(
+          run({
+            url: "http://test",
+            directory,
+            config: createTuiResolvedConfig({ plugin_enabled: {} }),
+            fetch: createFetch().fetch,
+            events: createEventSource().source,
+            args: {},
+            earlyInput: phase === "takeover" ? early : undefined,
+            pluginHost: {
+              async start() {
+                started++
+              },
+              async dispose() {
+                disposed++
+              },
+            },
+          }).pipe(Effect.provide(testGlobal())),
+        ),
+      ).rejects.toThrow(phase === "takeover" ? "input takeover failed" : "renderer setup failed")
+      expect(started).toBe(0)
+      expect(disposed).toBe(1)
+      expect(rendererCalls).toBe(phase === "renderer" ? 1 : 0)
+      expect(inputDisposed).toBe(phase === "takeover" ? 1 : 0)
+    } finally {
+      mock.restore()
+    }
+  },
+)
+
+test("immediate Ctrl+C flushes a newly favorited model and the subprocess exits naturally", async () => {
+  await using tmp = await tmpdir()
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixture/favorite-exit.tsx")], {
+    env: {
+      ...process.env,
+      XDG_DATA_HOME: path.join(tmp.path, "data"),
+      XDG_STATE_HOME: path.join(tmp.path, "state"),
+      XDG_CONFIG_HOME: path.join(tmp.path, "config"),
+      OPENCODE_DB: path.join(tmp.path, "opencode.db"),
+      OPENCODE_DISABLE_MODELS_FETCH: "true",
+      OPENCODE_DISABLE_AUTOUPDATE: "true",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    expect(code, stderr).toBe(0)
+    expect(stdout).toContain("favorite survived immediate Ctrl+C")
+  } finally {
+    if (child.exitCode === null) child.kill()
+  }
+}, 10_000)
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  let onDestroy: CliRendererConfig["onDestroy"]
+  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false, onDestroy: () => onDestroy?.() })
   const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  mock.module("@opentui/core", () => ({
+    ...core,
+    createCliRenderer: async (config: CliRendererConfig) => {
+      onDestroy = config.onDestroy
+      return setup.renderer
+    },
+  }))
   const titles: string[] = []
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
@@ -45,7 +153,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
             disposes++
           },
         },
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      }).pipe(Effect.provide(testGlobal())),
     )
     await ready
     process.emit("SIGHUP")
@@ -62,9 +170,16 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
 })
 
 test("app.exit prints the session epilogue after scoped cleanup", async () => {
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  let onDestroy: CliRendererConfig["onDestroy"]
+  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false, onDestroy: () => onDestroy?.() })
   const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  mock.module("@opentui/core", () => ({
+    ...core,
+    createCliRenderer: async (config: CliRendererConfig) => {
+      onDestroy = config.onDestroy
+      return setup.renderer
+    },
+  }))
   const events = createEventSource()
   const calls = createFetch((url) => {
     if (url.pathname === "/session")
@@ -82,6 +197,7 @@ test("app.exit prints the session epilogue after scoped cleanup", async () => {
   })
   const originalWrite = process.stdout.write.bind(process.stdout)
   let stdout = ""
+  let disposes = 0
   let api: TuiPluginApi | undefined
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
@@ -108,9 +224,13 @@ test("app.exit prints the session epilogue after scoped cleanup", async () => {
             api = input.api
             started()
           },
-          async dispose() {},
+          async dispose() {
+            expect(setup.renderer.isDestroyed).toBe(true)
+            expect(stdout).not.toContain("oc -s dummy")
+            disposes++
+          },
         },
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      }).pipe(Effect.provide(testGlobal())),
     )
 
     await ready
@@ -121,6 +241,7 @@ test("app.exit prints the session epilogue after scoped cleanup", async () => {
 
     expect(stdout).toContain("Demo session")
     expect(stdout).toContain("oc -s dummy")
+    expect(disposes).toBe(1)
   } finally {
     process.stdout.write = originalWrite
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
@@ -208,7 +329,7 @@ test.each([false, true])("/restart is visible and preserves location after clean
             disposes++
           },
         },
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      }).pipe(Effect.provide(testGlobal())),
     )
     await ready
     await setup.renderOnce()
@@ -230,9 +351,16 @@ test.each([false, true])("/restart is visible and preserves location after clean
 })
 
 test("fatal startup errors set a nonzero exit after scoped cleanup", async () => {
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  let onDestroy: CliRendererConfig["onDestroy"]
+  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false, onDestroy: () => onDestroy?.() })
   const core = await import("@opentui/core")
-  await mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  await mock.module("@opentui/core", () => ({
+    ...core,
+    createCliRenderer: async (config: CliRendererConfig) => {
+      onDestroy = config.onDestroy
+      return setup.renderer
+    },
+  }))
   const events = createEventSource()
   const calls = createFetch((url) => {
     if (url.pathname === "/config")
@@ -274,7 +402,7 @@ test("fatal startup errors set a nonzero exit after scoped cleanup", async () =>
             disposes++
           },
         },
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      }).pipe(Effect.provide(testGlobal())),
     )
 
     await task

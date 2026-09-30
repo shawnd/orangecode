@@ -190,3 +190,32 @@ flock /tmp/opencode/shared-server-bench.lock env NATIVE_EVENT_BIN=/tmp/opencode/
 - Previously identified security/configuration and foreign-MCP/reminder ownership
   issues are outside these optimization experiments. Resource-policy profile
   identity does not completely fingerprint all credential/configuration inputs.
+
+## Subsequent synchronization with `shawnd`
+
+Merged `shawnd` at `7bd0148203fb641f3413ca9fac13e5bab1bcd75c` into
+`shared-server`, preserving the six experiments. Reconciliation retains early
+startup input and parallel UI/config imports alongside the shared daemon, and
+combines shutdown cancellation with lossless batching and selective interests.
+The explicit-network worker retains awaited, idempotent cleanup. Its failed-
+validation fixture now explicitly selects that worker rather than a persistent
+shared daemon. Background tasks inherit `shawnd`'s enabled default; job-output
+release remains independently opt-in.
+
+Both generators completed; legacy SDK regeneration also supplies the merged V2
+session-list agent filter. All eight package typechecks passed. Focused tests:
+OpenCode 121, TUI 35, Core 9; 165 passed, zero failures. The explicit-worker
+shutdown test additionally passed after the fixture adjustment. The temporary
+daemon created by the earlier fixture invocation was identified by its isolated
+test database/configuration and stopped.
+
+The synchronized native build is worktree-local at
+`packages/opencode/dist/opencode-linux-x64/bin/opencode`, version
+`0.0.0-shared-server-sync-20260930`, SHA256
+`8a02447126172206a02223fba87032205283f4876fd2860663eb7da6fddb4db3`.
+Both rebuilt MINI and full-TUI flows passed footer approval, tool completion,
+visible response, resume, fork and the headless checks described above. Artifacts:
+`/tmp/opencode/shared-shawnd-sync-{mini,full}-flow/result.json`. Their owned
+daemon/client process IDs and endpoint metadata were absent after cleanup.
+The frozen binaries and performance measurements above still describe the
+pre-sync revisions; they are not measurements of this subsequent merge.

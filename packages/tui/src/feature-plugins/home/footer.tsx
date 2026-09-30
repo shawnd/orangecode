@@ -4,6 +4,7 @@ import { createMemo, Match, Show, Switch } from "solid-js"
 import { abbreviateHome } from "../../runtime"
 import { useTuiPaths } from "../../context/runtime"
 import { useHomeSessionDestination } from "../../routes/home/session-destination"
+import { GitStatus } from "../../component/git-status"
 
 const id = "internal:home-footer"
 
@@ -14,11 +15,7 @@ function Directory(props: { api: TuiPluginApi }) {
   const dir = createMemo(() => {
     const selected = destination?.destination()
     if (!selected || selected.type === "new") return
-    const out = abbreviateHome(selected.directory, paths.home)
-    const branch =
-      selected.directory === (props.api.state.path.directory || paths.cwd) ? props.api.state.vcs?.branch : undefined
-    if (branch) return out + ":" + branch
-    return out
+    return abbreviateHome(selected.directory, paths.home)
   })
 
   return <Show when={dir()}>{(value) => <text fg={theme().textMuted}>{value()}</text>}</Show>
@@ -62,6 +59,11 @@ function Version(props: { api: TuiPluginApi }) {
 }
 
 function View(props: { api: TuiPluginApi }) {
+  const destination = useHomeSessionDestination()
+  const directory = createMemo(() => {
+    const selected = destination?.destination()
+    return selected?.type === "directory" ? selected.directory : undefined
+  })
   return (
     <box
       width="100%"
@@ -76,6 +78,7 @@ function View(props: { api: TuiPluginApi }) {
       <Directory api={props.api} />
       <Mcp api={props.api} />
       <box flexGrow={1} />
+      <Show when={directory()}>{(selected) => <GitStatus directory={selected()} />}</Show>
       <Version api={props.api} />
     </box>
   )

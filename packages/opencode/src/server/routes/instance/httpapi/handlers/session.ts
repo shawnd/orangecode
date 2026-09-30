@@ -83,6 +83,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* summary
+        .sessionDiff(ctx.params.sessionID)
+        .pipe(Effect.catchCause((cause) => Effect.logWarning("failed to refresh session changes", { cause })))
       return yield* requireSession(ctx.params.sessionID)
     })
 
@@ -231,6 +235,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* promptSvc.cancel(ctx.params.sessionID)
+      return true
+    })
+
+    const resume = Effect.fn("SessionHttpApi.resume")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
+      if (!messages.some((message) => message.info.role === "user")) return yield* new HttpApiError.BadRequest({})
+      yield* promptSvc.loop({ sessionID: ctx.params.sessionID })
       return true
     })
 
@@ -424,6 +436,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("update", update)
       .handleRaw("fork", forkRaw)
       .handle("abort", abort)
+      .handle("resume", resume)
       .handle("init", init)
       .handle("share", share)
       .handle("unshare", unshare)

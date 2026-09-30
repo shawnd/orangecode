@@ -3,13 +3,14 @@ import { registerOpencodeSpinner } from "./component/register-spinner"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { Deferred, Effect } from "effect"
 import { Global } from "@opencode-ai/core/global"
+import { flushStartupPresentation } from "./startup/cache"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { ExitProvider, useExit, type Restart } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import * as Selection from "./util/selection"
-import { createCliRenderer, MouseButton } from "@opentui/core"
+import { MouseButton } from "@opentui/core"
 import { RouteProvider, useRoute } from "./context/route"
 import {
   Switch,
@@ -24,7 +25,14 @@ import {
   Show,
   on,
 } from "solid-js"
-import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
+import {
+  TuiPathsProvider,
+  TuiStartupProvider,
+  TuiTerminalEnvironmentProvider,
+  useTuiStartup,
+  type EarlyInput,
+} from "./context/runtime"
+import { EarlyPrompt } from "./component/early-prompt"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogProvider as DialogProviderList } from "./component/dialog-provider"
 import { ErrorComponent } from "./component/error-component"
@@ -40,6 +48,7 @@ import { LocationProvider } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
 import { PermissionProvider } from "./context/permission"
 import { DialogModel } from "./component/dialog-model"
+import { useStartupModelDialog } from "./component/startup-model-dialog"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
@@ -54,6 +63,7 @@ import { DialogConsoleOrg } from "./component/dialog-console-org"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { Shell } from "./routes/shell"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -87,7 +97,7 @@ import { DialogReminderCreate, DialogReminders } from "./component/dialog-remind
 import { createTuiAttention } from "./attention"
 import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
-import { destroyRenderer } from "./util/renderer"
+import { createInputRenderer, destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
 
 registerOpencodeSpinner()
@@ -154,6 +164,7 @@ export type TuiInput = {
   headers?: RequestInit["headers"]
   events?: EventSource
   pluginHost: TuiPluginHost
+  earlyInput?: EarlyInput
 }
 
 function errorMessage(error: unknown) {
@@ -197,34 +208,14 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
-      const renderer = yield* Effect.acquireRelease(
-        Effect.tryPromise({
-          try: () =>
-            createCliRenderer({
-              externalOutputMode: "passthrough",
-              targetFps: 60,
-              gatherStats: false,
-              exitOnCtrlC: false,
-              useKittyKeyboard: {},
-              autoFocus: false,
-              openConsoleOnError: false,
-              useMouse: !Flag.OPENCODE_DISABLE_MOUSE && input.config.mouse,
-              consoleOptions: {
-                keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
-              },
-            }),
-          catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+      const disposals = new Set<Promise<void>>()
+      // Registered before the renderer so scoped teardown destroys the Solid
+      // tree first, then waits for preference writes admitted during its life.
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          await Promise.all(disposals)
+          await flushStartupPresentation(global.state)
         }),
-        (renderer) =>
-          Effect.sync(() => {
-            destroyRenderer(renderer)
-          }),
-      )
-      win32DisableProcessedInput()
-      const keymap = createDefaultOpenTuiKeymap(renderer)
-      yield* Effect.acquireRelease(
-        Effect.sync(() => registerOpencodeKeymap(keymap, renderer, input.config)),
-        (unregister) => Effect.sync(unregister),
       )
       yield* Effect.addFinalizer(() =>
         Effect.promise(async () => {
@@ -235,20 +226,60 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
           }
         }),
       )
-      yield* Effect.addFinalizer(() => Effect.sync(TuiAudio.dispose))
+      const earlyInput = input.earlyInput
+      if (earlyInput) yield* Effect.addFinalizer(() => Effect.sync(() => earlyInput.dispose()))
+      const stdin = earlyInput ? yield* Effect.promise(() => earlyInput.takeover()) : undefined
       const shutdown = yield* Deferred.make<unknown>()
+      const renderer = yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () =>
+            createInputRenderer(
+              {
+                stdin,
+                backgroundColor: earlyInput?.presentation?.background,
+                onDestroy: () => Deferred.doneUnsafe(shutdown, Effect.void),
+                externalOutputMode: "passthrough",
+                targetFps: 60,
+                gatherStats: false,
+                exitOnCtrlC: false,
+                useKittyKeyboard: {},
+                autoFocus: false,
+                openConsoleOnError: false,
+                useMouse: !Flag.OPENCODE_DISABLE_MOUSE && input.config.mouse,
+                consoleOptions: {
+                  keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
+                },
+              },
+              earlyInput,
+            ),
+          catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+        }),
+        (renderer) =>
+          Effect.sync(() => {
+            destroyRenderer(renderer)
+          }),
+      )
+      if (renderer.isDestroyed) return { epilogue: exit.epilogue, reason: exit.reason, restart: exit.restart }
+      win32DisableProcessedInput()
+      const keymap = createDefaultOpenTuiKeymap(renderer)
+      yield* Effect.acquireRelease(
+        Effect.sync(() => registerOpencodeKeymap(keymap, renderer, input.config)),
+        (unregister) => Effect.sync(unregister),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(TuiAudio.dispose))
       const onSighup = () => destroyRenderer(renderer)
       yield* Effect.acquireRelease(
         Effect.sync(() => process.on("SIGHUP", onSighup)),
         () => Effect.sync(() => process.off("SIGHUP", onSighup)),
       )
-      renderer.once("destroy", () => Deferred.doneUnsafe(shutdown, Effect.void))
       const pluginRuntime = createPluginRuntime()
 
       yield* Effect.tryPromise(async () => {
         // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
         void renderer.getPalette({ size: 16 }).catch(() => undefined)
-        const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+        // ThemeProvider listens for later terminal replies; first paint must not
+        // wait up to a second for a terminal that does not answer the query.
+        const mode = renderer.themeMode ?? "dark"
         if (renderer.isDestroyed) return
 
         await render(() => {
@@ -261,13 +292,31 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                 destroyRenderer(renderer)
               }}
             >
-              <EpilogueProvider set={(value) => (exit.epilogue = value)}>
-                <ErrorBoundary fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}>
+              <EpilogueProvider
+                set={(value) => {
+                  // Route cleanup clears this while navigating, but destruction
+                  // must retain the final session's epilogue for scoped exit.
+                  if (!renderer.isDestroyed) exit.epilogue = value
+                }}
+              >
+                <ErrorBoundary
+                  fallback={(error, reset) => {
+                    if (input.earlyInput?.active) {
+                      exit.reason = error
+                      // A failed startup must release the input capture, rather
+                      // than displaying an error screen whose keys it swallows.
+                      queueMicrotask(() => destroyRenderer(renderer))
+                    }
+                    return <ErrorComponent error={error} reset={reset} mode={mode} />
+                  }}
+                >
                   <TuiPathsProvider
+                    onDispose={(done) => disposals.add(done)}
                     value={{
                       cwd: process.cwd(),
                       home: global.home,
                       state: global.state,
+                      database: global.data === Global.Path.data ? undefined : `${global.data}/opencode.db`,
                       worktree: global.data + "/worktree",
                     }}
                   >
@@ -286,8 +335,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                         value={{
                           initialRoute: process.env.OPENCODE_ROUTE ? JSON.parse(process.env.OPENCODE_ROUTE) : undefined,
                           skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT),
+                          earlyInput: input.earlyInput,
                         }}
                       >
+                        <Show when={input.earlyInput}>{(early) => <EarlyPrompt input={early()} />}</Show>
                         <ClipboardProvider>
                           <OpencodeKeymapProvider keymap={keymap}>
                             <ArgsProvider {...input.args}>
@@ -398,6 +449,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const project = useProject()
   const exit = useExit()
   const promptRef = usePromptRef()
+  useStartupModelDialog()
   const pluginRuntime = usePluginRuntime()
   const attention = createTuiAttention({ renderer, config: tuiConfig, kv })
   const clipboard = useClipboard()
@@ -650,7 +702,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "Agent",
         slashName: "models",
         // Bias /mo toward /models over /move without changing global fuzzy scoring.
-        slashAliases: ["mo"],
+        slashAliases: ["mo", "model"],
         run: () => {
           dialog.replace(() => <DialogModel />)
         },
@@ -1180,7 +1232,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
             </Match>
             <Match when={route.data.type === "session"}>
               <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
-                {(_) => <Session />}
+                {(_) => (
+                  <Show when={route.data.type === "session" && route.data.shell} fallback={<Session />}>
+                    <Shell />
+                  </Show>
+                )}
               </Show>
             </Match>
           </Switch>

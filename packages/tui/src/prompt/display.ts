@@ -4,7 +4,8 @@ export function promptOffsetWidth(value: string) {
   let width = 0
   for (const part of graphemes.segment(value)) {
     // Textarea offsets count newlines as one position; Bun.stringWidth counts them as zero.
-    width += part.segment === "\n" ? 1 : Bun.stringWidth(part.segment)
+    // EditBuffer uses fixed two-cell tabs, not terminal tab stops (nor width 0).
+    width += part.segment === "\n" ? 1 : part.segment === "\t" ? 2 : Bun.stringWidth(part.segment)
   }
   return width
 }

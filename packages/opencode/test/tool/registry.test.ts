@@ -110,7 +110,16 @@ describe("tool.registry", () => {
         agent: yield* agents.get("build"),
       })
       expect(tools.map((tool) => tool.id)).toEqual(
-        expect.arrayContaining(["compact", "context_usage", "mcp_tools", "reminder_tools"]),
+        expect.arrayContaining([
+          "compact",
+          "context_usage",
+          "session_search",
+          "session_active",
+          "session_planning",
+          "session_switch",
+          "mcp_tools",
+          "reminder_tools",
+        ]),
       )
       expect(tools.filter((tool) => tool.id.startsWith("mcp_")).map((tool) => tool.id)).toEqual(["mcp_tools"])
       expect(tools.filter((tool) => tool.id.startsWith("reminder_")).map((tool) => tool.id)).toEqual(["reminder_tools"])
@@ -166,7 +175,7 @@ describe("tool.registry", () => {
     }),
   )
 
-  it.instance("hides task background parameter unless experimental background subagents are enabled", () =>
+  it.instance("exposes task background parameter by default", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const agent = yield* Agent.Service
@@ -178,8 +187,9 @@ describe("tool.registry", () => {
         agent: build,
       })).find((tool) => tool.id === "task")
 
-      expect(task?.jsonSchema).toBeDefined()
-      expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
+      expect(task).toBeDefined()
+      if (!task) throw new Error("task tool not found")
+      expect(ToolJsonSchema.fromTool(task).properties?.background).toBeDefined()
     }),
   )
 

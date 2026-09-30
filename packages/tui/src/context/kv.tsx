@@ -1,9 +1,9 @@
-import { createSignal, type Setter } from "solid-js"
+import { createSignal, onCleanup, type Setter } from "solid-js"
 import { createStore, unwrap } from "solid-js/store"
 import { createSimpleContext } from "./helper"
-import { Flock } from "@opencode-ai/core/util/flock"
-import { Global } from "@opencode-ai/core/global"
-import { readJson, writeJsonAtomic } from "../util/persistence"
+import { missing, readJson, writeJsonAtomic } from "../util/persistence"
+import { createPersistentState } from "../util/persistent-state"
+import { useShutdown } from "./shutdown"
 import { useTuiPaths } from "./runtime"
 import path from "path"
 
@@ -11,21 +11,25 @@ export const { use: useKV, provider: KVProvider } = createSimpleContext({
   name: "KV",
   init: () => {
     const paths = useTuiPaths()
-    void Global.Path.state
+    const shutdown = useShutdown()
     const file = path.join(paths.state, "kv.json")
-    const lock = `tui-kv:${file}`
     const [ready, setReady] = createSignal(false)
     const [store, setStore] = createStore<Record<string, any>>()
-    // Queue same-process writes so rapid updates persist in order.
-    let write = Promise.resolve()
-
-    Flock.withLock(lock, () => readJson<Record<string, unknown>>(file))
-      .then((x) => {
-        setStore(x)
-      })
-      .catch((error) => {
-        console.error("Failed to read KV state", { error })
-      })
+    const state = createPersistentState({
+      file,
+      initial: {} as Record<string, unknown>,
+      read: () =>
+        readJson<Record<string, unknown>>(file).catch((error: unknown) => {
+          if (missing(error)) return {}
+          throw error
+        }),
+      write: (value) => writeJsonAtomic(file, value),
+      onChange: (value) => setStore(value),
+      onError: (error) => console.error("Failed to persist KV state", { error }),
+    })
+    onCleanup(() => shutdown(state.dispose()))
+    void state.ready
+      .catch(() => {})
       .finally(() => {
         setReady(true)
       })
@@ -53,12 +57,8 @@ export const { use: useKV, provider: KVProvider } = createSimpleContext({
       },
       set(key: string, value: any) {
         setStore(key, value)
-        const snapshot = structuredClone(unwrap(store))
-        write = write
-          .then(() => Flock.withLock(lock, () => writeJsonAtomic(file, snapshot)))
-          .catch((error) => {
-            console.error("Failed to write KV state", { error })
-          })
+        const saved = structuredClone(unwrap(store[key]))
+        void state.update((current) => ({ ...current, [key]: saved })).catch(() => {})
       },
     }
     return result

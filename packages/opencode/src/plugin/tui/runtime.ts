@@ -385,10 +385,11 @@ async function syncPluginThemes(plugin: PluginEntry) {
   }
 }
 
-function createPluginScope(load: PluginLoad, id: string, disposeTimeoutMs: number) {
+export function createPluginScope(load: { spec: string }, id: string, disposeTimeoutMs: number) {
   const ctrl = new AbortController()
   let list: { key: symbol; fn: TuiDispose }[] = []
   let done = false
+  let closing: Promise<void> | undefined
 
   const onDispose = (fn: TuiDispose) => {
     if (done) return () => {}
@@ -404,6 +405,10 @@ function createPluginScope(load: PluginLoad, id: string, disposeTimeoutMs: numbe
 
   const track = (fn: (() => void) | undefined) => {
     if (!fn) return () => {}
+    if (done) {
+      fn()
+      return () => {}
+    }
     let drop = false
     let off = () => {}
     const wrapped = () => {
@@ -421,43 +426,46 @@ function createPluginScope(load: PluginLoad, id: string, disposeTimeoutMs: numbe
     onDispose,
   }
 
-  const dispose = async () => {
-    if (done) return
+  const dispose = () => {
+    if (closing) return closing
     done = true
+    closing = Promise.resolve().then(async () => {
+      const queue = [...list].reverse()
+      list = []
+      const until = Date.now() + disposeTimeoutMs
+      for (const item of queue) {
+        const left = until - Date.now()
+        if (left <= 0) {
+          fail("timed out cleaning up tui plugin", {
+            path: load.spec,
+            id,
+            timeout: disposeTimeoutMs,
+          })
+          break
+        }
+
+        const out = await runCleanup(item.fn, left)
+        if (out.type === "ok") continue
+        if (out.type === "timeout") {
+          fail("timed out cleaning up tui plugin", {
+            path: load.spec,
+            id,
+            timeout: disposeTimeoutMs,
+          })
+          break
+        }
+
+        if (out.type === "error") {
+          fail("failed to clean up tui plugin", {
+            path: load.spec,
+            id,
+            error: out.error,
+          })
+        }
+      }
+    })
     ctrl.abort()
-    const queue = [...list].reverse()
-    list = []
-    const until = Date.now() + disposeTimeoutMs
-    for (const item of queue) {
-      const left = until - Date.now()
-      if (left <= 0) {
-        fail("timed out cleaning up tui plugin", {
-          path: load.spec,
-          id,
-          timeout: disposeTimeoutMs,
-        })
-        break
-      }
-
-      const out = await runCleanup(item.fn, left)
-      if (out.type === "ok") continue
-      if (out.type === "timeout") {
-        fail("timed out cleaning up tui plugin", {
-          path: load.spec,
-          id,
-          timeout: disposeTimeoutMs,
-        })
-        break
-      }
-
-      if (out.type === "error") {
-        fail("failed to clean up tui plugin", {
-          path: load.spec,
-          id,
-          error: out.error,
-        })
-      }
-    }
+    return closing
   }
 
   return {

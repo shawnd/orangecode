@@ -12,6 +12,7 @@ import { writeHeapSnapshot } from "v8"
 import { ServerAuth } from "@/server/auth"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
+import { getEarlyInput, stopEarlyInput } from "../early-input"
 import { restartArgs, restartProcess } from "../restart"
 import { Daemon } from "../daemon"
 
@@ -159,7 +160,6 @@ export const TuiThreadCommand = cmd({
     const unguard = win32InstallCtrlCGuard()
     let restart: string[] | undefined
     try {
-      const { TuiConfig } = await import("@/config/tui")
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
         process.exitCode = 1
@@ -172,13 +172,12 @@ export const TuiThreadCommand = cmd({
       try {
         process.chdir(next)
       } catch {
+        await stopEarlyInput()
         UI.error("Failed to change directory to " + next)
+        process.exitCode = 1
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
-
-      const prompt = await input(args.prompt)
-      const config = await TuiConfig.get()
 
       const network = resolveNetworkOptionsNoConfig(args)
       const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
@@ -207,8 +206,17 @@ export const TuiThreadCommand = cmd({
           ),
         })
         const client = Rpc.client<typeof rpc>(worker)
-        const server = await client.call("server", network).catch((error) => {
-          worker.terminate()
+        let stopping: Promise<void> | undefined
+        const stop = () =>
+          (stopping ??= (async () => {
+            try {
+              await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
+            } finally {
+              await worker.terminate()
+            }
+          })())
+        const server = await client.call("server", network).catch(async (error) => {
+          await stop()
           throw error
         })
         return {
@@ -216,10 +224,7 @@ export const TuiThreadCommand = cmd({
           fetch: undefined,
           events: undefined,
           headers: ServerAuth.headers(),
-          stop: async () => {
-            await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-            worker.terminate()
-          },
+          stop,
           reload: () => client.call("reload", undefined),
           checkUpgrade: () => client.call("checkUpgrade", { directory: cwd }),
           attach: async () => ({ url: server.url, headers: ServerAuth.headers() }),
@@ -241,6 +246,7 @@ export const TuiThreadCommand = cmd({
             headers: transport.headers,
           })
         } catch (error) {
+          await stopEarlyInput()
           UI.error(errorMessage(error))
           process.exitCode = 1
           return
@@ -248,9 +254,18 @@ export const TuiThreadCommand = cmd({
         setTimeout(() => {
           transport.checkUpgrade().catch(() => {})
         }, 1000).unref?.()
-        const { Effect } = await import("effect")
-        const { run } = await import("../tui/layer")
-        const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
+        // Start the backend before loading UI/config modules, then overlap the
+        // independent reads and imports instead of serializing the startup path.
+        const [config, prompt, { Effect }, { run }, { createLegacyTuiPluginHost }] = await Promise.all([
+          (async () => {
+            const { TuiConfig } = await import("@/config/tui")
+            return TuiConfig.get()
+          })(),
+          input(args.prompt),
+          import("effect"),
+          import("../tui/layer"),
+          import("@/plugin/tui/runtime"),
+        ])
         const requested = await Effect.runPromise(
           run({
             url: transport.url,
@@ -261,6 +276,7 @@ export const TuiThreadCommand = cmd({
               return [tui, server]
             },
             config,
+            earlyInput: getEarlyInput(),
             pluginHost: createLegacyTuiPluginHost(),
             directory: cwd,
             fetch: transport.fetch,
@@ -288,6 +304,7 @@ export const TuiThreadCommand = cmd({
         await transport.stop()
       }
     } finally {
+      await stopEarlyInput()
       try {
         unguard?.()
       } catch {}

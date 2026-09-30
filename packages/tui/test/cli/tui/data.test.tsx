@@ -195,6 +195,59 @@ test("refreshes effective catalog data after catalog updates", async () => {
   }
 })
 
+test("coalesces startup catalog events and retains the latest invalidation", async () => {
+  const events = createEventSource()
+  const release = Promise.withResolvers<void>()
+  const requests = { model: 0, provider: 0, integration: 0 }
+  const location = { directory, project: { id: "proj_test", directory } }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/integration") {
+      requests.integration++
+      return json({ location, data: [] })
+    }
+    const resource = url.pathname === "/api/model" ? "model" : url.pathname === "/api/provider" ? "provider" : undefined
+    if (!resource) return
+    const count = ++requests[resource]
+    if (count === 1) return release.promise.then(() => json({ location, data: [] }))
+    return json({ location, data: [{ id: `updated-${resource}` }] })
+  }, events)
+  let data!: ReturnType<typeof useData>
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+  try {
+    await wait(() => requests.model === 1 && requests.provider === 1 && data.location.integration.list() !== undefined)
+    const joined = data.location.model.refresh({ directory })
+    emitEvent(events, { id: "evt_catalog_a", type: "catalog.updated", properties: {} })
+    emitEvent(events, { id: "evt_catalog_b", type: "catalog.updated", properties: {} })
+    emitEvent(events, { id: "evt_integration_b", type: "integration.updated", properties: {} })
+    await wait(() => requests.integration > 1)
+    expect(requests.model).toBe(1)
+    expect(requests.provider).toBe(1)
+    release.resolve()
+    await joined
+    await wait(() => data.location.provider.list()?.[0]?.id === "updated-provider")
+    expect(data.location.model.list()?.[0]?.id).toBe("updated-model")
+    expect(requests.model).toBe(2)
+    expect(requests.provider).toBe(2)
+  } finally {
+    release.resolve()
+    app.renderer.destroy()
+  }
+})
+
 test("refreshes references after updates", async () => {
   const events = createEventSource()
   let requests = 0

@@ -107,4 +107,17 @@ describe("session action routes", () => {
       }),
     { git: true },
   )
+
+  it.instance("resume rejects an empty or missing session without adding a message", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const sessions = yield* SessionNs.Service
+      const session = yield* sessions.create({})
+      const empty = yield* requestInDirectory(`/session/${session.id}/resume`, test.directory, { method: "POST" })
+      expect(empty.status).toBe(400)
+      expect(yield* sessions.messages({ sessionID: session.id })).toEqual([])
+      const missing = yield* requestInDirectory("/session/ses_missing/resume", test.directory, { method: "POST" })
+      expect(missing.status).toBe(404)
+    }),
+  )
 })

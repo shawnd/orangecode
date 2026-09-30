@@ -5,6 +5,7 @@ import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
 import { createEventBatch } from "./event-batch"
 import { createSessionInterest } from "./session-interest"
+import { scheduler } from "node:timers/promises"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -61,6 +62,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     let sdk = createSDK()
+    let globalSDK: ReturnType<typeof createOpencodeClient> | undefined
 
     const handlers = new Set<(event: GlobalEvent) => void>()
     const emitter = {
@@ -93,6 +95,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     const handleEvent = (event: GlobalEvent) => {
+      if (abort.signal.aborted) return
       if (event.payload.type === "server.connected") {
         for (const session of event.payload.properties.sessions ?? [])
           interest.observe({ id: session.id, parentID: session.parentID ?? undefined }, false)
@@ -151,7 +154,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
           // Exponential backoff
           const backoff = Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)
-          await new Promise((resolve) => setTimeout(resolve, backoff))
+          await scheduler.wait(backoff, { signal: ctrl.signal }).catch(() => {})
         }
       })().catch(() => {})
     }
@@ -208,6 +211,14 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     return {
       get client() {
         return sdk
+      },
+      get globalClient() {
+        return (globalSDK ??= createOpencodeClient({
+          baseUrl: props.url,
+          signal: abort.signal,
+          fetch: props.fetch,
+          headers: props.headers,
+        }))
       },
       directory: props.directory,
       event: emitter,

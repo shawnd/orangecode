@@ -12,6 +12,11 @@ export type SessionRoute = {
   type: "session"
   sessionID: string
   prompt?: PromptInfo
+  shell?: {
+    messageID: string
+    partID: string
+    returnSessionID: string
+  }
 }
 
 export type PluginRoute = {

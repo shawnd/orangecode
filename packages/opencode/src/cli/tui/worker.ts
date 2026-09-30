@@ -28,6 +28,21 @@ GlobalBus.on("event", (event) => {
 let server: Awaited<ReturnType<typeof Server.listen>> | undefined
 
 export const rpc = {
+  async warmup(input: { directory: string }) {
+    // Resolve the same location-scoped services that the live bootstrap will
+    // use, while the main thread loads the renderer. No model execution or MCP
+    // startup is requested here; the normal requests remain authoritative.
+    await Promise.all(
+      ["/config/providers", "/agent"].map(async (pathname) => {
+        const response = await Server.Default().app.fetch(
+          new Request(`http://opencode.internal${pathname}?directory=${encodeURIComponent(input.directory)}`, {
+            headers: ServerAuth.headers(),
+          }),
+        )
+        await response.body?.cancel()
+      }),
+    )
+  },
   async fetch(input: { url: string; method: string; headers: Record<string, string>; body?: string }) {
     const headers = { ...input.headers }
     const auth = ServerAuth.header()

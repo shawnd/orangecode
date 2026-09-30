@@ -24,6 +24,7 @@ import { SessionEvent } from "@opencode-ai/schema/session-event"
 
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
+  agent: Agent.ID.pipe(Schema.optional),
   limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt), Schema.optional).annotate({
     description: "Maximum number of sessions to return. Defaults to the newest 50 sessions.",
   }),
@@ -138,7 +139,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           identifier: "v2.session.list",
           summary: "List sessions",
           description:
-            "Retrieve sessions in the requested order. Items keep that order across pages; use cursor.next or cursor.previous to move through the ordered list.",
+            "Retrieve sessions in the requested order, optionally filtered by agent. Items keep that order across pages; use cursor.next or cursor.previous to move through the ordered list.",
         }),
       ),
     )

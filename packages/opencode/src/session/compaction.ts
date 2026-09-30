@@ -330,7 +330,9 @@ const layer = Layer.effect(
       const userMessage = parent.info
       const compactionPart = parent.parts.find((part): part is SessionV1.CompactionPart => part.type === "compaction")
 
-      let messages = input.messages
+      // Messages submitted after this request belong to the post-compaction turn.
+      const snapshot = input.messages.slice(0, input.messages.findIndex((m) => m.info.id === input.parentID) + 1)
+      let messages = snapshot
       let replay:
         | {
             info: SessionV1.User
@@ -343,7 +345,7 @@ const layer = Layer.effect(
           const msg = input.messages[i]
           if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction")) {
             replay = { info: msg.info, parts: msg.parts }
-            messages = input.messages.slice(0, i)
+            messages = snapshot.slice(0, i)
             break
           }
         }
@@ -351,7 +353,7 @@ const layer = Layer.effect(
           replay && messages.some((m) => m.info.role === "user" && !m.parts.some((p) => p.type === "compaction"))
         if (!hasContent) {
           replay = undefined
-          messages = input.messages
+          messages = snapshot
         }
       }
 
@@ -495,8 +497,10 @@ const layer = Layer.effect(
         }
 
         if (!replay) {
+          const latest = MessageV2.latest(yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie))
           const info = yield* provider.getProvider(userMessage.model.providerID)
           if (
+            latest.user?.id === input.parentID &&
             (yield* plugin.trigger(
               "experimental.compaction.autocontinue",
               {

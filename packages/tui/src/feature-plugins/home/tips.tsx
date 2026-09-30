@@ -1,12 +1,16 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo, Show } from "solid-js"
+import { createEffect, createMemo, Show } from "solid-js"
 import { Tips } from "./tips-view"
 import { useBindings } from "../../keymap"
+import { useTuiPaths } from "../../context/runtime"
+import { cacheStartupPresentation } from "../../startup/cache"
 
 const id = "internal:home-tips"
 
 function View(props: { api: TuiPluginApi; hidden: boolean; show: boolean; connected: boolean }) {
+  const paths = useTuiPaths()
+  createEffect(() => cacheStartupPresentation(paths.state, { bottomHeight: props.show ? 4 : 3 }))
   useBindings(() => ({
     commands: [
       {

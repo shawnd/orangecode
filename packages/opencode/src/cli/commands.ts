@@ -1,6 +1,7 @@
 import { lazyCommand } from "./lazy"
 
-// Keep metadata lightweight; command options and nested builders load on demand.
+// Only command names, aliases and help descriptions belong here. Options and
+// nested commands stay in their original builders, loaded on yargs' demand.
 export const commands = [
   lazyCommand({ command: "acp", describe: "start ACP (Agent Client Protocol) server" }, async () => {
     const { AcpCommand } = await import("./cmd/acp")

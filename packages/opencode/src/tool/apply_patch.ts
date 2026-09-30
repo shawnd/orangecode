@@ -262,13 +262,30 @@ export const ApplyPatchTool = Tool.define(
         yield* events.publish(Watcher.Event.Updated, update)
       }
 
-      // Notify LSP of file changes and collect diagnostics
-      for (const change of fileChanges) {
-        if (change.type === "delete") continue
-        const target = change.movePath ?? change.filePath
-        yield* lsp.touchFile(target, "document")
-      }
-      const diagnostics = yield* lsp.diagnostics()
+      // Bound diagnostic waits across documents, keeping repeated targets in order so
+      // their notifications and version-specific waits cannot race within this patch.
+      const documents = Map.groupBy(
+        fileChanges.filter((change) => change.type !== "delete"),
+        (change) => FSUtil.normalizePath(change.movePath ?? change.filePath),
+      )
+      const collected = yield* Effect.forEach(
+        documents.values(),
+        (changes) =>
+          Effect.forEach(changes, (change) =>
+            Effect.gen(function* () {
+              const target = change.movePath ?? change.filePath
+              yield* lsp.touchFile(target, "document")
+              // Snapshot each result before later documents can evict its LSP state.
+              return yield* lsp.diagnostics({ files: [target] })
+            }),
+          ),
+        { concurrency: 8 },
+      )
+      // forEach preserves input order despite concurrent completion. Last results
+      // for normalized duplicate targets win, without reordering output keys.
+      const diagnostics = Object.fromEntries(
+        collected.flatMap((results) => results.flatMap((result) => Object.entries(result))),
+      )
 
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
@@ -286,7 +303,7 @@ export const ApplyPatchTool = Tool.define(
       for (const change of fileChanges) {
         if (change.type === "delete") continue
         const target = change.movePath ?? change.filePath
-        const block = LSP.Diagnostic.report(target, diagnostics[FSUtil.normalizePath(target)] ?? [])
+        const block = LSP.Diagnostic.report(target, diagnostics[FSUtil.normalizePath(path.resolve(target))] ?? [])
         if (!block) continue
         const rel = path.relative(instance.worktree, target).replaceAll("\\", "/")
         output += `\n\nLSP errors detected in ${rel}, please fix:\n${block}`

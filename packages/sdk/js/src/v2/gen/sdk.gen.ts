@@ -207,6 +207,8 @@ import type {
   SessionPromptAsyncResponses,
   SessionPromptErrors,
   SessionPromptResponses,
+  SessionResumeErrors,
+  SessionResumeResponses,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -3986,6 +3988,38 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Resume session
+   *
+   * Resume processing the existing conversation and pending messages without adding a new message.
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionResumeResponses, SessionResumeErrors, ThrowOnError>({
+      url: "/session/{sessionID}/resume",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Initialize session
    *
    * Analyze the current application and create an AGENTS.md file with project-specific agent configurations.
@@ -5507,11 +5541,12 @@ export class Session3 extends HeyApiClient {
   /**
    * List sessions
    *
-   * Retrieve sessions in the requested order. Items keep that order across pages; use cursor.next or cursor.previous to move through the ordered list.
+   * Retrieve sessions in the requested order, optionally filtered by agent. Items keep that order across pages; use cursor.next or cursor.previous to move through the ordered list.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
       workspace?: string
+      agent?: string
       limit?: number
       order?: "asc" | "desc"
       search?: string
@@ -5528,6 +5563,7 @@ export class Session3 extends HeyApiClient {
         {
           args: [
             { in: "query", key: "workspace" },
+            { in: "query", key: "agent" },
             { in: "query", key: "limit" },
             { in: "query", key: "order" },
             { in: "query", key: "search" },

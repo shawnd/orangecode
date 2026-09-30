@@ -10,6 +10,7 @@ export function makeRuntime<I, S, E>(service: Context.Service<I, S>, layer: Laye
     }))
 
   return {
+    dispose: () => rt?.dispose() ?? Promise.resolve(),
     runSync: <A, Err>(fn: (svc: S) => Effect.Effect<A, Err, I>) => getRuntime().runSync(service.use(fn)),
     runPromiseExit: <A, Err>(fn: (svc: S) => Effect.Effect<A, Err, I>, options?: Effect.RunOptions) =>
       getRuntime().runPromiseExit(service.use(fn), options),

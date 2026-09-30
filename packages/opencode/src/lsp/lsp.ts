@@ -121,7 +121,10 @@ export interface Interface {
   readonly status: () => Effect.Effect<Status[]>
   readonly hasClients: (file: string) => Effect.Effect<boolean>
   readonly touchFile: (input: string, diagnostics?: "document" | "full") => Effect.Effect<void>
-  readonly diagnostics: () => Effect.Effect<Record<string, LSPClient.Diagnostic[]>>
+  readonly diagnostics: (input?: {
+    files: readonly string[]
+    otherFiles?: number
+  }) => Effect.Effect<Record<string, LSPClient.Diagnostic[]>>
   readonly hover: (input: LocInput) => Effect.Effect<any>
   readonly definition: (input: LocInput) => Effect.Effect<any[]>
   readonly references: (input: LocInput) => Effect.Effect<any[]>
@@ -361,8 +364,46 @@ const layer = Layer.effect(
       )
     })
 
-    const diagnostics = Effect.fn("LSP.diagnostics")(function* () {
+    const diagnostics = Effect.fn("LSP.diagnostics")(function* (input?: {
+      files: readonly string[]
+      otherFiles?: number
+    }) {
       const results: Record<string, LSPClient.Diagnostic[]> = {}
+      if (input) {
+        const ctx = yield* InstanceState.context
+        const s = yield* InstanceState.get(state)
+        const requested = new Set(input.files.map((file) => FSUtil.normalizePath(path.resolve(ctx.directory, file))))
+        const selected = (input.otherFiles ?? 0) > 0 ? new Set<string>() : requested
+        if (input.otherFiles && input.otherFiles > 0) {
+          // Preserve first-seen file order across clients, including files whose
+          // first client has warnings but a later client has errors. Only merge
+          // selected files, and stop once the bounded context is complete.
+          let remaining = input.otherFiles
+          for (const client of s.clients) {
+            for (const file of client.diagnosticFiles()) {
+              if (selected.has(file)) continue
+              const current = requested.has(file)
+              if (!current && remaining <= 0) continue
+              if (!current && !s.clients.some((client) => client.hasDiagnosticErrors(file))) continue
+              selected.add(file)
+              requested.delete(file)
+              if (!current) remaining--
+              if (remaining === 0 && requested.size === 0) break
+            }
+            if (remaining === 0 && requested.size === 0) break
+          }
+        }
+        for (const file of selected) {
+          for (const client of s.clients) {
+            const issues = client.diagnosticsFor(file)
+            if (!issues) continue
+            const arr = results[file] ?? []
+            arr.push(...issues)
+            results[file] = arr
+          }
+        }
+        return results
+      }
       const all = yield* runAll(async (client) => client.diagnostics)
       for (const result of all) {
         for (const [p, diags] of result.entries()) {

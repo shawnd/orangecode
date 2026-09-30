@@ -40,6 +40,7 @@ export const migrations = (
     import("./migration/20260622142730_simplify_session_context_epoch"),
     import("./migration/20260622170816_reset_v2_session_state"),
     import("./migration/20260622202450_simplify_session_input"),
+    import("./migration/20260930075443_model_favorites"),
     import("./migration/20260930085205_usage-time-index"),
     import("./migration/20260930085547_query-index-coverage"),
   ])

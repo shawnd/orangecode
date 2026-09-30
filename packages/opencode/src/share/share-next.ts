@@ -2,7 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import type * as SDK from "@opencode-ai/sdk/v2"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
-import { Effect, Exit, Layer, Option, Schema, Scope, Context, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Option, Schema, Scope, Context, Stream } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Account } from "@/account/account"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -121,28 +121,29 @@ const layer = Layer.effect(
     const provider = yield* Provider.Service
     const session = yield* Session.Service
 
-    function sync(sessionID: SessionID, data: Data[]) {
+    function sync(sessionID: SessionID, data: () => Data[]) {
       return Effect.gen(function* () {
-        if (disabled) return
+        if (disabled) return false
         const share = yield* getCached(sessionID)
-        if (!share) return
+        if (!share) return false
 
         const s = yield* InstanceState.get(state)
         const existing = s.queue.get(sessionID)
         if (existing) {
-          for (const item of data) {
+          for (const item of data()) {
             existing.set(key(item), item)
           }
-          return
+          return true
         }
 
-        const next = new Map(data.map((item) => [key(item), item]))
+        const next = new Map(data().map((item) => [key(item), item]))
         s.queue.set(sessionID, next)
         yield* flush(sessionID).pipe(
           Effect.delay(1000),
           Effect.catchCause((cause) => Effect.logError("share flush failed", { sessionID: sessionID, cause: cause })),
           Effect.forkIn(s.scope),
         )
+        return true
       })
     }
 
@@ -167,35 +168,55 @@ const layer = Layer.effect(
           def: D,
           fn: (data: EventV2.Data<D>) => Effect.Effect<void, unknown>,
         ) =>
-          events.listen((event) => {
-            if (event.type !== def.type || event.location?.directory !== _ctx.directory) return Effect.void
-            return fn(event.data as EventV2.Data<D>).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logError("share subscriber failed", { type: def.type, cause: cause }),
-              ),
-            )
-          })
+          Effect.acquireRelease(
+            events.listen((event) => {
+              if (event.type !== def.type || event.location?.directory !== _ctx.directory) return Effect.void
+              // Disposal must also stop callbacks already awaiting a model or DB
+              // lookup, before they can recreate state or enqueue another flush.
+              return fn(event.data as EventV2.Data<D>).pipe(
+                Effect.catchCauseIf(
+                  (cause) => !Cause.hasInterruptsOnly(cause),
+                  (cause) => Effect.logError("share subscriber failed", { type: def.type, cause: cause }),
+                ),
+                Effect.forkIn(cache.scope),
+                Effect.flatMap((fiber) =>
+                  Fiber.await(fiber).pipe(
+                    Effect.onInterrupt(() => Fiber.interrupt(fiber)),
+                    Effect.asVoid,
+                  ),
+                ),
+              )
+            }),
+            (unsubscribe) => unsubscribe,
+          )
 
         yield* watch(Session.Event.Updated, (data) =>
           Effect.gen(function* () {
             const info = data.info
-            yield* sync(info.id, [{ type: "session", data: structuredClone(info) as SDK.Session }])
+            yield* sync(info.id, () => [{ type: "session", data: structuredClone(info) as SDK.Session }])
           }),
         )
         yield* watch(MessageV2.Event.Updated, (data) =>
           Effect.gen(function* () {
             const info = data.info
-            yield* sync(info.sessionID, [{ type: "message", data: structuredClone(info) as SDK.Message }])
+            const shared = yield* sync(info.sessionID, () => [
+              { type: "message", data: structuredClone(info) as SDK.Message },
+            ])
+            if (!shared) return
             if (info.role !== "user") return
             const model = yield* provider.getModel(info.model.providerID, info.model.modelID)
-            yield* sync(info.sessionID, [{ type: "model", data: [model] }])
+            yield* sync(info.sessionID, () => [{ type: "model", data: [model] }])
           }),
         )
         yield* watch(MessageV2.Event.PartUpdated, (data) =>
-          sync(data.part.sessionID, [{ type: "part", data: structuredClone(data.part) as SDK.Part }]),
+          sync(data.part.sessionID, () => [{ type: "part", data: structuredClone(data.part) as SDK.Part }]).pipe(
+            Effect.asVoid,
+          ),
         )
         yield* watch(Session.Event.Diff, (data) =>
-          sync(data.sessionID, [{ type: "session_diff", data: structuredClone(data.diff) as SDK.SnapshotFileDiff[] }]),
+          sync(data.sessionID, () => [
+            { type: "session_diff", data: structuredClone(data.diff) as SDK.SnapshotFileDiff[] },
+          ]).pipe(Effect.asVoid),
         )
         yield* watch(Session.Event.Deleted, (data) => remove(data.sessionID))
 
@@ -289,7 +310,7 @@ const layer = Layer.effect(
         { concurrency: 8 },
       )
 
-      yield* sync(sessionID, [
+      yield* sync(sessionID, () => [
         { type: "session", data: info },
         ...messages.map((item) => ({ type: "message" as const, data: item.info })),
         ...messages.flatMap((item) => item.parts.map((part) => ({ type: "part" as const, data: part }))),

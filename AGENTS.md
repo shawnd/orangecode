@@ -4,6 +4,13 @@
 - The default branch in this repo is `dev`.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 
+## Local Deployment
+
+- After completing code changes, always build and deploy to the local `oc` command before reporting completion.
+- For CLI/TUI changes, run `bun run script/build.ts --single --skip-install --skip-embed-web-ui` from `packages/opencode`. Include the embedded web UI when changing it.
+- `~/.local/bin/oc` wraps `~/.local/share/oc/bin/opencode`. Install the native binary from `packages/opencode/dist/opencode-linux-x64/bin/opencode` there using an atomic replacement so running sessions remain intact.
+- Verify `oc --version` and that the deployed binary matches the build. Running sessions need a restart to load the new binary.
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.

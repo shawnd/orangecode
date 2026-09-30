@@ -87,6 +87,14 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`model_favorite\` (
+          \`provider_id\` text NOT NULL,
+          \`model_id\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`model_favorite_pk\` PRIMARY KEY(\`provider_id\`, \`model_id\`)
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`permission\` (
           \`id\` text PRIMARY KEY,
           \`project_id\` text NOT NULL,

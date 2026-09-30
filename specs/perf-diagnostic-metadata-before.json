@@ -1,0 +1,1520 @@
+{
+  "baseline": "e6f0f15a59125fb1775dd081da144ec16c4622aa",
+  "warmups": 2,
+  "trials": 7,
+  "servers": 2,
+  "samples": [
+    {
+      "population": 0,
+      "tool": "write",
+      "trial": 0,
+      "toolMs": 9.721548999999868,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.15741899999989073,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1241,
+      "partBytes": 1881,
+      "cloneSerializeMs": 0.055460000000039145,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "write",
+      "trial": 1,
+      "toolMs": 3.0649470000000747,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.12976000000003296,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1241,
+      "partBytes": 1881,
+      "cloneSerializeMs": 0.07582899999988513,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "write",
+      "trial": 2,
+      "toolMs": 2.712478999999803,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.10616999999979271,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1241,
+      "partBytes": 1881,
+      "cloneSerializeMs": 0.06991899999979978,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "write",
+      "trial": 3,
+      "toolMs": 40.35498299999995,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.16219999999998436,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1241,
+      "partBytes": 1881,
+      "cloneSerializeMs": 0.05037999999990461,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "write",
+      "trial": 4,
+      "toolMs": 9.265271999999868,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.1513199999999415,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1241,
+      "partBytes": 1881,
+      "cloneSerializeMs": 0.04542000000014923,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "write",
+      "trial": 5,
+      "toolMs": 7.11022099999991,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.0978099999999813,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1241,
+      "partBytes": 1881,
+      "cloneSerializeMs": 0.2876490000001013,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "write",
+      "trial": 6,
+      "toolMs": 4.40292199999999,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.11186900000006972,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1241,
+      "partBytes": 1881,
+      "cloneSerializeMs": 0.06423999999992702,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "edit",
+      "trial": 0,
+      "toolMs": 3.1068270000000666,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.09714899999994486,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1655,
+      "partBytes": 2140,
+      "cloneSerializeMs": 0.061340000000200234,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "edit",
+      "trial": 1,
+      "toolMs": 303.1602939999998,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.17790000000013606,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1655,
+      "partBytes": 2140,
+      "cloneSerializeMs": 0.05691999999999098,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "edit",
+      "trial": 2,
+      "toolMs": 48.79478800000015,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.18479900000011185,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1655,
+      "partBytes": 2140,
+      "cloneSerializeMs": 0.06827999999995882,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "edit",
+      "trial": 3,
+      "toolMs": 21.28517200000033,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.17121899999983725,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1655,
+      "partBytes": 2140,
+      "cloneSerializeMs": 0.059060000000044965,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "edit",
+      "trial": 4,
+      "toolMs": 10.930383999999776,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.1352300000003197,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1655,
+      "partBytes": 2140,
+      "cloneSerializeMs": 0.04938999999967564,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "edit",
+      "trial": 5,
+      "toolMs": 230.59038400000009,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.18401900000026217,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1655,
+      "partBytes": 2140,
+      "cloneSerializeMs": 0.06944000000021333,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "edit",
+      "trial": 6,
+      "toolMs": 15.793645000000197,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.1635300000002644,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 1655,
+      "partBytes": 2140,
+      "cloneSerializeMs": 0.07028900000022986,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "apply_patch",
+      "trial": 0,
+      "toolMs": 20.683794000000034,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.13518000000021857,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 2247,
+      "partBytes": 3560,
+      "cloneSerializeMs": 0.06339899999966292,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-hh8we1wz6ub/affected.diag\nM tmp/opencode-test-hh8we1wz6ub/second.diag\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "apply_patch",
+      "trial": 1,
+      "toolMs": 8.41642499999989,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.11906899999985399,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 2247,
+      "partBytes": 3560,
+      "cloneSerializeMs": 0.06854999999995925,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-hh8we1wz6ub/affected.diag\nM tmp/opencode-test-hh8we1wz6ub/second.diag\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "apply_patch",
+      "trial": 2,
+      "toolMs": 7.902806999999939,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.09872999999970489,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 2247,
+      "partBytes": 3560,
+      "cloneSerializeMs": 0.0664200000001074,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-hh8we1wz6ub/affected.diag\nM tmp/opencode-test-hh8we1wz6ub/second.diag\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "apply_patch",
+      "trial": 3,
+      "toolMs": 6.458622999999989,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.08737999999993917,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 2247,
+      "partBytes": 3560,
+      "cloneSerializeMs": 0.07179000000041924,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-hh8we1wz6ub/affected.diag\nM tmp/opencode-test-hh8we1wz6ub/second.diag\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "apply_patch",
+      "trial": 4,
+      "toolMs": 6.193634000000202,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.07830999999987398,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 2247,
+      "partBytes": 3560,
+      "cloneSerializeMs": 0.0706399999999121,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-hh8we1wz6ub/affected.diag\nM tmp/opencode-test-hh8we1wz6ub/second.diag\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "apply_patch",
+      "trial": 5,
+      "toolMs": 5.439016999999694,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.08429900000010093,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 2247,
+      "partBytes": 3560,
+      "cloneSerializeMs": 0.062039999999797146,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-hh8we1wz6ub/affected.diag\nM tmp/opencode-test-hh8we1wz6ub/second.diag\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 0,
+      "tool": "apply_patch",
+      "trial": 6,
+      "toolMs": 4.143622999999934,
+      "retrieval": {
+        "calls": 1,
+        "ms": 0.07403999999996813,
+        "files": 2,
+        "diagnostics": 8
+      },
+      "metadataFiles": 2,
+      "metadataDiagnostics": 8,
+      "metadataBytes": 2247,
+      "partBytes": 3560,
+      "cloneSerializeMs": 0.05929000000014639,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-hh8we1wz6ub/affected.diag\nM tmp/opencode-test-hh8we1wz6ub/second.diag\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-hh8we1wz6ub/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "write",
+      "trial": 0,
+      "toolMs": 4.85790999999972,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.607719999999972,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693361,
+      "partBytes": 697184,
+      "cloneSerializeMs": 10.009857999999895,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "write",
+      "trial": 1,
+      "toolMs": 5.328547999999955,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.8052780000002713,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693361,
+      "partBytes": 697184,
+      "cloneSerializeMs": 9.520751000000018,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "write",
+      "trial": 2,
+      "toolMs": 4.400932000000012,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.3593799999998737,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693361,
+      "partBytes": 697184,
+      "cloneSerializeMs": 9.599639999999908,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "write",
+      "trial": 3,
+      "toolMs": 4.727370999999948,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.60354899999993,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693361,
+      "partBytes": 697184,
+      "cloneSerializeMs": 10.315186999999696,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "write",
+      "trial": 4,
+      "toolMs": 5.267547999999806,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.9661080000000766,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693361,
+      "partBytes": 697184,
+      "cloneSerializeMs": 11.051793999999973,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "write",
+      "trial": 5,
+      "toolMs": 4.167172999999821,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.1690910000002077,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693361,
+      "partBytes": 697184,
+      "cloneSerializeMs": 11.0045140000002,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "write",
+      "trial": 6,
+      "toolMs": 4.645061000000169,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.442320000000109,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693361,
+      "partBytes": 697184,
+      "cloneSerializeMs": 10.34122699999989,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "edit",
+      "trial": 0,
+      "toolMs": 4.672639999999774,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.2745310000000245,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693775,
+      "partBytes": 694260,
+      "cloneSerializeMs": 10.409976999999799,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "edit",
+      "trial": 1,
+      "toolMs": 4.968998999999712,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.623779000000013,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693775,
+      "partBytes": 694260,
+      "cloneSerializeMs": 10.724766000000272,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "edit",
+      "trial": 2,
+      "toolMs": 4.4549809999998615,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.313571000000138,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693775,
+      "partBytes": 694260,
+      "cloneSerializeMs": 9.656850000000304,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "edit",
+      "trial": 3,
+      "toolMs": 4.541390999999749,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.4318099999995866,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693775,
+      "partBytes": 694260,
+      "cloneSerializeMs": 9.973238999999921,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "edit",
+      "trial": 4,
+      "toolMs": 4.4617920000000595,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.233679999999822,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693775,
+      "partBytes": 694260,
+      "cloneSerializeMs": 10.107288000000153,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "edit",
+      "trial": 5,
+      "toolMs": 4.804549999999836,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.449239000000034,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693775,
+      "partBytes": 694260,
+      "cloneSerializeMs": 10.78217500000028,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "edit",
+      "trial": 6,
+      "toolMs": 4.468571999999767,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.3722499999998945,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 693775,
+      "partBytes": 694260,
+      "cloneSerializeMs": 12.686286999999993,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "apply_patch",
+      "trial": 0,
+      "toolMs": 5.425537000000077,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.2465409999999792,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 694367,
+      "partBytes": 695680,
+      "cloneSerializeMs": 9.843599000000268,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-6w8lpzbrlxv/affected.diag\nM tmp/opencode-test-6w8lpzbrlxv/second.diag\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "apply_patch",
+      "trial": 1,
+      "toolMs": 5.072629000000234,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.0491509999997106,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 694367,
+      "partBytes": 695680,
+      "cloneSerializeMs": 8.189326000000165,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-6w8lpzbrlxv/affected.diag\nM tmp/opencode-test-6w8lpzbrlxv/second.diag\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "apply_patch",
+      "trial": 2,
+      "toolMs": 8.736233999999968,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.0040819999999258,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 694367,
+      "partBytes": 695680,
+      "cloneSerializeMs": 9.066503000000012,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-6w8lpzbrlxv/affected.diag\nM tmp/opencode-test-6w8lpzbrlxv/second.diag\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "apply_patch",
+      "trial": 3,
+      "toolMs": 4.8682999999996355,
+      "retrieval": {
+        "calls": 1,
+        "ms": 1.8946720000003552,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 694367,
+      "partBytes": 695680,
+      "cloneSerializeMs": 8.790262999999868,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-6w8lpzbrlxv/affected.diag\nM tmp/opencode-test-6w8lpzbrlxv/second.diag\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "apply_patch",
+      "trial": 4,
+      "toolMs": 5.753756000000067,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.1606000000001586,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 694367,
+      "partBytes": 695680,
+      "cloneSerializeMs": 8.579193999999916,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-6w8lpzbrlxv/affected.diag\nM tmp/opencode-test-6w8lpzbrlxv/second.diag\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "apply_patch",
+      "trial": 5,
+      "toolMs": 5.264607999999953,
+      "retrieval": {
+        "calls": 1,
+        "ms": 1.9211519999998927,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 694367,
+      "partBytes": 695680,
+      "cloneSerializeMs": 8.283335999999963,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-6w8lpzbrlxv/affected.diag\nM tmp/opencode-test-6w8lpzbrlxv/second.diag\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 100,
+      "tool": "apply_patch",
+      "trial": 6,
+      "toolMs": 5.1053790000000845,
+      "retrieval": {
+        "calls": 1,
+        "ms": 2.0506319999999505,
+        "files": 102,
+        "diagnostics": 4808
+      },
+      "metadataFiles": 102,
+      "metadataDiagnostics": 4808,
+      "metadataBytes": 694367,
+      "partBytes": 695680,
+      "cloneSerializeMs": 9.139971999999943,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-6w8lpzbrlxv/affected.diag\nM tmp/opencode-test-6w8lpzbrlxv/second.diag\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-6w8lpzbrlxv/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "write",
+      "trial": 0,
+      "toolMs": 29.17326899999989,
+      "retrieval": {
+        "calls": 1,
+        "ms": 20.596284999999625,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6969961,
+      "partBytes": 6973783,
+      "cloneSerializeMs": 113.76805800000011,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "write",
+      "trial": 1,
+      "toolMs": 32.838644000000386,
+      "retrieval": {
+        "calls": 1,
+        "ms": 25.384945000000243,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6969961,
+      "partBytes": 6973783,
+      "cloneSerializeMs": 125.19442100000015,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "write",
+      "trial": 2,
+      "toolMs": 35.78283099999953,
+      "retrieval": {
+        "calls": 1,
+        "ms": 20.216285999999855,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6969961,
+      "partBytes": 6973783,
+      "cloneSerializeMs": 98.72929100000056,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "write",
+      "trial": 3,
+      "toolMs": 21.99811900000077,
+      "retrieval": {
+        "calls": 1,
+        "ms": 18.99250100000063,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6969961,
+      "partBytes": 6973783,
+      "cloneSerializeMs": 121.78424500000074,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "write",
+      "trial": 4,
+      "toolMs": 23.18223399999988,
+      "retrieval": {
+        "calls": 1,
+        "ms": 20.610523999999714,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6969961,
+      "partBytes": 6973783,
+      "cloneSerializeMs": 121.61771500000032,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "write",
+      "trial": 5,
+      "toolMs": 25.064855999999963,
+      "retrieval": {
+        "calls": 1,
+        "ms": 22.075189000000137,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6969961,
+      "partBytes": 6973783,
+      "cloneSerializeMs": 124.4395340000001,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "write",
+      "trial": 6,
+      "toolMs": 26.805639000000156,
+      "retrieval": {
+        "calls": 1,
+        "ms": 24.59331799999927,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6969961,
+      "partBytes": 6973783,
+      "cloneSerializeMs": 118.87694700000065,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "edit",
+      "trial": 0,
+      "toolMs": 24.88608700000077,
+      "retrieval": {
+        "calls": 1,
+        "ms": 21.973548999999366,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970375,
+      "partBytes": 6970859,
+      "cloneSerializeMs": 123.0879700000005,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "edit",
+      "trial": 1,
+      "toolMs": 23.611211999999796,
+      "retrieval": {
+        "calls": 1,
+        "ms": 21.540101000000504,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970375,
+      "partBytes": 6970859,
+      "cloneSerializeMs": 114.40287500000068,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "edit",
+      "trial": 2,
+      "toolMs": 24.590697999999975,
+      "retrieval": {
+        "calls": 1,
+        "ms": 22.256557000000612,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970375,
+      "partBytes": 6970859,
+      "cloneSerializeMs": 121.71342499999992,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "edit",
+      "trial": 3,
+      "toolMs": 23.942250999999487,
+      "retrieval": {
+        "calls": 1,
+        "ms": 21.484341000000313,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970375,
+      "partBytes": 6970859,
+      "cloneSerializeMs": 127.38835199999994,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "edit",
+      "trial": 4,
+      "toolMs": 35.534302000000025,
+      "retrieval": {
+        "calls": 1,
+        "ms": 18.821861000000354,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970375,
+      "partBytes": 6970859,
+      "cloneSerializeMs": 104.51626600000054,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "edit",
+      "trial": 5,
+      "toolMs": 27.005348000000595,
+      "retrieval": {
+        "calls": 1,
+        "ms": 18.212155000000166,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970375,
+      "partBytes": 6970859,
+      "cloneSerializeMs": 124.7762929999999,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "edit",
+      "trial": 6,
+      "toolMs": 23.062823999999637,
+      "retrieval": {
+        "calls": 1,
+        "ms": 20.829203000000234,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970375,
+      "partBytes": 6970859,
+      "cloneSerializeMs": 135.5669280000002,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "apply_patch",
+      "trial": 0,
+      "toolMs": 23.845650999999634,
+      "retrieval": {
+        "calls": 1,
+        "ms": 20.710165000000416,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970965,
+      "partBytes": 6972270,
+      "cloneSerializeMs": 123.23034900000039,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-faz2qz214s/affected.diag\nM tmp/opencode-test-faz2qz214s/second.diag\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "apply_patch",
+      "trial": 1,
+      "toolMs": 43.411049000000276,
+      "retrieval": {
+        "calls": 1,
+        "ms": 27.86488400000053,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970965,
+      "partBytes": 6972270,
+      "cloneSerializeMs": 108.10323099999914,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-faz2qz214s/affected.diag\nM tmp/opencode-test-faz2qz214s/second.diag\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "apply_patch",
+      "trial": 2,
+      "toolMs": 28.645290999999816,
+      "retrieval": {
+        "calls": 1,
+        "ms": 18.275915000000168,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970965,
+      "partBytes": 6972270,
+      "cloneSerializeMs": 95.32391499999994,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-faz2qz214s/affected.diag\nM tmp/opencode-test-faz2qz214s/second.diag\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "apply_patch",
+      "trial": 3,
+      "toolMs": 23.880371000000196,
+      "retrieval": {
+        "calls": 1,
+        "ms": 16.532562000000325,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970965,
+      "partBytes": 6972270,
+      "cloneSerializeMs": 123.54930700000023,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-faz2qz214s/affected.diag\nM tmp/opencode-test-faz2qz214s/second.diag\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "apply_patch",
+      "trial": 4,
+      "toolMs": 32.38254599999982,
+      "retrieval": {
+        "calls": 1,
+        "ms": 23.509433000000172,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970965,
+      "partBytes": 6972270,
+      "cloneSerializeMs": 105.53362199999992,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-faz2qz214s/affected.diag\nM tmp/opencode-test-faz2qz214s/second.diag\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "apply_patch",
+      "trial": 5,
+      "toolMs": 50.635669999999664,
+      "retrieval": {
+        "calls": 1,
+        "ms": 45.76887000000079,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970965,
+      "partBytes": 6972270,
+      "cloneSerializeMs": 116.6529559999999,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-faz2qz214s/affected.diag\nM tmp/opencode-test-faz2qz214s/second.diag\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 1000,
+      "tool": "apply_patch",
+      "trial": 6,
+      "toolMs": 41.11113999999907,
+      "retrieval": {
+        "calls": 1,
+        "ms": 27.157037999999375,
+        "files": 1002,
+        "diagnostics": 48008
+      },
+      "metadataFiles": 1002,
+      "metadataDiagnostics": 48008,
+      "metadataBytes": 6970965,
+      "partBytes": 6972270,
+      "cloneSerializeMs": 99.8388759999998,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-faz2qz214s/affected.diag\nM tmp/opencode-test-faz2qz214s/second.diag\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-faz2qz214s/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "write",
+      "trial": 0,
+      "toolMs": 204.28369099999873,
+      "retrieval": {
+        "calls": 1,
+        "ms": 180.9454679999999,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70167961,
+      "partBytes": 70171784,
+      "cloneSerializeMs": 1449.3767449999996,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "write",
+      "trial": 1,
+      "toolMs": 422.20147499999985,
+      "retrieval": {
+        "calls": 1,
+        "ms": 224.9580249999999,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70167961,
+      "partBytes": 70171784,
+      "cloneSerializeMs": 1459.3879099999976,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "write",
+      "trial": 2,
+      "toolMs": 204.26903999999922,
+      "retrieval": {
+        "calls": 1,
+        "ms": 177.91584000000148,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70167961,
+      "partBytes": 70171784,
+      "cloneSerializeMs": 1424.8084710000003,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "write",
+      "trial": 3,
+      "toolMs": 278.7724890000027,
+      "retrieval": {
+        "calls": 1,
+        "ms": 269.75828700000056,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70167961,
+      "partBytes": 70171784,
+      "cloneSerializeMs": 1484.9794369999981,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "write",
+      "trial": 4,
+      "toolMs": 272.1465669999998,
+      "retrieval": {
+        "calls": 1,
+        "ms": 251.6083519999993,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70167961,
+      "partBytes": 70171784,
+      "cloneSerializeMs": 1414.8373169999977,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "write",
+      "trial": 5,
+      "toolMs": 224.74191299999802,
+      "retrieval": {
+        "calls": 1,
+        "ms": 196.0551630000009,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70167961,
+      "partBytes": 70171784,
+      "cloneSerializeMs": 1482.9748290000025,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "write",
+      "trial": 6,
+      "toolMs": 225.4602199999972,
+      "retrieval": {
+        "calls": 1,
+        "ms": 198.5343630000025,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70167961,
+      "partBytes": 70171784,
+      "cloneSerializeMs": 1564.2891069999969,
+      "output": "Wrote file successfully.\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00000.diag\">\nERROR [1:1] unrelated 0 issue 0\nERROR [1:1] unrelated 0 issue 1\nERROR [1:1] unrelated 0 issue 2\nERROR [1:1] unrelated 0 issue 3\nERROR [1:1] unrelated 0 issue 4\nERROR [1:1] unrelated 0 issue 5\nERROR [1:1] unrelated 0 issue 6\nERROR [1:1] unrelated 0 issue 7\nERROR [1:1] unrelated 0 issue 8\nERROR [1:1] unrelated 0 issue 9\nERROR [1:1] unrelated 0 issue 10\nERROR [1:1] unrelated 0 issue 11\nERROR [1:1] unrelated 0 issue 12\nERROR [1:1] unrelated 0 issue 13\nERROR [1:1] unrelated 0 issue 14\nERROR [1:1] unrelated 0 issue 15\nERROR [1:1] unrelated 0 issue 16\nERROR [1:1] unrelated 0 issue 17\nERROR [1:1] unrelated 0 issue 18\nERROR [1:1] unrelated 0 issue 19\n... and 4 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00001.diag\">\nERROR [1:1] unrelated 1 issue 0\nERROR [1:1] unrelated 1 issue 1\nERROR [1:1] unrelated 1 issue 2\nERROR [1:1] unrelated 1 issue 3\nERROR [1:1] unrelated 1 issue 4\nERROR [1:1] unrelated 1 issue 5\nERROR [1:1] unrelated 1 issue 6\nERROR [1:1] unrelated 1 issue 7\nERROR [1:1] unrelated 1 issue 8\nERROR [1:1] unrelated 1 issue 9\nERROR [1:1] unrelated 1 issue 10\nERROR [1:1] unrelated 1 issue 11\nERROR [1:1] unrelated 1 issue 12\nERROR [1:1] unrelated 1 issue 13\nERROR [1:1] unrelated 1 issue 14\nERROR [1:1] unrelated 1 issue 15\nERROR [1:1] unrelated 1 issue 16\nERROR [1:1] unrelated 1 issue 17\nERROR [1:1] unrelated 1 issue 18\nERROR [1:1] unrelated 1 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00002.diag\">\nERROR [1:1] unrelated 2 issue 0\nERROR [1:1] unrelated 2 issue 1\nERROR [1:1] unrelated 2 issue 2\nERROR [1:1] unrelated 2 issue 3\nERROR [1:1] unrelated 2 issue 4\nERROR [1:1] unrelated 2 issue 5\nERROR [1:1] unrelated 2 issue 6\nERROR [1:1] unrelated 2 issue 7\nERROR [1:1] unrelated 2 issue 8\nERROR [1:1] unrelated 2 issue 9\nERROR [1:1] unrelated 2 issue 10\nERROR [1:1] unrelated 2 issue 11\nERROR [1:1] unrelated 2 issue 12\nERROR [1:1] unrelated 2 issue 13\nERROR [1:1] unrelated 2 issue 14\nERROR [1:1] unrelated 2 issue 15\nERROR [1:1] unrelated 2 issue 16\nERROR [1:1] unrelated 2 issue 17\nERROR [1:1] unrelated 2 issue 18\nERROR [1:1] unrelated 2 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in other files:\n<diagnostics file=\"/fixture/unrelated-00003.diag\">\nERROR [1:1] unrelated 3 issue 0\nERROR [1:1] unrelated 3 issue 1\nERROR [1:1] unrelated 3 issue 2\nERROR [1:1] unrelated 3 issue 3\nERROR [1:1] unrelated 3 issue 4\nERROR [1:1] unrelated 3 issue 5\nERROR [1:1] unrelated 3 issue 6\nERROR [1:1] unrelated 3 issue 7\nERROR [1:1] unrelated 3 issue 8\nERROR [1:1] unrelated 3 issue 9\nERROR [1:1] unrelated 3 issue 10\nERROR [1:1] unrelated 3 issue 11\nERROR [1:1] unrelated 3 issue 12\nERROR [1:1] unrelated 3 issue 13\nERROR [1:1] unrelated 3 issue 14\nERROR [1:1] unrelated 3 issue 15\nERROR [1:1] unrelated 3 issue 16\nERROR [1:1] unrelated 3 issue 17\nERROR [1:1] unrelated 3 issue 18\nERROR [1:1] unrelated 3 issue 19\n... and 28 more\n</diagnostics>\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "edit",
+      "trial": 0,
+      "toolMs": 309.37265900000057,
+      "retrieval": {
+        "calls": 1,
+        "ms": 267.73394199999893,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168375,
+      "partBytes": 70168860,
+      "cloneSerializeMs": 1510.298152000003,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "edit",
+      "trial": 1,
+      "toolMs": 305.5010639999964,
+      "retrieval": {
+        "calls": 1,
+        "ms": 278.1837180000002,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168375,
+      "partBytes": 70168860,
+      "cloneSerializeMs": 1471.4886209999968,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "edit",
+      "trial": 2,
+      "toolMs": 293.261394000001,
+      "retrieval": {
+        "calls": 1,
+        "ms": 272.5825509999995,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168375,
+      "partBytes": 70168860,
+      "cloneSerializeMs": 1361.5717079999959,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "edit",
+      "trial": 3,
+      "toolMs": 276.00603599999886,
+      "retrieval": {
+        "calls": 1,
+        "ms": 247.04947700000048,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168375,
+      "partBytes": 70168860,
+      "cloneSerializeMs": 1513.7400780000025,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "edit",
+      "trial": 4,
+      "toolMs": 321.93994300000486,
+      "retrieval": {
+        "calls": 1,
+        "ms": 265.4674589999995,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168375,
+      "partBytes": 70168860,
+      "cloneSerializeMs": 1593.306402000002,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "edit",
+      "trial": 5,
+      "toolMs": 272.3958599999969,
+      "retrieval": {
+        "calls": 1,
+        "ms": 249.04281700000138,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168375,
+      "partBytes": 70168860,
+      "cloneSerializeMs": 1433.7282269999996,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "edit",
+      "trial": 6,
+      "toolMs": 292.53371499999776,
+      "retrieval": {
+        "calls": 1,
+        "ms": 268.099427000001,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168375,
+      "partBytes": 70168860,
+      "cloneSerializeMs": 1444.7725479999935,
+      "output": "Edit applied successfully.\n\nLSP errors detected in this file, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "apply_patch",
+      "trial": 0,
+      "toolMs": 210.9213649999947,
+      "retrieval": {
+        "calls": 1,
+        "ms": 189.99965299999894,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168967,
+      "partBytes": 70170280,
+      "cloneSerializeMs": 1436.7147719999994,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-1nn4kmvlxju/affected.diag\nM tmp/opencode-test-1nn4kmvlxju/second.diag\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "apply_patch",
+      "trial": 1,
+      "toolMs": 276.3276100000003,
+      "retrieval": {
+        "calls": 1,
+        "ms": 256.59798299999966,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168967,
+      "partBytes": 70170280,
+      "cloneSerializeMs": 1451.7700870000044,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-1nn4kmvlxju/affected.diag\nM tmp/opencode-test-1nn4kmvlxju/second.diag\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "apply_patch",
+      "trial": 2,
+      "toolMs": 253.9308450000026,
+      "retrieval": {
+        "calls": 1,
+        "ms": 228.7621500000023,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168967,
+      "partBytes": 70170280,
+      "cloneSerializeMs": 1496.4011670000036,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-1nn4kmvlxju/affected.diag\nM tmp/opencode-test-1nn4kmvlxju/second.diag\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "apply_patch",
+      "trial": 3,
+      "toolMs": 289.1961350000056,
+      "retrieval": {
+        "calls": 1,
+        "ms": 212.45686700000078,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168967,
+      "partBytes": 70170280,
+      "cloneSerializeMs": 1552.0274599999975,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-1nn4kmvlxju/affected.diag\nM tmp/opencode-test-1nn4kmvlxju/second.diag\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "apply_patch",
+      "trial": 4,
+      "toolMs": 209.74280900000304,
+      "retrieval": {
+        "calls": 1,
+        "ms": 184.9658219999983,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168967,
+      "partBytes": 70170280,
+      "cloneSerializeMs": 1436.1944240000012,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-1nn4kmvlxju/affected.diag\nM tmp/opencode-test-1nn4kmvlxju/second.diag\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "apply_patch",
+      "trial": 5,
+      "toolMs": 241.66134399999282,
+      "retrieval": {
+        "calls": 1,
+        "ms": 217.65149499999825,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168967,
+      "partBytes": 70170280,
+      "cloneSerializeMs": 1454.526303999999,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-1nn4kmvlxju/affected.diag\nM tmp/opencode-test-1nn4kmvlxju/second.diag\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    },
+    {
+      "population": 10000,
+      "tool": "apply_patch",
+      "trial": 6,
+      "toolMs": 323.1538809999911,
+      "retrieval": {
+        "calls": 1,
+        "ms": 256.37133199999516,
+        "files": 10002,
+        "diagnostics": 480008
+      },
+      "metadataFiles": 10002,
+      "metadataDiagnostics": 480008,
+      "metadataBytes": 70168967,
+      "partBytes": 70170280,
+      "cloneSerializeMs": 1545.350219,
+      "output": "Success. Updated the following files:\nM tmp/opencode-test-1nn4kmvlxju/affected.diag\nM tmp/opencode-test-1nn4kmvlxju/second.diag\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/affected.diag, please fix:\n<diagnostics file=\"/fixture/affected.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>\n\nLSP errors detected in tmp/opencode-test-1nn4kmvlxju/second.diag, please fix:\n<diagnostics file=\"/fixture/second.diag\">\nERROR [1:1] affected error\nERROR [1:1] affected error\n</diagnostics>"
+    }
+  ]
+}

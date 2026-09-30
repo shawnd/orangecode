@@ -53,6 +53,7 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar } from "./sidebar"
+import { Titlebar } from "./titlebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
@@ -1198,6 +1199,9 @@ export function Session() {
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
+              <Show when={!wide() && !sidebarVisible()}>
+                <Titlebar sessionID={route.sessionID} width={contentWidth()} />
+              </Show>
               <scrollbox
                 ref={(r) => (scroll = r)}
                 viewportOptions={{
@@ -1760,7 +1764,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
     <Show when={!shouldHide()}>
       <Switch>
         <Match when={display() === "bash"}>
-          <Shell {...toolprops} />
+          <ShellTool {...toolprops} width={ctx.width} sessionID={ctx.sessionID} />
         </Match>
         <Match when={display() === "glob"}>
           <Glob {...toolprops} />
@@ -2064,10 +2068,10 @@ function BlockTool(props: {
   )
 }
 
-function Shell(props: ToolProps) {
+export function ShellTool(props: ToolProps & { width: number; sessionID: string }) {
   const { theme } = useTheme()
   const pathFormatter = usePathFormatter()
-  const ctx = use()
+  const route = useRoute()
   const isRunning = createMemo(() =>
     props.metadata.background === true
       ? props.metadata.shellStatus === "running"
@@ -2076,9 +2080,12 @@ function Shell(props: ToolProps) {
   const output = createMemo(() => stripAnsi(stringValue(props.metadata.output)?.trim() ?? ""))
   const [expanded, setExpanded] = createSignal(false)
   const maxLines = 10
-  const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
-  const collapsed = createMemo(() => collapseToolOutput(output(), maxLines, maxChars()))
+  const maxChars = createMemo(() => maxLines * Math.max(20, props.width - 6))
+  const collapsed = createMemo(() =>
+    collapseToolOutput(output(), maxLines, maxChars(), props.metadata.background === true ? "tail" : "head"),
+  )
   const limited = createMemo(() => {
+    if (props.metadata.background === true) return collapsed().output
     if (expanded() || !collapsed().overflow) return output()
     return collapsed().output
   })
@@ -2103,7 +2110,22 @@ function Shell(props: ToolProps) {
         <BlockTool
           title={title()}
           part={props.part}
-          onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
+          onClick={
+            props.metadata.background === true
+              ? () =>
+                  route.navigate({
+                    type: "session",
+                    sessionID: props.part.sessionID,
+                    shell: {
+                      messageID: props.part.messageID,
+                      partID: props.part.id,
+                      returnSessionID: props.sessionID,
+                    },
+                  })
+              : collapsed().overflow
+                ? () => setExpanded((prev) => !prev)
+                : undefined
+          }
         >
           <box gap={1}>
             <Show when={props.metadata.background === true}>
@@ -2117,8 +2139,17 @@ function Shell(props: ToolProps) {
             <Show when={output()}>
               <text fg={theme.text}>{limited()}</text>
             </Show>
-            <Show when={collapsed().overflow}>
-              <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
+            <Show
+              when={props.metadata.background === true}
+              fallback={
+                <Show when={collapsed().overflow}>
+                  <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
+                </Show>
+              }
+            >
+              <text fg={theme.textMuted}>
+                {collapsed().overflow ? `Latest output (up to ${maxLines} lines) · ` : ""}Click to open shell
+              </text>
             </Show>
           </box>
         </BlockTool>

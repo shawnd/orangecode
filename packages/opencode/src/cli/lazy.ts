@@ -15,8 +15,8 @@ export function lazyCommand<T, U>(
       command ?? {
         ...metadata,
         builder: () => {
-          // Retry before validation, middleware or handlers using a fresh parser:
-          // yargs mutates its command context before invoking the builder.
+          // Abort before validation, middleware or handlers. Retry with a fresh
+          // parser because yargs mutates its command context before this call.
           throw new LoadCommand(async () => {
             command = await load()
           })

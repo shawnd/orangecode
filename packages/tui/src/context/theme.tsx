@@ -1,4 +1,4 @@
-import { CliRenderEvents, SyntaxStyle, type TerminalColors } from "@opentui/core"
+import { CliRenderEvents, SyntaxStyle, rgbToHex, type TerminalColors } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
   DEFAULT_THEMES,
@@ -28,6 +28,8 @@ import { Global } from "@opencode-ai/core/global"
 import { Glob } from "@opencode-ai/core/util/glob"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
+import { cacheStartupPresentation } from "../startup/cache"
+import { useTuiPaths } from "./runtime"
 
 export type ThemeSource = Readonly<{
   discover(): Promise<Record<string, unknown>>
@@ -105,6 +107,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const renderer = useRenderer()
     const config = useTuiConfig()
     const kv = useKV()
+    const paths = useTuiPaths()
     const themes = props.source ?? themeSource
     const pick = (value: unknown) => {
       if (value === "dark" || value === "light") return value
@@ -267,6 +270,34 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     })
 
     createEffect(() => renderer.setBackgroundColor(values().background))
+    createEffect(() => {
+      if (!store.ready) return
+      const theme = values()
+      cacheStartupPresentation(paths.state, {
+        background: theme.background.a === 0 ? "transparent" : rgbToHex(theme.background),
+        backgroundElement: theme.backgroundElement.a === 0 ? "transparent" : rgbToHex(theme.backgroundElement),
+        text: rgbToHex(theme.text),
+        textMuted: rgbToHex(theme.textMuted),
+        menuBorder: rgbToHex(theme.border),
+        backgroundMenu: theme.backgroundMenu.a === 0 ? "transparent" : rgbToHex(theme.backgroundMenu),
+        primary: rgbToHex(theme.primary),
+        selectedText: rgbToHex(selectedForeground(theme)),
+        warning: rgbToHex(theme.warning),
+        mouse: config.mouse,
+        inputBindings: {
+          submit: config.keybinds
+            .get("input.submit")
+            .flatMap((binding) => (typeof binding.key === "string" ? binding.key.split(",") : [])),
+          newline: config.keybinds
+            .get("input.newline")
+            .flatMap((binding) => (typeof binding.key === "string" ? binding.key.split(",") : [])),
+        },
+        maxWidth: config.prompt?.max_width ?? 75,
+        maxHeight: config.prompt?.max_height ?? 0,
+        cursorStyle: config.cursor?.style ?? "block",
+        cursorBlinking: config.cursor?.blinking ?? true,
+      })
+    })
 
     const syntax = createSyntaxStyleMemo(() => generateSyntax(values()))
     const subtleSyntax = createSyntaxStyleMemo(() => generateSubtleSyntax(values()))

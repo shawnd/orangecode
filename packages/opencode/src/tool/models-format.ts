@@ -55,8 +55,10 @@ export function formatSearch(input: {
   models: readonly TaskModel.Candidate[]
   saved: SavedModels
 }): string {
-  const found = TaskModel.search(input.query, input.models)
+  const found = TaskModel.search(input.query, input.models, input.models.length)
   const ranked = [...found.hits].sort((a, b) => {
+    const favorite = Number(includes(input.saved.favorite, b.model)) - Number(includes(input.saved.favorite, a.model))
+    if (favorite !== 0) return favorite
     const score = b.score - a.score
     if (score !== 0) return score
     const pinned = pin(a.model, input.saved) - pin(b.model, input.saved)

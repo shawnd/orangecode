@@ -31,6 +31,7 @@ export { useBindings, useKeymapSelector }
 export type OpenTuiKeymap = ReturnType<typeof useKeymap>
 type OpencodeModeStack = ReturnType<typeof createOpencodeModeStack>
 type CommandSlashEntry = {
+  command: string
   display: string
   description?: string
   aliases?: string[]
@@ -273,6 +274,7 @@ export function useCommandSlashes(): Accessor<readonly CommandSlashEntry[]> {
       if (typeof slashName !== "string" || !slashName) return []
       const slashAliases = entry.command.slashAliases
       return {
+        command: entry.command.name,
         display: `/${slashName}`,
         description:
           typeof entry.command.desc === "string"

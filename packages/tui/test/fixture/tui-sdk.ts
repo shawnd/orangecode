@@ -59,14 +59,14 @@ export function createEventSource() {
   }
 }
 
-export type FetchHandler = (url: URL) => Response | Promise<Response> | undefined
+export type FetchHandler = (url: URL, request?: Request) => Response | Promise<Response | undefined> | undefined
 
 export function createFetch(override?: FetchHandler, events?: ReturnType<typeof createEventSource>) {
   const session = [] as URL[]
   const fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
     if (url.pathname === "/session") session.push(url)
-    const overridden = await override?.(url)
+    const overridden = await override?.(url, input instanceof Request ? input : undefined)
     if (overridden) return overridden
     if (url.pathname === "/api/event" && events) return events.response()
 
@@ -83,7 +83,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return json([])
     if (["/config", "/experimental/resource", "/mcp", "/provider/auth", "/session/status"].includes(url.pathname))
       return json({})
-    if (url.pathname === "/config/providers") return json({ providers: {}, default: {} })
+    if (url.pathname === "/config/providers") return json({ providers: [], default: {} })
     if (url.pathname === "/experimental/console") return json({ consoleManagedProviders: [], switchableOrgCount: 0 })
     if (url.pathname === "/experimental/capabilities") return json({ backgroundSubagents: false })
     if (url.pathname === "/path") return json({ home: "", state: "", config: "", worktree, directory })
