@@ -305,11 +305,11 @@ test("session changes precede the branch on the interrupt row without adding a f
       },
     },
   })
-  const idle = await view.waitForFrame((frame) => frame.includes("+3-1 · main"))
+  const idle = await view.waitForFrame((frame) => frame.includes("+3-1 ·  main"))
   const lines = idle.split("\n")
   const row = lines.findIndex((line) => line.includes("+3-1"))
   expect(lines[row - 1]).toContain("Perms")
-  expect(lines[row]).toContain("+3-1 · main")
+  expect(lines[row]).toContain("+3-1 ·  main")
   view.events.emit({
     directory,
     payload: {
@@ -320,7 +320,7 @@ test("session changes precede the branch on the interrupt row without adding a f
   })
   const busy = await view.waitForFrame((frame) => frame.includes("esc interrupt"))
   expect(busy.split("\n")[row]).toContain("esc interrupt")
-  expect(busy.split("\n")[row]).toContain("+3-1 · main")
+  expect(busy.split("\n")[row]).toContain("+3-1 ·  main")
   expect(busy.split("\n").filter((line) => line.trim())).toHaveLength(lines.filter((line) => line.trim()).length)
 })
 
@@ -333,19 +333,17 @@ test("Ctrl+Enter waits for interruption before sending the draft and attachments
     directory,
     payload: { id: "busy", type: "session.status", properties: { sessionID: "parent", status: { type: "busy" } } },
   })
-  view
-    .prompt()
-    .set({
-      input: "Use this new context [Image 1]",
-      parts: [
-        {
-          type: "file",
-          mime: "image/png",
-          url: "data:image/png;base64,aGVsbG8=",
-          source: { type: "file", path: "image.png", text: { value: "[Image 1]", start: 21, end: 30 } },
-        },
-      ],
-    })
+  view.prompt().set({
+    input: "Use this new context [Image 1]",
+    parts: [
+      {
+        type: "file",
+        mime: "image/png",
+        url: "data:image/png;base64,aGVsbG8=",
+        source: { type: "file", path: "image.png", text: { value: "[Image 1]", start: 21, end: 30 } },
+      },
+    ],
+  })
   await view.waitForFrame((frame) => frame.includes("send now"))
   view.app.mockInput.pressKey("RETURN", { ctrl: true })
   await view.waitForFrame(() => view.aborted.length === 1)
@@ -618,7 +616,7 @@ test("idle parent keeps background count beside path and Escape aborts the entir
     directory,
     payload: { id: "idle", type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } },
   })
-  await view.waitForFrame((frame) => !frame.includes("background agent"))
+  const idle = await view.waitForFrame((frame) => !frame.includes("background agent"))
   view.events.emit({
     directory,
     payload: {
@@ -633,7 +631,9 @@ test("idle parent keeps background count beside path and Escape aborts the entir
   const progressRow = lines.findIndex((line) => line.includes("[⋯]"))
   expect(pathRow).toBeGreaterThanOrEqual(0)
   expect(progressRow).toBe(pathRow + 1)
+  expect(lines.filter((line) => line.trim())).toHaveLength(idle.split("\n").filter((line) => line.trim()).length)
   expect(lines[progressRow]).toContain("esc interrupt")
+  expect(lines[progressRow]).toContain(" main")
   expect(working).not.toContain("interrupt all")
 })
 
@@ -669,12 +669,12 @@ test("a lone background agent opens directly by click or Down/Enter", async () =
 test("background agent activity keeps animating before Escape while the parent is idle", async () => {
   await using tmp = await tmpdir()
   await using view = await mount(tmp.path, "parent")
-  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  const idle = await view.waitForFrame((frame) => frame.includes("Metadata Model"))
   view.ctx().kv.set("animations_enabled", true)
   runningTask(view)
   const beforeEscape = (frame: string) => {
     const line = frame.split("\n").find((line) => line.includes("esc interrupt")) ?? ""
-    return line.slice(0, line.indexOf("esc interrupt")).trim()
+    return line.match(/[■⬝]{8}/)?.[0] ?? ""
   }
   const first = await view.waitForFrame(
     (frame) =>
@@ -686,7 +686,17 @@ test("background agent activity keeps animating before Escape while the parent i
       beforeEscape(frame).length > 0 &&
       beforeEscape(frame) !== beforeEscape(first),
   )
+  const lines = first.split("\n")
+  expect(lines[lines.findIndex((line) => line.includes(directory)) + 1]).toContain(beforeEscape(first))
+  expect(lines.find((line) => line.includes("esc interrupt"))).toContain(" main")
+  expect(first.split("\n").filter((line) => line.trim())).toHaveLength(
+    idle.split("\n").filter((line) => line.trim()).length,
+  )
   expect(beforeEscape(next)).not.toBe(beforeEscape(first))
+  view.app.resize(80, 30)
+  const narrow = await view.waitForFrame((frame) => beforeEscape(frame).length > 0)
+  const rows = narrow.split("\n")
+  expect(rows[rows.findIndex((line) => line.includes(directory)) + 1]).toMatch(/[■⬝]{8} esc interrupt.* main/)
   view.events.emit({
     directory,
     payload: { id: "agent-idle", type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } },
@@ -800,6 +810,7 @@ test("shell footer selection opens live command output without submitting the dr
     expect(shellRow).toBe(agentRow + 1)
     expect(lines[shellRow].indexOf("1 shell")).toBe(lines[agentRow].indexOf("1 background agent"))
     expect(lines[shellRow]).toContain("esc interrupt")
+    expect(lines[shellRow]).toContain(" main")
     expect(lines[shellRow].indexOf("[⋯]")).toBeLessThan(lines[shellRow].indexOf("esc interrupt"))
   }
   await view.click("1 shell")
@@ -1171,6 +1182,7 @@ for (const sessionID of [undefined, "metadata-session"]) {
     await view.click("◷ (0)")
     await view.waitForFrame((frame) => frame.includes("Reminders · all terminals"))
     view.ctx().dialog.clear()
+
     const store = NativeReminders.open(`${tmp.path}/reminders.sqlite3`)
     try {
       const reminder = store.create(store.parse("in 20 minutes check CI"))

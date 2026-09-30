@@ -15,7 +15,7 @@ export function GitStatus(props: { directory: string; separator?: boolean }) {
     const local = result?.directory === props.directory ? result.info : undefined
     const branch = props.directory === sync.path.directory ? (sync.data.vcs?.branch ?? local?.branch) : local?.branch
     if (!branch) return
-    return local?.linked ? `worktree: ${branch}` : `${branch}`
+    return local?.linked ? `worktree:  ${branch}` : ` ${branch}`
   }
 
   return (

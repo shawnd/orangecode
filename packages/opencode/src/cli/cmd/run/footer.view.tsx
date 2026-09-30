@@ -840,7 +840,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                   backgroundColor="transparent"
                 >
                   <Show when={busy() && !exiting()}>
-                    <box height={1} flexShrink={0}>
+                    <box flexShrink={0}>
                       <spinner color={spin().color} frames={spin().frames} interval={40} />
                     </box>
                   </Show>

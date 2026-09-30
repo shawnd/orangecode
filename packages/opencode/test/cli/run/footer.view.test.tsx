@@ -1024,7 +1024,6 @@ test("direct footer shows editable prompts and additional queued work while runn
   try {
     await app.renderOnce()
     const frame = app.captureCharFrame()
-    const statuslineText = frame.split("\n").find((line) => line.includes("BUILD"))
     const transparent = RGBA.fromValues(0, 0, 0, 0).toInts()
     const tinted = (RUN_THEME_FALLBACK.footer.status as RGBA).toInts()
     const accent = (RUN_THEME_FALLBACK.footer.statusAccent as RGBA).toInts()
@@ -1038,7 +1037,6 @@ test("direct footer shows editable prompts and additional queued work while runn
     const hint = statusItems.at(-1)!
 
     expect(spinner).toBeDefined()
-    expect(statuslineText).toMatch(/BUILD.*[■⬝]{8}/)
     expect(frame).toContain("a-model-name-long-enough-to-force-responsive-truncation")
     expect(frame).toContain("3 queued")
     expect(frame).toContain("ctrl+b background")

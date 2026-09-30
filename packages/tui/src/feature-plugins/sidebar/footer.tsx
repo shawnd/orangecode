@@ -3,6 +3,7 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, Show } from "solid-js"
 import { abbreviateHome } from "../../runtime"
 import { useTuiPaths } from "../../context/runtime"
+import { GitStatus } from "../../component/git-status"
 
 const id = "internal:sidebar-footer"
 
@@ -28,9 +29,7 @@ export function SidebarFooterView(props: { api: TuiPluginApi; sessionID: string 
     const session = props.api.state.session.get(props.sessionID)
     const dir = session?.directory || props.api.state.path.directory || paths.cwd
     const out = abbreviateHome(dir, paths.home)
-    const branch = session?.directory === props.api.state.path.directory ? props.api.state.vcs?.branch : undefined
-    const text = branch ? out + ":" + branch : out
-    const list = text.split("/")
+    const list = out.split("/")
     return {
       parent: list.slice(0, -1).join("/"),
       name: list.at(-1) ?? "",
@@ -78,6 +77,11 @@ export function SidebarFooterView(props: { api: TuiPluginApi; sessionID: string 
           <span style={{ fg: theme().text }}>{path().name}</span>
         </text>
         <box flexDirection="row" gap={1} flexShrink={0}>
+          <GitStatus
+            directory={
+              props.api.state.session.get(props.sessionID)?.directory || props.api.state.path.directory || paths.cwd
+            }
+          />
           <Show when={changes().additions}>
             <text fg={theme().diffAdded}>+{changes().additions}</text>
           </Show>
