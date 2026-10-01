@@ -19,10 +19,10 @@ export function computePromptTraits(input: PromptTraitsInput): PromptTraits {
       ? input.autocompleteVisible
         ? (["escape", "navigate", "submit", "tab"] as const)
         : (["tab"] as const)
-      : undefined
+      : (["tab"] as const)
   return {
     capture,
-    status: input.mode === "shell" ? "SHELL" : undefined,
+    status: input.mode === "shell" ? "TERMINAL" : undefined,
     owner: "opencode",
     role: "prompt",
   }

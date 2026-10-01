@@ -10,7 +10,7 @@ import { FrecencyProvider } from "../../../src/component/prompt/frecency"
 import { DialogModel } from "../../../src/component/dialog-model"
 import { DialogProvider } from "../../../src/component/dialog-provider"
 import { DialogVariant } from "../../../src/component/dialog-variant"
-import { TuiConfigProvider } from "../../../src/config"
+import { TuiConfigProvider, useTuiConfig } from "../../../src/config"
 import { ArgsProvider } from "../../../src/context/args"
 import { ClipboardProvider } from "../../../src/context/clipboard"
 import { DataProvider } from "../../../src/context/data"
@@ -25,7 +25,13 @@ import { RouteProvider, useRoute } from "../../../src/context/route"
 import { SDKProvider } from "../../../src/context/sdk"
 import { SyncProvider, useSync } from "../../../src/context/sync"
 import { ThemeProvider } from "../../../src/context/theme"
-import { OpencodeKeymapProvider, registerOpencodeKeymap, useBindings, useOpencodeKeymap } from "../../../src/keymap"
+import {
+  OPENCODE_BASE_MODE,
+  OpencodeKeymapProvider,
+  registerOpencodeKeymap,
+  useBindings,
+  useOpencodeKeymap,
+} from "../../../src/keymap"
 import { PromptHistoryProvider, usePromptHistory } from "../../../src/prompt/history"
 import { PromptStashProvider } from "../../../src/prompt/stash"
 import { useDialog } from "../../../src/ui/dialog"
@@ -130,6 +136,7 @@ async function mount(
     const dialog = useDialog()
     const sync = useSync()
     const route = useRoute()
+    const tuiConfig = useTuiConfig()
     context = {
       local,
       dialog,
@@ -141,6 +148,10 @@ async function mount(
       keymap: useOpencodeKeymap(),
     }
     useStartupModelDialog()
+    useBindings(() => ({
+      mode: OPENCODE_BASE_MODE,
+      bindings: tuiConfig.keybinds.gather("test.app", ["agent.cycle", "agent.cycle.reverse"]),
+    }))
     // Register app-level commands so clicks exercise real keymap dispatch and picker components.
     useBindings(() => ({
       commands: [
@@ -151,6 +162,7 @@ async function mount(
           slashName: "agents",
           run: () => local.agent.move(1),
         },
+        { name: "agent.cycle.reverse", run: () => local.agent.move(-1) },
         {
           name: "model.list",
           namespace: "palette",
@@ -1113,6 +1125,8 @@ test("home selection changes update the read-only startup snapshot without persi
   using view = await mount(tmp.path)
   await view.waitForFrame((frame) => frame.includes("Metadata Model") && frame.includes("default"))
   await view.click("Build")
+  await view.waitForFrame((frame) => frame.includes("Terminal"))
+  await view.click("Terminal")
   await view.waitForFrame((frame) => frame.includes("Plan"))
   view.ctx().local.model.variant.set("high")
   const deadline = Date.now() + 2000
@@ -1144,6 +1158,9 @@ for (const sessionID of [undefined, "metadata-session"]) {
     expect(frame).toContain("Build")
 
     await view.click("Build")
+    const terminal = await view.waitForFrame((frame) => frame.includes("Terminal"))
+    expect(terminal).not.toContain("Metadata Model")
+    await view.click("Terminal")
     await view.waitForFrame((frame) => frame.includes("Plan"))
     expect(view.ctx().local.agent.current()?.name).toBe("plan")
     await view.click("Plan")
@@ -1190,6 +1207,54 @@ for (const sessionID of [undefined, "metadata-session"]) {
     expect(view.ctx().dialog.stack.length).toBe(0)
   })
 }
+
+test("Tab cycles terminal, plan, and build, and terminal commands remain in shell mode", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "metadata-session")
+  await view.waitForFrame((frame) => frame.includes("Build") && frame.includes("Metadata Model"))
+  view.app.mockInput.pressKey("TAB")
+  const terminal = await view.waitForFrame((frame) => frame.includes("Terminal"))
+  expect(terminal).not.toContain("Metadata Model")
+  expect(terminal).toContain("tab modes")
+
+  for (const command of ["ls -la", "/bin/pwd", "exit"]) {
+    view.prompt().set({ input: command, parts: [] })
+    await view.app.renderOnce()
+    view.app.mockInput.pressEnter()
+    await view.waitForFrame(() => view.submitted.length === ["ls -la", "/bin/pwd", "exit"].indexOf(command) + 1)
+    expect(view.submitted.at(-1)).toMatchObject({
+      path: "/session/metadata-session/shell",
+      body: { command, agent: "build" },
+    })
+    expect(view.ctx().local.prompt.mode()).toBe("shell")
+    expect(view.prompt().current.input).toBe("")
+  }
+
+  // Session hydration must not exit terminal mode after its first command.
+  view.ctx().sync.set("message", "metadata-session", [
+    {
+      id: "terminal-message",
+      sessionID: "metadata-session",
+      role: "user",
+      agent: "build",
+      model: { providerID: "metadata-provider", modelID: "metadata-model" },
+      time: { created: 1 },
+    },
+  ])
+  await view.app.renderOnce()
+  expect(view.ctx().local.prompt.mode()).toBe("shell")
+
+  view.app.mockInput.pressKey("TAB")
+  await view.waitForFrame((frame) => frame.includes("Plan") && frame.includes("Metadata Model"))
+  view.app.mockInput.pressKey("TAB")
+  await view.waitForFrame((frame) => frame.includes("Build"))
+  view.app.mockInput.pressKey("TAB", { shift: true })
+  await view.waitForFrame((frame) => frame.includes("Plan"))
+  view.app.mockInput.pressKey("TAB", { shift: true })
+  await view.waitForFrame((frame) => frame.includes("Terminal"))
+  view.app.mockInput.pressKey("TAB", { shift: true })
+  await view.waitForFrame((frame) => frame.includes("Build"))
+})
 
 async function herdrFixture(root: string, delayed = false) {
   const env = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV }

@@ -17,6 +17,7 @@ import { useRoute } from "./route"
 import { usePermission } from "./permission"
 import { createModelState } from "../util/model-state"
 import { useRenderer } from "@opentui/solid"
+import { createPromptMode } from "../prompt/mode"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -102,7 +103,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         current() {
           return agents().find((x) => x.name === agentStore.current) ?? agents().at(0)
         },
-        set(name: string) {
+        set(name: string, options?: { preserveMode?: boolean }) {
           if (!agents().some((x) => x.name === name))
             return toast.show({
               variant: "warning",
@@ -110,17 +111,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               duration: 3000,
             })
           setAgentStore("current", name)
+          if (!options?.preserveMode) prompt.setMode("normal")
         },
         move(direction: 1 | -1) {
-          batch(() => {
-            const current = this.current()
-            if (!current) return
-            let next = agents().findIndex((x) => x.name === current.name) + direction
-            if (next < 0) next = agents().length - 1
-            if (next >= agents().length) next = 0
-            const value = agents()[next]
-            setAgentStore("current", value.name)
-          })
+          batch(() => prompt.move(direction))
         },
         color(name: string) {
           const index = visibleAgents().findIndex((x) => x.name === name)
@@ -139,6 +133,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     const agent = createAgent()
+    const prompt = createPromptMode(
+      () => agent.list().map((item) => item.name),
+      () => agent.current()?.name,
+      (name) => agent.set(name),
+    )
 
     function createModel() {
       const [modelStore, setModelStore] = createStore<{
@@ -527,6 +526,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const result = {
       model,
       agent,
+      prompt,
       mcp,
       session,
       permission,
