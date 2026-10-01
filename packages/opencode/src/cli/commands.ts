@@ -53,6 +53,10 @@ export const commands = [
       return UpgradeCommand
     },
   ),
+  lazyCommand({ command: "install", describe: "set up shell aliases when OpenCode is also installed" }, async () => {
+    const { InstallCommand } = await import("./cmd/install")
+    return InstallCommand
+  }),
   lazyCommand({ command: "uninstall", describe: "uninstall orangecode and remove all related files" }, async () => {
     const { UninstallCommand } = await import("./cmd/uninstall")
     return UninstallCommand
