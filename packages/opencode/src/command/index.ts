@@ -48,6 +48,8 @@ export const Default = {
   INIT: "init",
   REVIEW: "review",
   VERIFY: "verify",
+  COMMIT: "commit",
+  TESTS: "tests",
 } as const
 
 export interface Interface {
@@ -96,6 +98,21 @@ const layer = Layer.effect(
           return PROMPT_VERIFY.replace("${path}", ctx.directory)
         },
         hints: hints(PROMPT_VERIFY),
+      }
+
+      commands[Default.COMMIT] = {
+        name: Default.COMMIT,
+        description: "stage and commit this diff in isolation from other diffs",
+        source: "command",
+        template: "git: stage and commit this diff in isolation (from other diffs)",
+        hints: [],
+      }
+      commands[Default.TESTS] = {
+        name: Default.TESTS,
+        description: "verify we have adequate tests for this diff",
+        source: "command",
+        template: "verify we have adequate tests for this diff",
+        hints: [],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
