@@ -29,51 +29,34 @@ export interface Handle {
 
 type RootFunction = (file: string, ctx: InstanceContext) => Promise<string | undefined>
 
-const NearestRoot = (includePatterns: string[], excludePatterns?: string[]): RootFunction => {
+const NearestRoot = (includePatterns: string[], excludePatterns?: string[], strict = false): RootFunction => {
   return async (file, ctx) => {
     if (excludePatterns) {
-      const excludedFiles = Filesystem.up({
-        targets: excludePatterns,
-        start: path.dirname(file),
-        stop: ctx.directory,
-      })
-      const excluded = await excludedFiles.next()
-      await excludedFiles.return()
-      if (excluded.value) return undefined
+      if (await nearestMarker(excludePatterns, file, ctx.directory)) return undefined
     }
-    const files = Filesystem.up({
-      targets: includePatterns,
-      start: path.dirname(file),
-      stop: ctx.directory,
-    })
-    const first = await files.next()
-    await files.return()
-    if (!first.value) return ctx.directory
-    return path.dirname(first.value)
+    return (await nearestMarker(includePatterns, file, ctx.directory)) ?? (strict ? undefined : ctx.directory)
   }
 }
 
-const StrictNearestRoot = (includePatterns: string[], excludePatterns?: string[]): RootFunction => {
-  return async (file, ctx) => {
-    if (excludePatterns) {
-      const excludedFiles = Filesystem.up({
-        targets: excludePatterns,
-        start: path.dirname(file),
-        stop: ctx.directory,
-      })
-      const excluded = await excludedFiles.next()
-      await excludedFiles.return()
-      if (excluded.value) return undefined
+const StrictNearestRoot = (includePatterns: string[], excludePatterns?: string[]) =>
+  NearestRoot(includePatterns, excludePatterns, true)
+
+async function nearestMarker(patterns: string[], file: string, stop: string) {
+  const globs = patterns.filter((pattern) => /[*?\[{}]/.test(pattern)).map((pattern) => new Bun.Glob(pattern))
+  const literals = patterns.filter((pattern) => !/[*?\[{}]/.test(pattern))
+  let directory = path.dirname(file)
+  while (true) {
+    if ((await Promise.all(literals.map((pattern) => pathExists(path.join(directory, pattern))))).some(Boolean))
+      return directory
+    if (globs.length) {
+      // Root markers include directories such as *.xcodeproj, not just files.
+      const entries = await fs.readdir(directory).catch(() => [])
+      if (entries.some((entry) => globs.some((glob) => glob.match(entry)))) return directory
     }
-    const files = Filesystem.up({
-      targets: includePatterns,
-      start: path.dirname(file),
-      stop: ctx.directory,
-    })
-    const first = await files.next()
-    await files.return()
-    if (!first.value) return undefined
-    return path.dirname(first.value)
+    if (directory === stop) return undefined
+    const parent = path.dirname(directory)
+    if (parent === directory) return undefined
+    directory = parent
   }
 }
 
@@ -358,7 +341,7 @@ export const Biome: Info = {
 export const Gopls: Info = {
   id: "gopls",
   root: async (file, ctx) => {
-    const work = await NearestRoot(["go.work"])(file, ctx)
+    const work = await StrictNearestRoot(["go.work"])(file, ctx)
     if (work) return work
     return NearestRoot(["go.mod", "go.sum"])(file, ctx)
   },
@@ -371,8 +354,8 @@ export const Gopls: Info = {
 
       const proc = Process.spawn(["go", "install", "golang.org/x/tools/gopls@latest"], {
         env: { ...process.env, GOBIN: Global.Path.bin },
-        stdout: "pipe",
-        stderr: "pipe",
+        stdout: "ignore",
+        stderr: "ignore",
         stdin: "pipe",
       })
       const exit = await proc.exited
@@ -686,7 +669,7 @@ export const Zls: Info = {
 
 export const CSharp: Info = {
   id: "csharp",
-  root: NearestRoot([".slnx", ".sln", ".csproj", "global.json"]),
+  root: NearestRoot(["*.slnx", "*.sln", "*.csproj", "global.json"]),
   extensions: [".cs", ".csx"],
   async spawn(root, _ctx, flags) {
     const bin = await getRoslynLanguageServer(flags.disableLspDownload)
@@ -702,7 +685,7 @@ export const CSharp: Info = {
 
 export const Razor: Info = {
   id: "razor",
-  root: NearestRoot([".slnx", ".sln", ".csproj", "global.json"]),
+  root: NearestRoot(["*.slnx", "*.sln", "*.csproj", "global.json"]),
   extensions: [".razor", ".cshtml"],
   async spawn(root, _ctx, flags) {
     const bin = await getRoslynLanguageServer(flags.disableLspDownload)
@@ -822,7 +805,7 @@ async function findVscodeRazorExtension() {
 
 export const FSharp: Info = {
   id: "fsharp",
-  root: NearestRoot([".slnx", ".sln", ".fsproj", "global.json"]),
+  root: NearestRoot(["*.slnx", "*.sln", "*.fsproj", "global.json"]),
   extensions: [".fs", ".fsi", ".fsx", ".fsscript"],
   async spawn(root, _ctx, flags) {
     let bin = which("fsautocomplete")
@@ -855,7 +838,7 @@ export const FSharp: Info = {
 
 export const SourceKit: Info = {
   id: "sourcekit-lsp",
-  extensions: [".swift", ".objc", "objcpp"],
+  extensions: [".swift", ".m", ".mm"],
   root: NearestRoot(["Package.swift", "*.xcodeproj", "*.xcworkspace"]),
   async spawn(root) {
     // Check if sourcekit-lsp is available in the PATH
@@ -1275,13 +1258,13 @@ export const KotlinLS: Info = {
   extensions: [".kt", ".kts"],
   root: async (file, ctx) => {
     // 1) Nearest Gradle root (multi-project or included build)
-    const settingsRoot = await NearestRoot(["settings.gradle.kts", "settings.gradle"])(file, ctx)
+    const settingsRoot = await StrictNearestRoot(["settings.gradle.kts", "settings.gradle"])(file, ctx)
     if (settingsRoot) return settingsRoot
     // 2) Gradle wrapper (strong root signal)
-    const wrapperRoot = await NearestRoot(["gradlew", "gradlew.bat"])(file, ctx)
+    const wrapperRoot = await StrictNearestRoot(["gradlew", "gradlew.bat"])(file, ctx)
     if (wrapperRoot) return wrapperRoot
     // 3) Single-project or module-level build
-    const buildRoot = await NearestRoot(["build.gradle.kts", "build.gradle"])(file, ctx)
+    const buildRoot = await StrictNearestRoot(["build.gradle.kts", "build.gradle"])(file, ctx)
     if (buildRoot) return buildRoot
     // 4) Maven fallback
     return NearestRoot(["pom.xml"])(file, ctx)
@@ -1398,6 +1381,13 @@ export const LuaLS: Info = {
   extensions: [".lua"],
   async spawn(root, _ctx, flags) {
     let bin = which("lua-language-server")
+    const cached = path.join(
+      Global.Path.bin,
+      `lua-language-server-${process.arch}-${process.platform}`,
+      "bin",
+      "lua-language-server" + (process.platform === "win32" ? ".exe" : ""),
+    )
+    if (!bin && (await Filesystem.exists(cached))) bin = cached
 
     if (!bin) {
       if (flags.disableLspDownload) return

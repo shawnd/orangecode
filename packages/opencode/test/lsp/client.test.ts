@@ -104,6 +104,7 @@ describe("LSPClient interop", () => {
     })
 
     const params = await client.connection.sendRequest<any>("test/get-initialize-params", {})
+    expect(params.processId).toBe(process.pid)
     expect(params.capabilities.workspace.diagnostics.refreshSupport).toBe(false)
     expect(params.capabilities.textDocument.publishDiagnostics.versionSupport).toBe(false)
 

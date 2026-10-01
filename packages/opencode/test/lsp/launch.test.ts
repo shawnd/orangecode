@@ -1,10 +1,25 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { spawn } from "../../src/lsp/launch"
+import { spawn, stop } from "../../src/lsp/launch"
 import { tmpdir } from "../fixture/fixture"
 
 describe("lsp.launch", () => {
+  test("stop waits for exit and escalates an ignored SIGTERM", async () => {
+    if (process.platform === "win32") return
+    const proc = spawn(process.execPath, [
+      "-e",
+      'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000)',
+    ])
+    try {
+      await new Promise<void>((resolve) => proc.stdout.once("data", () => resolve()))
+      await stop(proc)
+      expect(proc.signalCode).toBe("SIGKILL")
+    } finally {
+      await stop(proc)
+    }
+  })
+
   test("spawns cmd scripts with spaces on Windows", async () => {
     if (process.platform !== "win32") return
 
