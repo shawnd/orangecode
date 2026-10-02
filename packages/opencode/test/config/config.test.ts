@@ -2,7 +2,7 @@ import { test, expect, describe, afterEach, beforeEach, spyOn } from "bun:test"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
-import { Cause, Effect, Exit, Layer, Logger, Option } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Option, Ref } from "effect"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "@/config/config"
@@ -31,7 +31,7 @@ import {
 } from "../fixture/fixture"
 import { InstanceRuntime } from "@/project/instance-runtime"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import path from "path"
 import fs from "fs/promises"
 import os from "os"
@@ -99,12 +99,14 @@ const configLayer = (
     auth?: Layer.Layer<Auth.Service>
     account?: Layer.Layer<Account.Service>
     client?: HttpClient.HttpClient
+    filesystem?: Layer.Layer<FSUtil.Service>
   } = {},
 ) =>
   LayerNode.compile(LayerNode.group([Config.node, FSUtil.node, Env.node, CrossSpawnSpawner.node]), [
     [Auth.node, options.auth ?? AuthTest.empty],
     [Account.node, options.account ?? AccountTest.empty],
     [Npm.node, NpmTest.noop],
+    [FSUtil.node, options.filesystem ?? LayerNode.compile(FSUtil.node)],
     [httpClient, Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)],
   ])
 
@@ -410,6 +412,190 @@ it.effect("persists global folder approvals alongside existing settings", () =>
     }),
   ),
 )
+
+it.live("global config retries an interrupted cached load without changing the file", () =>
+  withGlobalConfig({ config: { permission: { external_directory: { "/shared/*": "allow" } } } }, ({ dir }) =>
+    Effect.gen(function* () {
+      const filesystem = yield* FSUtil.Service
+      const armed = yield* Ref.make(false)
+      const reads = yield* Ref.make(0)
+      const loading = yield* Deferred.make<void>()
+      const file = path.join(dir, "opencode.json")
+      const gated = Layer.succeed(FSUtil.Service, {
+        ...filesystem,
+        readFileStringSafe: (filepath) =>
+          Effect.gen(function* () {
+            const text = yield* filesystem.readFileStringSafe(filepath)
+            if (filepath === file && (yield* Ref.get(armed))) {
+              const count = yield* Ref.updateAndGet(reads, (count) => count + 1)
+              // The first read fingerprints the files; the second is inside the cached loader.
+              if (count === 2) {
+                yield* Deferred.succeed(loading, undefined)
+                yield* Effect.never
+              }
+            }
+            return text
+          }),
+      })
+
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const before = yield* config.getGlobal()
+        const contents = yield* filesystem.readFileString(file)
+        yield* config.invalidate()
+        yield* Ref.set(armed, true)
+        const interrupted = yield* config.getGlobal().pipe(Effect.forkScoped)
+        yield* awaitWithTimeout(Deferred.await(loading), "global config did not enter its cached loader")
+        yield* Fiber.interrupt(interrupted)
+        yield* Ref.set(armed, false)
+
+        const recovered = yield* awaitWithTimeout(config.getGlobal(), "interrupted global cache did not recover")
+        expect(recovered).toEqual(before)
+        expect(recovered.permission?.external_directory).toEqual({ "/shared/*": "allow" })
+        expect(yield* filesystem.readFileString(file)).toBe(contents)
+      }).pipe(Effect.provide(Layer.fresh(configLayer({ filesystem: gated }))))
+    }),
+  ),
+)
+
+for (const name of ["config.json", "opencode.json", "opencode.jsonc"]) {
+  it.live(`global cache detects equal-sized content changes with unchanged mtime in ${name}`, () =>
+    withGlobalConfig({ config: { permission: { external_directory: { "/first/*": "allow" } } }, name }, ({ dir }) =>
+      Effect.gen(function* () {
+        const config = yield* Config.Service
+        const filesystem = yield* FSUtil.Service
+        const file = path.join(dir, name)
+        const initial = yield* config.getGlobal()
+        const info = yield* filesystem.stat(file)
+        const text = yield* filesystem.readFileString(file)
+        const updated = text.replace("/first/*", "/other/*")
+        expect(updated).not.toBe(text)
+        expect(updated.length).toBe(text.length)
+        yield* filesystem.writeFileString(file, updated)
+        yield* filesystem.utimes(
+          file,
+          Option.getOrElse(info.atime, () => new Date(0)),
+          Option.getOrElse(info.mtime, () => new Date(0)),
+        )
+        const changed = yield* filesystem.stat(file)
+        expect(changed.size).toBe(info.size)
+        expect(changed.mtime).toEqual(info.mtime)
+
+        expect((yield* config.getGlobal()).permission?.external_directory).toEqual({ "/other/*": "allow" })
+        expect(initial.permission?.external_directory).toEqual({ "/first/*": "allow" })
+      }),
+    ),
+  )
+}
+
+it.live("global cache refreshes file deletion and falls back through config file precedence", () =>
+  withGlobalConfig(
+    { config: { permission: { external_directory: { "/shared/*": "deny" } } }, name: "config.json" },
+    ({ dir }) =>
+      Effect.gen(function* () {
+        const config = yield* Config.Service
+        const filesystem = yield* FSUtil.Service
+        yield* writeConfigEffect(dir, schemaConfig({ permission: { external_directory: { "/shared/*": "ask" } } }))
+        yield* writeConfigEffect(
+          dir,
+          schemaConfig({ permission: { external_directory: { "/shared/*": "allow" } } }),
+          "opencode.jsonc",
+        )
+        expect((yield* config.getGlobal()).permission?.external_directory).toEqual({ "/shared/*": "allow" })
+        yield* filesystem.remove(path.join(dir, "opencode.jsonc"))
+        expect((yield* config.getGlobal()).permission?.external_directory).toEqual({ "/shared/*": "ask" })
+        yield* filesystem.remove(path.join(dir, "opencode.json"))
+        expect((yield* config.getGlobal()).permission?.external_directory).toEqual({ "/shared/*": "deny" })
+        yield* filesystem.remove(path.join(dir, "config.json"))
+        expect((yield* config.getGlobal()).permission).toBeUndefined()
+      }),
+  ),
+)
+
+for (const first of ["mcp", "approval", "two approvals"]) {
+  it.live(`concurrent global writes preserve both changes with ${first} reading first`, () =>
+    withGlobalConfig(
+      { config: { username: "existing", permission: { external_directory: { "/existing/*": "allow" } } } },
+      ({ dir }) =>
+        Effect.gen(function* () {
+          const filesystem = yield* FSUtil.Service
+          const project = yield* tmpdirScoped()
+          const armed = yield* Ref.make(false)
+          const reading = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const contending = yield* Deferred.make<void>()
+          const file = path.join(dir, "opencode.json")
+          const gated = Layer.succeed(FSUtil.Service, {
+            ...filesystem,
+            readFileStringSafe: (filepath) =>
+              Effect.gen(function* () {
+                const text = yield* filesystem.readFileStringSafe(filepath)
+                if (filepath === file && (yield* Ref.getAndSet(armed, false))) {
+                  yield* Deferred.succeed(reading, undefined)
+                  yield* Deferred.await(release)
+                }
+                return text
+              }),
+            makeDirectory: (filepath, options) =>
+              filesystem
+                .makeDirectory(filepath, options)
+                .pipe(
+                  Effect.tapError((error) =>
+                    filepath.endsWith(".lock") && error.reason._tag === "AlreadyExists"
+                      ? Deferred.succeed(contending, undefined)
+                      : Effect.void,
+                  ),
+                ),
+          })
+
+          yield* withInstanceDir(
+            project,
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              yield* config.get()
+              const mcp = config.patchMcp("shared", { type: "local", command: ["test-mcp"], enabled: false }, "global")
+              const approval = config.updateGlobal({ permission: { external_directory: { "/new/*": "allow" } } })
+              yield* Ref.set(armed, true)
+              const one = yield* (first === "mcp" ? mcp : approval).pipe(Effect.forkScoped)
+              yield* awaitWithTimeout(Deferred.await(reading), "first global writer did not read its file")
+              const two = yield* (
+                first === "two approvals"
+                  ? config.updateGlobal({ permission: { external_directory: { "/second/*": "allow" } } })
+                  : first === "mcp"
+                    ? approval
+                    : mcp
+              ).pipe(Effect.forkScoped)
+              // With a shared lock, the second writer contends. Without it, it completes
+              // before the paused first writer overwrites its changes. No timing sleeps.
+              yield* awaitWithTimeout(
+                Effect.raceFirst(Deferred.await(contending), Fiber.join(two)),
+                "second global writer neither contended nor completed",
+              )
+              yield* Deferred.succeed(release, undefined)
+              yield* awaitWithTimeout(Fiber.join(one), "first global writer did not finish")
+              yield* awaitWithTimeout(Fiber.join(two), "second global writer did not finish")
+
+              const expected = {
+                username: "existing",
+                permission: {
+                  external_directory: {
+                    "/existing/*": "allow",
+                    "/new/*": "allow",
+                    ...(first === "two approvals" ? { "/second/*": "allow" } : {}),
+                  },
+                },
+                ...(first === "two approvals"
+                  ? {}
+                  : { mcp: { shared: { type: "local", command: ["test-mcp"], enabled: false } } }),
+              }
+              expect(yield* filesystem.readJson(file)).toMatchObject(expected)
+              expect(yield* config.getGlobal()).toMatchObject(expected)
+            }).pipe(Effect.provide(Layer.fresh(configLayer({ filesystem: gated })))),
+          )
+        }),
+    ),
+  )
+}
 
 for (const name of ["opencode.json", "opencode.jsonc"]) {
   it.live(`permission action patches preserve shorthand defaults in ${name}`, () =>
