@@ -1214,73 +1214,78 @@ describe("session.llm.stream", () => {
     },
   )
 
-  it.instance(
-    "keeps tools enabled by prompt permissions",
-    () =>
-      Effect.gen(function* () {
-        const fixture = loadFixture(alibabaQwenFixture.providerID, alibabaQwenFixture.modelID)
-        const request = waitRequest(
-          "/chat/completions",
-          new Response(createChatStream("Hello"), {
-            status: 200,
-            headers: { "Content-Type": "text/event-stream" },
-          }),
-        )
-
-        const resolved = yield* Provider.use.getModel(
-          ProviderV2.ID.make(alibabaQwenFixture.providerID),
-          ModelV2.ID.make(fixture.model.id),
-        )
-        const sessionID = SessionID.make("session-test-tools")
-        const agent = {
-          name: "test",
-          mode: "primary",
-          options: {},
-          permission: [{ permission: "question", pattern: "*", action: "deny" }],
-        } satisfies Agent.Info
-
-        const user = {
-          id: MessageID.make("msg_user-tools"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: ProviderV2.ID.make(alibabaQwenFixture.providerID), modelID: resolved.id },
-          tools: { question: true },
-        } satisfies SessionV1.User
-
-        yield* drain({
-          user,
-          sessionID,
-          model: resolved,
-          agent,
-          permission: [{ permission: "question", pattern: "*", action: "allow" }],
-          system: ["You are a helpful assistant."],
-          messages: [{ role: "user", content: "Hello" }],
-          tools: {
-            question: tool({
-              description: "Ask a question",
-              inputSchema: z.object({}),
-              execute: async () => ({ output: "" }),
+  for (const restricted of [false, true]) {
+    it.instance(
+      restricted
+        ? "hides role-denied tools despite inherited prompt grants"
+        : "keeps tools enabled by prompt permissions",
+      () =>
+        Effect.gen(function* () {
+          const fixture = loadFixture(alibabaQwenFixture.providerID, alibabaQwenFixture.modelID)
+          const request = waitRequest(
+            "/chat/completions",
+            new Response(createChatStream("Hello"), {
+              status: 200,
+              headers: { "Content-Type": "text/event-stream" },
             }),
-          },
-        })
+          )
 
-        const capture = yield* Effect.promise(() => request)
-        const tools = capture.body.tools as Array<{ function?: { name?: string } }> | undefined
-        expect(tools?.some((item) => item.function?.name === "question")).toBe(true)
-      }),
-    {
-      config: () => ({
-        enabled_providers: [alibabaQwenFixture.providerID],
-        provider: {
-          [alibabaQwenFixture.providerID]: {
-            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+          const resolved = yield* Provider.use.getModel(
+            ProviderV2.ID.make(alibabaQwenFixture.providerID),
+            ModelV2.ID.make(fixture.model.id),
+          )
+          const sessionID = SessionID.make("session-test-tools")
+          const agent = {
+            name: "test",
+            mode: "primary",
+            options: {},
+            permission: [{ permission: "question", pattern: "*", action: "deny" }],
+          } satisfies Agent.Info
+
+          const user = {
+            id: MessageID.make("msg_user-tools"),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: agent.name,
+            model: { providerID: ProviderV2.ID.make(alibabaQwenFixture.providerID), modelID: resolved.id },
+            tools: { question: true },
+          } satisfies SessionV1.User
+
+          yield* drain({
+            user,
+            sessionID,
+            model: resolved,
+            agent,
+            permission: [{ permission: "question", pattern: "*", action: "allow" }],
+            permissionDenials: restricted ? [agent.permission] : [],
+            system: ["You are a helpful assistant."],
+            messages: [{ role: "user", content: "Hello" }],
+            tools: {
+              question: tool({
+                description: "Ask a question",
+                inputSchema: z.object({}),
+                execute: async () => ({ output: "" }),
+              }),
+            },
+          })
+
+          const capture = yield* Effect.promise(() => request)
+          const tools = capture.body.tools as Array<{ function?: { name?: string } }> | undefined
+          expect(tools?.some((item) => item.function?.name === "question") ?? false).toBe(!restricted)
+        }),
+      {
+        config: () => ({
+          enabled_providers: [alibabaQwenFixture.providerID],
+          provider: {
+            [alibabaQwenFixture.providerID]: {
+              options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+            },
           },
-        },
-      }),
-    },
-  )
+        }),
+      },
+    )
+  }
 
   it.instance(
     "sends responses API payload for OpenAI models",

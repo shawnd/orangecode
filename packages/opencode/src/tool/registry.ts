@@ -98,6 +98,7 @@ export interface Interface {
     modelID: ModelV2.ID
     agent: Agent.Info
     permission?: PermissionV1.Ruleset
+    permissionDenials?: PermissionV1.Ruleset[]
     messages?: SessionV1.WithParts[]
   }) => Effect.Effect<Tool.Def[]>
 }
@@ -311,10 +312,17 @@ const layer = Layer.effect(
       return (yield* all()).map((tool) => tool.id)
     })
 
-    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
+    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (input: {
+      agent: Agent.Info
+      permission?: PermissionV1.Ruleset
+      permissionDenials?: PermissionV1.Ruleset[]
+    }) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
+      const ruleset = Permission.merge(input.agent.permission, input.permission ?? [])
       const filtered = items.filter(
-        (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
+        (item) =>
+          Permission.evaluate("task", item.name, ruleset).action !== "deny" &&
+          !Permission.denied("task", item.name, input.permissionDenials ?? []),
       )
       const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
       const description = list
@@ -329,10 +337,11 @@ const layer = Layer.effect(
     const describeCodeMode = Effect.fn("ToolRegistry.describeCodeMode")(function* (input: {
       agent: Agent.Info
       permission?: PermissionV1.Ruleset
+      permissionDenials?: PermissionV1.Ruleset[]
     }) {
       if (!codeMode) return
       const ruleset = Permission.merge(input.agent.permission, input.permission ?? [])
-      const tools = Permission.visibleTools(yield* mcp.tools(), ruleset)
+      const tools = Permission.visibleTools(yield* mcp.tools(), ruleset, input.permissionDenials)
       if (Object.keys(tools).length === 0) return
       return codeMode.describeCatalog(tools, Object.keys(yield* mcp.clients()).map(McpCatalog.sanitize))
     })
@@ -379,7 +388,7 @@ const layer = Layer.effect(
             id: tool.id,
             description: [
               output.description,
-              tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
+              tool.id === TaskTool.id ? yield* describeTask(input) : undefined,
               tool.id === "execute" ? codeModeDescription : undefined,
             ]
               .filter(Boolean)

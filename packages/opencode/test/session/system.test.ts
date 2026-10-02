@@ -165,4 +165,19 @@ describe("session.system", () => {
       )
     }),
   )
+
+  it.effect("MCP instructions respect role ceilings and keep servers with an allowed tool", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const inherited = Permission.fromConfig({ "*": "allow" })
+      const blocked = yield* prompt.mcp(build, inherited, [Permission.fromConfig({ "tool-server_*": "deny" })])
+      expect(blocked).toContain('name="guide-server"')
+      expect(blocked).not.toContain('name="tool-server"')
+      const permitted = yield* prompt.mcp(build, inherited, [
+        Permission.fromConfig({ "tool-server_*": "deny", "tool-server_search": "allow" }),
+      ])
+      expect(permitted).toContain('name="tool-server"')
+      expect(permitted).toContain("Prefer search before update.")
+    }),
+  )
 })

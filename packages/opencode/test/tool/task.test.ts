@@ -1,10 +1,13 @@
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
+import { subagentPermissionDenials } from "../../src/agent/subagent-permissions"
+import { Permission } from "../../src/permission"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Config } from "@/config/config"
@@ -40,6 +43,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
     LayerNode.group([
       Agent.node,
+      Permission.node,
       Provider.node,
       BackgroundJob.node,
       EventV2Bridge.node,
@@ -310,6 +314,183 @@ describe("tool.task", () => {
     }),
   )
 
+  it.instance("execute copies the caller's agent policy and complete ordered session rules", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const agents = yield* Agent.Service
+      const { chat, assistant } = yield* seed()
+      const parent = Permission.fromConfig({ bash: { "*": "deny", "git *": "allow" }, read: "allow" })
+      yield* sessions.setPermission({ sessionID: chat.id, permission: parent })
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const result = yield* def.execute(
+        { description: "research", prompt: "inspect", subagent_type: "explore" },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "plan",
+          abort: new AbortController().signal,
+          extra: { promptOps: stubOps() },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      const child = yield* sessions.get(result.metadata.sessionId)
+      const explore = yield* agents.get("explore")
+      const effective = Permission.merge(explore.permission, child.permission ?? [])
+      expect(Permission.evaluate("edit", "file.ts", effective).action).toBe("deny")
+      expect(Permission.evaluate("edit", ".opencode/plans/proposal.md", effective).action).toBe("allow")
+      expect(Permission.evaluate("bash", "git status", effective).action).toBe("allow")
+      expect(Permission.evaluate("bash", "rm file.ts", effective).action).toBe("deny")
+      const denials = yield* subagentPermissionDenials({ agent: explore, session: child, agents, sessions })
+      expect(Permission.denied("edit", ".opencode/plans/proposal.md", denials)).toBe(explore.permission)
+    }),
+  )
+
+  it.instance("resuming refreshes inherited grants and restrictions before prompting", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const observed: string[] = []
+      const promptOps: TaskPromptOps = {
+        ...stubOps(),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            const child = yield* sessions.get(input.sessionID)
+            observed.push(Permission.evaluate("read", "README.md", child.permission ?? []).action)
+            return reply(input, "done")
+          }).pipe(Effect.orDie),
+      }
+      const ctx = {
+        sessionID: chat.id,
+        messageID: assistant.id,
+        agent: "build",
+        abort: new AbortController().signal,
+        extra: { promptOps },
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const params = { description: "research", prompt: "inspect", subagent_type: "general" }
+      yield* sessions.setPermission({ sessionID: chat.id, permission: Permission.fromConfig({ read: "deny" }) })
+      const started = yield* def.execute(params, ctx)
+      yield* sessions.setPermission({
+        sessionID: chat.id,
+        permission: Permission.fromConfig({ read: "allow", edit: "ask", bash: "deny" }),
+      })
+      const resumed = yield* def.execute({ ...params, task_id: started.metadata.sessionId }, ctx)
+      const child = yield* sessions.get(resumed.metadata.sessionId)
+      expect(resumed.metadata.sessionId).toBe(started.metadata.sessionId)
+      expect(observed).toEqual(["deny", "allow"])
+      expect(Permission.evaluate("edit", "file.ts", child.permission ?? []).action).toBe("ask")
+      expect(Permission.evaluate("bash", "git status", child.permission ?? []).action).toBe("deny")
+      expect(yield* sessions.children(chat.id)).toHaveLength(1)
+    }),
+  )
+
+  for (const target of ["root", "foreign", "grandchild", "wrong-agent", "missing"] as const) {
+    it.instance(`resuming rejects a ${target} task without prompting or creating a replacement`, () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { chat, assistant } = yield* seed()
+        const other = yield* sessions.create({ title: "other" })
+        const child = yield* sessions.create({ parentID: chat.id, title: "child", agent: "explore" })
+        const foreign = yield* sessions.create({ parentID: other.id, title: "foreign", agent: "general" })
+        const grandchild = yield* sessions.create({ parentID: child.id, title: "grandchild", agent: "general" })
+        const taskID = {
+          root: chat.id,
+          foreign: foreign.id,
+          grandchild: grandchild.id,
+          "wrong-agent": child.id,
+          missing: SessionID.create(),
+        }[target]
+        const before = target === "missing" ? undefined : yield* sessions.get(taskID)
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let prompted = false
+        const exit = yield* def
+          .execute(
+            { description: "research", prompt: "inspect", subagent_type: "general", task_id: taskID },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps({ onPrompt: () => (prompted = true) }) },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(prompted).toBe(false)
+        expect(yield* sessions.children(chat.id)).toHaveLength(1)
+        expect((yield* sessions.get(child.id)).permission).toBeUndefined()
+        if (before) expect(yield* sessions.get(taskID)).toEqual(before)
+      }),
+    )
+  }
+
+  it.instance(
+    "nested subagents retain ancestor role denials and their allow exceptions at runtime",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const agents = yield* Agent.Service
+        const permission = yield* Permission.Service
+        const { chat } = yield* seed()
+        const child = yield* sessions.create({ parentID: chat.id, title: "reviewer", agent: "reviewer" })
+        const grandchild = yield* sessions.create({ parentID: child.id, title: "worker", agent: "general" })
+        const denials = yield* subagentPermissionDenials({
+          agent: yield* agents.get("general"),
+          session: grandchild,
+          agents,
+          sessions,
+        })
+        const ruleset = Permission.fromConfig({ "*": "allow" })
+        for (const [tool, pattern] of [
+          ["edit", "file.ts"],
+          ["bash", "rm file.ts"],
+        ]) {
+          const exit = yield* permission
+            .ask({
+              sessionID: grandchild.id,
+              permission: tool,
+              patterns: [pattern],
+              always: [],
+              metadata: {},
+              ruleset,
+              denials,
+            })
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.DeniedError)
+        }
+        yield* permission.ask({
+          sessionID: grandchild.id,
+          permission: "bash",
+          patterns: ["git status"],
+          always: [],
+          metadata: {},
+          ruleset,
+          denials,
+        })
+        expect(yield* permission.list()).toHaveLength(0)
+      }),
+    {
+      config: {
+        subagent_depth: 2,
+        agent: {
+          reviewer: { mode: "subagent", permission: { edit: "deny", bash: { "*": "deny", "git *": "allow" } } },
+        },
+      },
+    },
+  )
+
   it.instance(
     "execute uses the requested subagent model",
     () =>
@@ -549,43 +730,6 @@ describe("tool.task", () => {
     }),
   )
 
-  it.instance("execute creates a child when task_id does not exist", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Session.Service
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
-      const promptOps = stubOps({ text: "created", onPrompt: (input) => (seen = input) })
-
-      const result = yield* def.execute(
-        {
-          description: "inspect bug",
-          prompt: "look into the cache key path",
-          subagent_type: "general",
-          task_id: "ses_missing",
-        },
-        {
-          sessionID: chat.id,
-          messageID: assistant.id,
-          agent: "build",
-          abort: new AbortController().signal,
-          extra: { promptOps },
-          messages: [],
-          metadata: () => Effect.void,
-          ask: () => Effect.void,
-        },
-      )
-
-      const kids = yield* sessions.children(chat.id)
-      expect(kids).toHaveLength(1)
-      expect(kids[0]?.id).toBe(result.metadata.sessionId)
-      expect(result.metadata.sessionId).not.toBe("ses_missing")
-      expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed">`)
-      expect(seen?.sessionID).toBe(result.metadata.sessionId)
-    }),
-  )
-
   it.instance("prevents subagents from launching subagents by default", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -671,6 +815,7 @@ describe("tool.task", () => {
     () =>
       Effect.gen(function* () {
         const sessions = yield* Session.Service
+        const agents = yield* Agent.Service
         const { chat, assistant } = yield* seed()
         const tool = yield* TaskTool
         const def = yield* tool.init()
@@ -699,6 +844,7 @@ describe("tool.task", () => {
         expect(child.parentID).toBe(chat.id)
         expect(child.agent).toBe("reviewer")
         expect(child.permission).toEqual([
+          ...(yield* agents.get("build")).permission,
           {
             permission: "todowrite",
             pattern: "*",
@@ -872,6 +1018,7 @@ describe("tool.task", () => {
   it.instance("background task completion waits for running updates", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
+      const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
@@ -913,6 +1060,10 @@ describe("tool.task", () => {
         },
         context,
       )
+      yield* sessions.setPermission({
+        sessionID: chat.id,
+        permission: Permission.fromConfig({ bash: "deny", read: "ask" }),
+      })
       const result = yield* def.execute(
         {
           description: "add investigation scope",
@@ -926,6 +1077,9 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).toBe(started.metadata.sessionId)
       expect(result.metadata.background).toBe(true)
       expect(result.output).toContain("Background task updated")
+      const updatedChild = yield* sessions.get(result.metadata.sessionId)
+      expect(Permission.evaluate("bash", "git status", updatedChild.permission ?? []).action).toBe("deny")
+      expect(Permission.evaluate("read", "README.md", updatedChild.permission ?? []).action).toBe("ask")
       first.resolve()
       expect((yield* jobs.get(started.metadata.sessionId))?.status).toBe("running")
       expect((yield* Effect.promise(() => updated.promise)).parts).toEqual([

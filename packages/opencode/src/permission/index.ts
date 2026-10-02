@@ -11,15 +11,18 @@ import { Config } from "@/config/config"
 export const Event = PermissionV1.Event
 
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
   readonly status: () => Effect.Effect<PermissionV1.Status>
 }
 
+export type AskInput = PermissionV1.AskInput & { denials?: PermissionV1.Ruleset[] }
+
 interface PendingEntry {
   info: PermissionV1.Request
   ruleset: PermissionV1.Ruleset
+  denials: PermissionV1.Ruleset[]
   deferred: Deferred.Deferred<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>
 }
 
@@ -40,6 +43,10 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
   )
 }
 
+export function denied(permission: string, pattern: string, denials: PermissionV1.Ruleset[]) {
+  return denials.find((ruleset) => evaluate(permission, pattern, ruleset).action === "deny")
+}
+
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
 
 const layer = Layer.effect(
@@ -58,6 +65,7 @@ const layer = Layer.effect(
           !item.info.patterns.every(
             (pattern) =>
               evaluate(item.info.permission, pattern, item.ruleset).action !== "deny" &&
+              !denied(item.info.permission, pattern, item.denials) &&
               evaluate(item.info.permission, pattern, item.ruleset, global, current.approved).action === "allow",
           )
         )
@@ -105,9 +113,9 @@ const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
-      const { ruleset, ...request } = input
+      const { ruleset, denials = [], ...request } = input
       const folder =
         request.permission === "external_directory"
           ? (yield* config.getGlobal()).permission?.external_directory
@@ -116,6 +124,12 @@ const layer = Layer.effect(
       let needsAsk = false
 
       for (const pattern of request.patterns) {
+        const ceiling = denied(request.permission, pattern, denials)
+        if (ceiling) {
+          return yield* new PermissionV1.DeniedError({
+            ruleset: ceiling.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+          })
+        }
         const configured = evaluate(request.permission, pattern, ruleset)
         const rule =
           configured.action === "deny" ? configured : evaluate(request.permission, pattern, ruleset, global, approved)
@@ -144,7 +158,7 @@ const layer = Layer.effect(
       yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
-      pending.set(id, { info, ruleset, deferred })
+      pending.set(id, { info, ruleset, denials, deferred })
       yield* events.publish(Event.Asked, info)
       return yield* Effect.ensuring(
         Deferred.await(deferred),
@@ -283,20 +297,30 @@ export function merge(...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule[] 
   return rulesets.flat()
 }
 
-export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {
+export function disabled(
+  tools: string[],
+  ruleset: PermissionV1.Ruleset,
+  denials: PermissionV1.Ruleset[] = [],
+): Set<string> {
   const edits = ["edit", "write", "apply_patch"]
   const reads = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
   return new Set(
     tools.filter((tool) => {
       const permission = edits.includes(tool) ? "edit" : reads.includes(tool) ? "read" : tool
-      const rule = ruleset.findLast((rule) => Wildcard.match(permission, rule.permission))
-      return rule?.pattern === "*" && rule.action === "deny"
+      return [ruleset, ...denials].some((rules) => {
+        const rule = rules.findLast((rule) => Wildcard.match(permission, rule.permission))
+        return rule?.pattern === "*" && rule.action === "deny"
+      })
     }),
   )
 }
 
-export function visibleTools<T>(tools: Record<string, T>, ruleset: PermissionV1.Ruleset): Record<string, T> {
-  const hidden = disabled(Object.keys(tools), ruleset)
+export function visibleTools<T>(
+  tools: Record<string, T>,
+  ruleset: PermissionV1.Ruleset,
+  denials: PermissionV1.Ruleset[] = [],
+): Record<string, T> {
+  const hidden = disabled(Object.keys(tools), ruleset, denials)
   return Object.fromEntries(Object.entries(tools).filter(([name]) => !hidden.has(name)))
 }
 

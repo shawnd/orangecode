@@ -1234,6 +1234,121 @@ it.instance("subtask child inherits parent session external_directory allow", ()
   }),
 )
 
+it.instance("explicit subtask inherits its calling agent rather than the requested subagent", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({ title: "Planning parent" })
+    const admitted = yield* prompt.prompt({
+      sessionID: parent.id,
+      agent: "plan",
+      noReply: true,
+      parts: [{ type: "text", text: "research" }],
+    })
+    yield* addSubtask(parent.id, admitted.info.id)
+    yield* llm.text("done")
+    yield* prompt.loop({ sessionID: parent.id })
+    const children = yield* sessions.children(parent.id)
+    expect(children).toHaveLength(1)
+    const child = children[0]
+    if (!child) throw new Error("Missing subtask session")
+    expect(Permission.evaluate("edit", "file.ts", child.permission ?? []).action).toBe("deny")
+    expect(Permission.evaluate("edit", ".opencode/plans/proposal.md", child.permission ?? []).action).toBe("allow")
+  }),
+)
+
+for (const nested of [false, true]) {
+  for (const allowed of [false, true]) {
+    it.instance(
+      `${nested ? "ancestor" : "own"} role policy ${allowed ? "permits an allow exception" : "blocks a denied command"} despite inherited grants`,
+      () =>
+        Effect.gen(function* () {
+          const { dir, llm } = yield* useServerConfig((url) => ({
+            ...providerCfg(url),
+            agent: {
+              reviewer: { mode: "subagent", permission: { bash: { "*": "deny", "touch allowed-file": "allow" } } },
+            },
+          }))
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ title: "Parent", agent: "build" })
+          const child = yield* sessions.create({
+            title: "Reviewer",
+            parentID: parent.id,
+            agent: "reviewer",
+            permission: Permission.fromConfig({ "*": "allow" }),
+          })
+          const target = nested
+            ? yield* sessions.create({
+                title: "Worker",
+                parentID: child.id,
+                agent: "general",
+                permission: Permission.fromConfig({ "*": "allow" }),
+              })
+            : child
+          const file = allowed ? "allowed-file" : "denied-file"
+          yield* prompt.prompt({
+            sessionID: target.id,
+            agent: nested ? "general" : "reviewer",
+            noReply: true,
+            parts: [{ type: "text", text: "create a file" }],
+          })
+          yield* llm.tool("bash", { command: `touch ${file}`, description: "Create a file" })
+          yield* llm.text("done")
+          yield* prompt.loop({ sessionID: target.id })
+          const messages = yield* MessageV2.filterCompactedEffect(target.id)
+          const call = messages
+            .flatMap((message) => message.parts)
+            .find((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "bash")
+          expect(call?.state.status).toBe(allowed ? "completed" : "error")
+          if (!allowed && call?.state.status === "error") expect(call.state.error).toContain("specified a rule")
+          expect(yield* Effect.promise(() => Bun.file(path.join(dir, file)).exists())).toBe(allowed)
+        }),
+    )
+  }
+}
+
+for (const action of ["ask", "allow"] as const) {
+  it.instance(`inherited session ${action} controls child approval before tool side effects`, () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { general: { permission: { bash: "ask" } } },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const permission = yield* Permission.Service
+      const parent = yield* sessions.create({ title: "Parent", permission: Permission.fromConfig({ bash: action }) })
+      const admitted = yield* user(parent.id, "research")
+      yield* addSubtask(parent.id, admitted.id)
+      yield* llm.tool("bash", { command: "touch approval-file", description: "Create a file" })
+      yield* llm.text("done")
+      const run = yield* prompt.loop({ sessionID: parent.id }).pipe(Effect.forkScoped)
+      if (action === "ask") {
+        const request = yield* pollWithTimeout(
+          permission.list().pipe(Effect.map((requests) => requests.find((request) => request.permission === "bash"))),
+          "inherited ask did not create a child permission request",
+        )
+        expect(request.sessionID).not.toBe(parent.id)
+        expect((yield* sessions.children(parent.id)).map((session) => session.id)).toContain(request.sessionID)
+        expect(yield* Effect.promise(() => Bun.file(path.join(dir, "approval-file")).exists())).toBe(false)
+        yield* permission.reply({ requestID: request.id, reply: "once" })
+      }
+      yield* awaitWithTimeout(Fiber.join(run), "child did not finish after permission admission", "10 seconds")
+      const child = (yield* sessions.children(parent.id))[0]
+      if (!child) throw new Error("Missing subtask session")
+      const messages = yield* MessageV2.filterCompactedEffect(child.id)
+      const call = messages
+        .flatMap((message) => message.parts)
+        .find((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "bash")
+      expect(call?.state.status).toBe("completed")
+      expect(yield* Effect.promise(() => Bun.file(path.join(dir, "approval-file")).exists())).toBe(true)
+      expect(yield* permission.list()).toHaveLength(0)
+    }),
+  )
+}
+
 noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
   Effect.gen(function* () {
     const prompt = yield* SessionPrompt.Service

@@ -1611,6 +1611,38 @@ it.instance(
   { git: true },
 )
 
+globalIt.instance("role denial ceilings survive configured, instance, and global grants", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const request = {
+      sessionID: SessionID.make("session_grant"),
+      permission: "external_directory",
+      patterns: ["/shared/*"],
+      always: ["/shared/*"],
+      metadata: {},
+      ruleset: Permission.fromConfig({ external_directory: "ask" }),
+    }
+    const approved = yield* ask(request).pipe(Effect.forkScoped)
+    const pending = yield* waitForPending(1)
+    yield* reply({ requestID: pending[0].id, reply: "always" })
+    yield* Fiber.join(approved)
+    yield* config.updateGlobal({ permission: { external_directory: { "/shared/*": "allow" } } })
+    const denials = [Permission.fromConfig({ external_directory: { "*": "deny", "/allowed/*": "allow" } })]
+
+    const err = yield* fail(
+      ask({
+        ...request,
+        sessionID: SessionID.make("session_child"),
+        ruleset: Permission.fromConfig({ external_directory: "allow" }),
+        denials,
+      }),
+    )
+    expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    yield* ask({ ...request, patterns: ["/allowed/*"], ruleset: Permission.fromConfig({ "*": "allow" }), denials })
+    expect(yield* list()).toHaveLength(0)
+  }),
+)
+
 it.instance(
   "ask - abort should clear pending request",
   () =>
