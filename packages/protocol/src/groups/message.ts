@@ -21,22 +21,24 @@ export const SessionMessagesQuery = Schema.Struct({
   ),
 }).annotate({ identifier: "SessionMessagesQuery" })
 
+export const SessionMessagesResponse = Schema.Struct({
+  data: Schema.Array(SessionMessage.Message),
+  sequence: Schema.Int.pipe(Schema.optional).annotate({
+    description:
+      "Session aggregate sequence captured atomically with this projected message page; ignore earlier durable stream events when hydrating.",
+  }),
+  cursor: Schema.Struct({
+    previous: Schema.String.pipe(Schema.optional),
+    next: Schema.String.pipe(Schema.optional),
+  }),
+}).annotate({ identifier: "SessionMessagesResponse" })
+
 export const MessageGroup = HttpApiGroup.make("server.message")
   .add(
     HttpApiEndpoint.get("session.messages", "/api/session/:sessionID/message", {
       params: { sessionID: Session.ID },
       query: SessionMessagesQuery,
-      success: Schema.Struct({
-        data: Schema.Array(SessionMessage.Message),
-        sequence: Schema.Int.pipe(Schema.optional).annotate({
-          description:
-            "Session aggregate sequence captured atomically with this projected message page; ignore earlier durable stream events when hydrating.",
-        }),
-        cursor: Schema.Struct({
-          previous: Schema.String.pipe(Schema.optional),
-          next: Schema.String.pipe(Schema.optional),
-        }),
-      }).annotate({ identifier: "SessionMessagesResponse" }),
+      success: SessionMessagesResponse,
       error: [InvalidCursorError, SessionNotFoundError, UnknownError],
     }).annotateMerge(
       OpenApi.annotations({
