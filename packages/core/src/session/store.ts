@@ -1,6 +1,6 @@
 export * as SessionStore from "./store"
 
-import { eq, inArray } from "drizzle-orm"
+import { eq, inArray, placeholder } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -31,10 +31,15 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
+    const getQuery = db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, placeholder("sessionID")))
+      .prepare()
 
     return Service.of({
       get: Effect.fn("SessionStore.get")(function* (sessionID) {
-        const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+        const row = yield* getQuery.get({ sessionID }).pipe(Effect.orDie)
         return row ? fromRow(row) : undefined
       }),
       family: Effect.fn("SessionStore.family")(function* (sessionID) {

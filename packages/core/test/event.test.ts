@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Event } from "@opencode-ai/schema/event"
 import { Session } from "@opencode-ai/schema/session"
@@ -84,6 +84,60 @@ const it = testEffect(
 const itWithoutLocation = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node])))
 
 describe("EventV2", () => {
+  itWithoutLocation.effect("prepared sequence readers stay database-owned with fresh concurrent parameters", () =>
+    Effect.gen(function* () {
+      const first = Context.get(
+        yield* Layer.build(Database.layerFromPath(":memory:").pipe(Layer.fresh)),
+        Database.Service,
+      ).db
+      const second = Context.get(
+        yield* Layer.build(Database.layerFromPath(":memory:").pipe(Layer.fresh)),
+        Database.Service,
+      ).db
+      const readFirst = EventV2.prepareLatestSequence(first)
+      const readSecond = EventV2.prepareLatestSequence(second)
+      yield* first
+        .insert(EventSequenceTable)
+        .values([
+          { aggregate_id: "a", seq: 1 },
+          { aggregate_id: "b", seq: 2 },
+        ])
+        .run()
+      yield* second
+        .insert(EventSequenceTable)
+        .values([
+          { aggregate_id: "a", seq: 10 },
+          { aggregate_id: "b", seq: 20 },
+        ])
+        .run()
+      const rows = yield* Effect.forEach(
+        ["a", "b", "missing", "b", "a"],
+        (id) =>
+          Effect.all([readFirst(id), readSecond(id), EventV2.latestSequence(first, id)], { concurrency: "unbounded" }),
+        { concurrency: "unbounded" },
+      )
+      expect(rows).toEqual([
+        [1, 10, 1],
+        [2, 20, 2],
+        [-1, -1, -1],
+        [2, 20, 2],
+        [1, 10, 1],
+      ])
+      yield* first.update(EventSequenceTable).set({ seq: 3 }).where(eq(EventSequenceTable.aggregate_id, "a")).run()
+      expect(yield* readFirst("a")).toBe(3)
+      yield* first.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, "a")).run()
+      expect(yield* readFirst("a")).toBe(-1)
+      expect(yield* readSecond("a")).toBe(10)
+      yield* first.run("DROP TABLE event_sequence")
+      for (const exit of yield* Effect.all([
+        Effect.exit(readFirst("a")),
+        Effect.exit(EventV2.latestSequence(first, "a")),
+      ])) {
+        expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true)
+      }
+    }),
+  )
+
   it.effect("publishes events with the current location", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

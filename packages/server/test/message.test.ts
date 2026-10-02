@@ -13,11 +13,101 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { fixture } from "./fixture"
 import { MessageHandler } from "../src/handlers/message"
+import { EventV2 } from "@opencode-ai/core/event"
 
 const it = testEffect(Layer.empty)
 const sessionID = SessionV2.ID.make("ses_cache_test")
 const timestamp = DateTime.makeUnsafe(0)
 const parse = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.toCodecJson(SessionMessagesResponse)))
+
+it.live("prepared placement/info/revision parameters are independent across concurrent Session requests", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const ids = [
+      SessionV2.ID.make("ses_prepared_a"),
+      SessionV2.ID.make("ses_prepared_b"),
+      SessionV2.ID.make("ses_prepared_c"),
+    ]
+    yield* Effect.forEach(ids, (id, index) =>
+      Effect.gen(function* () {
+        yield* f.seed(id, index === 2 ? f.directory + "/moved" : f.directory)
+        yield* Effect.forEach(Array.from({ length: index + 1 }), (_, revision) =>
+          f.events.publish(SessionEvent.AgentSwitched, {
+            sessionID: id,
+            timestamp,
+            messageID: SessionMessage.ID.make(`msg_prepared_${index}_${revision}`),
+            agent: index === 1 ? "plan" : "build",
+          }),
+        )
+      }),
+    )
+    const pages = yield* Effect.forEach(
+      Array.from({ length: 24 }),
+      (_, index) =>
+        Effect.gen(function* () {
+          const id = ids[index % ids.length]
+          return {
+            index,
+            page: yield* f.request(id, index % 2 ? "?order=asc" : "?order=desc"),
+            info: yield* f.sessions.get(id),
+          }
+        }),
+      { concurrency: "unbounded" },
+    )
+    for (const row of pages) {
+      const index = row.index % ids.length
+      expect(row.page.status).toBe(200)
+      expect(parse(row.page.text).sequence).toBe(index)
+      expect(parse(row.page.text).data.every((message) => message.id.startsWith(`msg_prepared_${index}_`))).toBe(true)
+      expect(row.info.id).toBe(ids[index])
+      expect(String(row.info.location.directory)).toBe(index === 2 ? f.directory + "/moved" : f.directory)
+    }
+    expect(f.counts.placements).toBe(24)
+    expect((yield* f.request("ses_prepared_missing")).status).toBe(404)
+  }),
+)
+
+it.live("prepared readers created outside a transaction retain its WAL snapshot and read fresh afterward", () =>
+  Effect.gen(function* () {
+    const owner = yield* fixture()
+    const reader = yield* fixture(MessageHandler, owner.directory + "/prepared-snapshot.db")
+    const writer = yield* fixture(MessageHandler, owner.directory + "/prepared-snapshot.db")
+    const latest = EventV2.prepareLatestSequence(reader.db)
+    yield* reader.seed(sessionID)
+    yield* writer.events.publish(SessionEvent.AgentSwitched, {
+      sessionID,
+      timestamp,
+      messageID: SessionMessage.ID.make("msg_snapshot_old"),
+      agent: "plan",
+    })
+    const first = yield* reader.request(sessionID)
+    yield* reader.db.transaction(() =>
+      Effect.gen(function* () {
+        expect(yield* latest(sessionID)).toBe(0)
+        expect(String((yield* reader.sessions.get(sessionID)).agent)).toBe("plan")
+        yield* writer.events.publish(SessionEvent.AgentSwitched, {
+          sessionID,
+          timestamp,
+          messageID: SessionMessage.ID.make("msg_snapshot_new"),
+          agent: "build",
+        })
+        expect(yield* latest(sessionID)).toBe(0)
+        expect(yield* EventV2.latestSequence(reader.db, sessionID)).toBe(0)
+        expect(String((yield* reader.sessions.get(sessionID)).agent)).toBe("plan")
+      }),
+    )
+    expect(yield* latest(sessionID)).toBe(1)
+    expect(String((yield* reader.sessions.get(sessionID)).agent)).toBe("build")
+    const fresh = yield* reader.request(sessionID)
+    expect(parse(fresh.text).sequence).toBe(1)
+    expect(parse(fresh.text).data).toHaveLength(2)
+    expect(fresh.text).not.toBe(first.text)
+    yield* writer.db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run()
+    yield* writer.events.remove(sessionID)
+    expect(yield* latest(sessionID)).toBe(-1)
+    expect((yield* reader.request(sessionID)).status).toBe(404)
+  }),
+)
 
 it.live("canonical response parity, normalized defaults and separate cursors/orders/limits", () =>
   Effect.gen(function* () {

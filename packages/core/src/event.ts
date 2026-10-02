@@ -3,7 +3,7 @@ export * as EventV2 from "./event"
 import { Cause, Context, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect"
 import { Event } from "@opencode-ai/schema/event"
 import type { Data, Definition, Payload } from "@opencode-ai/schema/event"
-import { and, asc, eq, gt, inArray } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, placeholder } from "drizzle-orm"
 import { Database } from "./database/database"
 import { EventSequenceTable, EventTable } from "./event/sql"
 import { Location } from "./location"
@@ -18,18 +18,22 @@ export type { Data, Definition, Payload } from "@opencode-ai/schema/event"
 export type Subscriber<D extends Definition = Definition> = (event: Payload<D>) => Effect.Effect<void>
 export type Unsubscribe = Effect.Effect<void>
 
-export const latestSequence = Effect.fn("EventV2.latestSequence")(function* (
-  db: Database.Interface["db"],
-  aggregateID: string,
-) {
-  const row = yield* db
+// Retain this reader in the owning database/service scope. Preparation captures
+// SQL/field mapping, not rows or a connection: execution uses the current transaction.
+export function prepareLatestSequence(db: Database.Interface["db"]) {
+  const query = db
     .select({ seq: EventSequenceTable.seq })
     .from(EventSequenceTable)
-    .where(eq(EventSequenceTable.aggregate_id, aggregateID))
-    .get()
-    .pipe(Effect.orDie)
-  return row?.seq ?? -1
-})
+    .where(eq(EventSequenceTable.aggregate_id, placeholder("aggregateID")))
+    .prepare()
+  return Effect.fn("EventV2.latestSequence")(function* (aggregateID: string) {
+    const row = yield* query.get({ aggregateID }).pipe(Effect.orDie)
+    return row?.seq ?? -1
+  })
+}
+
+export const latestSequence = (db: Database.Interface["db"], aggregateID: string) =>
+  Effect.suspend(() => prepareLatestSequence(db)(aggregateID))
 
 export type SerializedEvent = {
   readonly id: ID

@@ -3,7 +3,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
-import { and, eq } from "drizzle-orm"
+import { and, eq, placeholder } from "drizzle-orm"
 import { Effect, Option, Schema } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { HttpServerResponse } from "effect/unstable/http"
@@ -39,6 +39,12 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
     const session = yield* SessionV2.Service
     const database = yield* Database.Service
     const cache = yield* makeTranscriptPageCache()
+    const latestSequence = EventV2.prepareLatestSequence(database.db)
+    const revisionQuery = database.db
+      .select({ id: EventTable.id })
+      .from(EventTable)
+      .where(and(eq(EventTable.aggregate_id, placeholder("sessionID")), eq(EventTable.seq, placeholder("sequence"))))
+      .prepare()
 
     return handlers.handle(
       "session.messages",
@@ -54,18 +60,13 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
         return yield* database.db
           .transaction(() =>
             Effect.gen(function* () {
-              const sequence = yield* EventV2.latestSequence(database.db, ctx.params.sessionID)
+              const sequence = yield* latestSequence(ctx.params.sessionID)
               // Deletion removes aggregate history; an adopted/recreated ID can
               // reuse a sequence. Its immutable event ID separates incarnations.
               const revision =
                 sequence < 0
                   ? undefined
-                  : yield* database.db
-                      .select({ id: EventTable.id })
-                      .from(EventTable)
-                      .where(and(eq(EventTable.aggregate_id, ctx.params.sessionID), eq(EventTable.seq, sequence)))
-                      .get()
-                      .pipe(Effect.orDie)
+                  : yield* revisionQuery.get({ sessionID: ctx.params.sessionID, sequence }).pipe(Effect.orDie)
               // Keep SessionStore's existence and Info validation on hits, inside
               // the same read snapshot. Authorization and Location acquisition
               // still run in the outer production middleware on every request.
