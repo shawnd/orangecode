@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part, UserMessage } from "@opencode-ai/sdk/v2"
-import { messagesBeforeRevert, undoableMessages } from "../../src/util/session-history"
+import { messagesBeforeRevert, shouldAbortForUndo, undoableMessages } from "../../src/util/session-history"
 
 const user = (id: string, created: number): UserMessage => ({
   id,
@@ -21,6 +21,28 @@ const parts: Record<string, Part[]> = {
 }
 
 describe("session undo history", () => {
+  test("queued undo skips abort while undoing an active turn requests it", () => {
+    const assistant: Message = {
+      id: "msg_assistant",
+      role: "assistant",
+      sessionID: "session",
+      parentID: "msg_z-user",
+      time: { created: 2 },
+      modelID: "test",
+      providerID: "test",
+      mode: "build",
+      agent: "build",
+      path: { cwd: "/tmp", root: "/tmp" },
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    }
+    const history = [messages[0], assistant, user("msg_queued", 3)]
+    expect(shouldAbortForUndo(history, "msg_queued", { type: "busy" })).toBe(false)
+    expect(shouldAbortForUndo(history, "msg_z-user", { type: "busy" })).toBe(true)
+    expect(shouldAbortForUndo(history, "msg_z-user", { type: "idle" })).toBe(false)
+    expect(shouldAbortForUndo([messages[0]], "msg_z-user", { type: "busy" })).toBe(true)
+  })
+
   test("manual compaction is the latest undoable input", () => {
     expect(undoableMessages(messages.slice(0, 2), parts).at(-1)?.id).toBe("msg_a-compact")
   })

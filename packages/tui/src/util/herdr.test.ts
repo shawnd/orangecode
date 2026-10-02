@@ -19,6 +19,7 @@ test("attach arguments survive shell parsing without expanding session or direct
     input.url,
     "--session",
     input.sessionID,
+    "--fork",
     "--dir",
     input.directory,
   ])
@@ -105,7 +106,7 @@ await splitSession({
       }
       expect(calls).toHaveLength(2)
       expect(calls[1].slice(0, 3)).toEqual(["pane", "run", "wZ:p42"])
-      expect(calls[1][3]).toContain("'oc' 'attach' 'http://localhost:4321' '--session' 'ses_current'")
+      expect(calls[1][3]).toContain("'oc' 'attach' 'http://localhost:4321' '--session' 'ses_current' '--fork'")
       expect(calls[1][3]).not.toContain("secret")
     } finally {
       await rm(directory, { recursive: true, force: true })

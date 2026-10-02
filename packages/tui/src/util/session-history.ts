@@ -1,4 +1,4 @@
-import type { Message, Part, UserMessage } from "@opencode-ai/sdk/v2"
+import type { Message, Part, SessionStatus, UserMessage } from "@opencode-ai/sdk/v2"
 
 export function messagesBeforeRevert(messages: readonly Message[], messageID?: string) {
   if (!messageID) return messages
@@ -13,4 +13,10 @@ export function undoableMessages(messages: readonly Message[], parts: Record<str
     // Compaction markers are undoable; internal continuation prompts are not separate inputs.
     return content.length === 0 || !content.every((part) => part.type === "text" && part.synthetic)
   })
+}
+
+export function shouldAbortForUndo(messages: readonly Message[], messageID: string, status?: SessionStatus) {
+  if (status?.type === "idle") return false
+  const assistant = messages.findLastIndex((message) => message.role === "assistant")
+  return assistant < 0 || messages.findIndex((message) => message.id === messageID) <= assistant
 }

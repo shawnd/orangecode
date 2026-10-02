@@ -81,6 +81,22 @@ describe("cross-spawn spawner", () => {
     )
 
     fx.effect(
+      "retains both output pipes until a consumer starts after a short-lived child exits",
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const handle = yield* spawner.spawn(
+          ChildProcess.make(process.execPath, [
+            "-e",
+            'require("fs").writeSync(1,"stdout\\n");require("fs").writeSync(2,"stderr\\n")',
+          ]),
+        )
+        yield* handle.exitCode
+        expect(yield* decodeByteStream(handle.stdout)).toBe("stdout")
+        expect(yield* decodeByteStream(handle.stderr)).toBe("stderr")
+      }),
+    )
+
+    fx.effect(
       "returns exit code",
       Effect.gen(function* () {
         const handle = yield* js("process.exit(0)")

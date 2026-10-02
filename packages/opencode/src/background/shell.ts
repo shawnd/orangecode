@@ -161,9 +161,22 @@ const layer = Layer.effect(
           // look exited while a descendant still holds stdout/stderr and keeps running.
           yield* Effect.addFinalizer(() => handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.ignore))
           yield* Deferred.succeed(ready, undefined)
+          const exitCode =
+            process.platform === "win32"
+              ? handle.exitCode
+              : Effect.raceFirst(
+                  handle.exitCode,
+                  Effect.gen(function* () {
+                    while (true) {
+                      yield* Effect.sleep("1 second")
+                      if (Shell.alive(handle.pid)) continue
+                      return yield* Effect.fail(new Error("Shell process exited before its output streams closed"))
+                    }
+                  }),
+                )
           const code = yield* input.timeout === undefined
-            ? handle.exitCode
-            : handle.exitCode.pipe(
+            ? exitCode
+            : exitCode.pipe(
                 Effect.timeoutOrElse({
                   duration: input.timeout,
                   orElse: () => Effect.fail(new Error(`Shell timed out after ${input.timeout} ms`)),

@@ -133,7 +133,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           before: ctx.query.before,
         }),
       )
-      if (!page.cursor) return page.items
+      const items = yield* session.reconcileShells(page.items)
+      if (!page.cursor) return items
 
       const request = yield* HttpServerRequest.HttpServerRequest
       // toURL() honors the Host + x-forwarded-proto headers, so the Link
@@ -141,7 +142,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
       url.searchParams.set("limit", ctx.query.limit.toString())
       url.searchParams.set("before", page.cursor)
-      return HttpServerResponse.jsonUnsafe(page.items, {
+      return HttpServerResponse.jsonUnsafe(items, {
         headers: {
           "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
           Link: `<${url.toString()}>; rel="next"`,

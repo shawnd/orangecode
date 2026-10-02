@@ -46,7 +46,7 @@ export async function splitSession(input: {
 }
 
 export function attachCommand(input: { url: string; sessionID: string; directory: string }, executable = ["oc"]) {
-  return [...executable, "attach", input.url, "--session", input.sessionID, "--dir", input.directory]
+  return [...executable, "attach", input.url, "--session", input.sessionID, "--fork", "--dir", input.directory]
     .map((arg) => {
       if (/[\r\n\0]/.test(arg)) throw new Error("Cannot send a multiline command to a Herdr pane")
       return "'" + arg.replaceAll("'", "'\"'\"'") + "'"

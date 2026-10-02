@@ -245,15 +245,27 @@ export const make = Effect.gen(function* () {
     out: ChildProcess.StdoutConfig,
     err: ChildProcess.StderrConfig,
   ) => {
-    let stdout = proc.stdout
+    // Start buffering immediately: a short-lived child may close before the
+    // Effect stream consumer is scheduled, losing output from the raw pipe.
+    const stdoutPipe = proc.stdout ? new PassThrough() : undefined
+    const stderrPipe = proc.stderr ? new PassThrough() : undefined
+    if (stdoutPipe && proc.stdout) {
+      proc.stdout.on("error", (cause) => stdoutPipe.destroy(toError(cause)))
+      proc.stdout.pipe(stdoutPipe)
+    }
+    if (stderrPipe && proc.stderr) {
+      proc.stderr.on("error", (cause) => stderrPipe.destroy(toError(cause)))
+      proc.stderr.pipe(stderrPipe)
+    }
+    let stdout = stdoutPipe
       ? NodeStream.fromReadable({
-          evaluate: () => proc.stdout!,
+          evaluate: () => stdoutPipe,
           onError: (cause) => toPlatformError("fromReadable(stdout)", toError(cause), command),
         })
       : Stream.empty
-    let stderr = proc.stderr
+    let stderr = stderrPipe
       ? NodeStream.fromReadable({
-          evaluate: () => proc.stderr!,
+          evaluate: () => stderrPipe,
           onError: (cause) => toPlatformError("fromReadable(stderr)", toError(cause), command),
         })
       : Stream.empty

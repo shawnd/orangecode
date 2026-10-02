@@ -32,8 +32,19 @@ const layer = Layer.effect(
     const state = yield* SessionRunState.Service
 
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
-      yield* state.assertNotBusy(input.sessionID)
+      const busy = yield* state.assertNotBusy(input.sessionID).pipe(
+        Effect.as(undefined),
+        Effect.catchTag("SessionBusyError", (error) => Effect.succeed(error)),
+      )
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+      if (busy) {
+        const index = all.findIndex((msg) => msg.info.id === input.messageID && msg.info.role === "user")
+        const assistant = all.findLastIndex((msg) => msg.info.role === "assistant")
+        if (input.partID || assistant < 0 || index <= assistant) return yield* busy
+        // This input has not reached a provider turn; discarding it must not rewind the running turn.
+        yield* sessions.removeMessage({ sessionID: input.sessionID, messageID: input.messageID })
+        return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      }
       let lastUser: SessionV1.User | undefined
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
 

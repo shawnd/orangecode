@@ -23,6 +23,18 @@ declare global {
 
 type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
 
+export async function stopWorker(input: {
+  warming: Promise<unknown>
+  shutdown: () => Promise<unknown>
+  terminate: () => Promise<unknown>
+}) {
+  try {
+    await withTimeout(input.warming.then(input.shutdown), 5000).catch(() => {})
+  } finally {
+    await input.terminate()
+  }
+}
+
 function createWorkerFetch(client: RpcClient): typeof fetch {
   const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
@@ -210,6 +222,8 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+      const network = resolveNetworkOptionsNoConfig(args)
+      const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
 
       const worker = new Worker(file, {
         env: Object.fromEntries(
@@ -217,6 +231,7 @@ export const TuiThreadCommand = cmd({
         ),
       })
       const client = Rpc.client<typeof rpc>(worker)
+      const warming = external ? Promise.resolve() : client.call("warmup", { directory: cwd }).catch(() => {})
       const reload = () => {
         client.call("reload", undefined).catch(() => {})
       }
@@ -226,17 +241,15 @@ export const TuiThreadCommand = cmd({
       const stop = () =>
         (stopping ??= (async () => {
           process.off("SIGUSR2", reload)
-          try {
-            await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-          } finally {
-            await worker.terminate()
-          }
+          // Let warmup settle before disposing the instance it is creating.
+          await stopWorker({
+            warming,
+            shutdown: () => client.call("shutdown", undefined),
+            terminate: async () => worker.terminate(),
+          })
         })())
       // Own the worker before network setup and session validation can fail.
       await using workerLifetime = { [Symbol.asyncDispose]: stop }
-
-      const network = resolveNetworkOptionsNoConfig(args)
-      const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
 
       const headers = external ? ServerAuth.headers() : undefined
 
@@ -253,45 +266,35 @@ export const TuiThreadCommand = cmd({
             events: createEventSource(client),
           }
 
-      if (!external && getEarlyInput()) {
-        void client.call("warmup", { directory: cwd }).catch(() => {})
-      }
-
       // Share this worker with additional TUIs without restarting its listener.
       let listener: Promise<{ url: string }> | undefined
 
       try {
-        await validateSession({
+        const validation = validateSession({
           url: transport.url,
           sessionID: args.session,
           directory: cwd,
           fetch: transport.fetch,
           headers,
         })
-      } catch (error) {
-        await stopEarlyInput()
-        UI.error(errorMessage(error))
-        process.exitCode = 1
-        return
-      }
-
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-      }, 1000).unref?.()
-
-      try {
-        // Start the backend before loading UI/config modules, then overlap the
-        // independent reads and imports instead of serializing the startup path.
+        // Session validation and backend warmup overlap UI/config imports,
+        // including resumes and flag combinations without an early prompt.
         const [config, prompt, { Effect }, { run }, { createLegacyTuiPluginHost }] = await Promise.all([
           (async () => {
             const { TuiConfig } = await import("@/config/tui")
+            // Config loading can start dependency installs with their own lifetime.
+            await validation
             return TuiConfig.get()
           })(),
           input(args.prompt),
           import("effect"),
           import("../tui/layer"),
           import("@/plugin/tui/runtime"),
+          validation,
         ])
+        setTimeout(() => {
+          client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+        }, 1000).unref?.()
         const requested = await Effect.runPromise(
           run({
             url: transport.url,
@@ -334,6 +337,11 @@ export const TuiThreadCommand = cmd({
             network: external ? network : undefined,
           })
         }
+      } catch (error) {
+        await stopEarlyInput()
+        UI.error(errorMessage(error))
+        process.exitCode = 1
+        return
       } finally {
         await stop()
       }

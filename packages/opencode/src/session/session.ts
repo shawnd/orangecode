@@ -5,6 +5,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import path from "path"
 import { BackgroundJob } from "@/background/job"
+import { Shell } from "@opencode-ai/core/shell"
 import { Decimal } from "decimal.js"
 import type { ProviderMetadata, Usage } from "@opencode-ai/llm"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -446,6 +447,7 @@ export interface Interface {
   readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
+  readonly reconcileShells: (messages: SessionV1.WithParts[]) => Effect.Effect<SessionV1.WithParts[]>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
@@ -700,6 +702,7 @@ const layer: Layer.Layer<
         metadata: structuredClone(original.metadata),
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
+      const end = Date.now()
       const idMap = new Map<string, MessageID>()
       const target = input.messageID ? msgs.findIndex((msg) => msg.info.id === input.messageID) : msgs.length
 
@@ -713,11 +716,17 @@ const layer: Layer.Layer<
           sessionID: session.id,
           id: newID,
           ...(parentID && { parentID }),
+          ...(msg.info.role === "assistant" && !msg.info.time.completed
+            ? {
+                time: { ...msg.info.time, completed: end },
+                error: new SessionV1.AbortedError({ message: "Execution stopped in fork" }).toObject(),
+              }
+            : {}),
         })
 
         for (const part of msg.parts) {
           const p: SessionV1.Part = {
-            ...part,
+            ...forkPart(part, end),
             id: PartID.ascending(),
             messageID: cloned.id,
             sessionID: session.id,
@@ -827,11 +836,51 @@ const layer: Layer.Layer<
       return [] as Snapshot.FileDiff[]
     })
 
+    const reconcileShells: Interface["reconcileShells"] = Effect.fn("Session.reconcileShells")(function* (messages) {
+      return yield* Effect.forEach(messages, (message) =>
+        Effect.gen(function* () {
+          const parts = yield* Effect.forEach(message.parts, (part) =>
+            Effect.gen(function* () {
+              if (part.type !== "tool" || (part.tool !== "bash" && part.tool !== "shell")) return part
+              if (!("metadata" in part.state)) return part
+              const metadata = part.state.metadata
+              if (metadata?.background !== true || metadata.shellStatus !== "running") return part
+              const job = typeof metadata.jobId === "string" ? yield* background.get(metadata.jobId) : undefined
+              const owned = job?.type === "shell" && job.metadata?.sessionId === part.sessionID
+              const pid = metadata.pid
+              const alive = owned && job.status === "running" && typeof pid === "number" && Shell.alive(pid)
+              if (alive) return part
+              if (owned && job.status === "running") yield* background.cancel(job.id)
+              // A persisted PID alone cannot establish ownership after restart (it may have been reused).
+              const next = {
+                ...part,
+                state: {
+                  ...part.state,
+                  metadata: {
+                    ...metadata,
+                    shellStatus: owned && job.status !== "running" ? job.status : "cancelled",
+                    stdinOpen: false,
+                  },
+                },
+              } as SessionV1.Part
+              const current = yield* getPart({ sessionID: part.sessionID, messageID: part.messageID, partID: part.id })
+              if (current?.type !== "tool" || !("metadata" in current.state)) return part
+              if (current.state.metadata?.shellStatus !== "running") return current
+              yield* updatePart(next)
+              return next
+            }),
+          )
+          return { ...message, parts }
+        }),
+      )
+    })
+
     const messages: Interface["messages"] = Effect.fn("Session.messages")(function* (input) {
       if (input.limit) {
-        return (yield* MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).pipe(
+        const page = yield* MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).pipe(
           Effect.provideService(Database.Service, database),
-        )).items
+        )
+        return yield* reconcileShells(page.items)
       }
 
       const size = 50
@@ -849,7 +898,7 @@ const layer: Layer.Layer<
         if (!page.more || !page.cursor) break
         before = page.cursor
       }
-      return result.reverse()
+      return yield* reconcileShells(result.reverse())
     })
 
     const removeMessage = Effect.fn("Session.removeMessage")(function* (input: {
@@ -924,6 +973,7 @@ const layer: Layer.Layer<
       setWorkspace,
       diff,
       messages,
+      reconcileShells,
       children,
       remove,
       updateMessage,
@@ -936,6 +986,43 @@ const layer: Layer.Layer<
     })
   }),
 )
+
+function forkPart(part: SessionV1.Part, end: number): SessionV1.Part {
+  if (part.type === "text" || part.type === "reasoning") {
+    if (!part.time || part.time.end !== undefined) return part
+    return { ...part, time: { ...part.time, end } }
+  }
+  if (part.type !== "tool") return part
+  const state = part.state
+  const active = state.status === "pending" || state.status === "running"
+  // Live job and child-session handles belong to the source, never the copied transcript.
+  const metadata =
+    "metadata" in state && state.metadata
+      ? Object.fromEntries(
+          Object.entries(state.metadata).filter(
+            ([key]) => !["jobId", "pid", "sessionId", "parentSessionId", "ancestorSessionIds"].includes(key),
+          ),
+        )
+      : undefined
+  const detached = metadata
+    ? {
+        ...metadata,
+        ...(metadata.background === true ? { stdinOpen: false } : {}),
+        ...(metadata.shellStatus === "running" ? { shellStatus: "cancelled" } : {}),
+      }
+    : undefined
+  if (!active) return { ...part, state: { ...state, metadata: detached ?? {} } }
+  return {
+    ...part,
+    state: {
+      status: "error",
+      input: state.input,
+      error: "Execution stopped in fork",
+      metadata: { ...detached, interrupted: true },
+      time: { start: state.status === "running" ? state.time.start : end, end },
+    },
+  }
+}
 
 const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function* (
   background: BackgroundJob.Interface,

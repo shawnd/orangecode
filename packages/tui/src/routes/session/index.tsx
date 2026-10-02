@@ -80,7 +80,7 @@ import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
-import { messagesBeforeRevert, undoableMessages } from "../../util/session-history"
+import { messagesBeforeRevert, shouldAbortForUndo, undoableMessages } from "../../util/session-history"
 import { CompactionMessage } from "./compaction-message"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
@@ -309,7 +309,7 @@ export function Session() {
         } catch {}
       }
       editor.reconnect(result.data.directory)
-      await sync.session.sync(sessionID)
+      await sync.session.sync(sessionID, result.data)
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
@@ -558,7 +558,7 @@ export function Session() {
       },
     },
     {
-      title: "Split pane with current session",
+      title: "Split pane with forked session",
       value: "session.split",
       category: "Session",
       slash: {
@@ -634,19 +634,28 @@ export function Session() {
         name: "undo",
       },
       run: async () => {
-        const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
         const message = undoableMessages(activeMessages(), sync.data.part).at(-1)
         if (!message) return
-        void sdk.client.session
-          .revert({
-            sessionID: route.sessionID,
-            messageID: message.id,
-          })
-          .then(() => {
-            toBottom()
-          })
         const parts = sync.data.part[message.id] ?? []
+        const status = sync.data.session_status?.[route.sessionID]
+        if (shouldAbortForUndo(activeMessages(), message.id, status))
+          await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        const result = await sdk.client.session
+          .revert(
+            {
+              sessionID: route.sessionID,
+              messageID: message.id,
+            },
+            { throwOnError: true },
+          )
+          .catch((error) => {
+            toast.show({
+              message: error instanceof Error ? error.message : "Failed to undo message",
+              variant: "error",
+            })
+          })
+        if (!result) return
+        toBottom()
         prompt?.set(
           parts.reduce(
             (agg, part) => {

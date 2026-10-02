@@ -2,6 +2,40 @@ import path from "path"
 import { expect, test } from "bun:test"
 import { tmpdir } from "../fixture/fixture"
 import { withTimeout } from "../../src/util/timeout"
+import { stopWorker } from "../../src/cli/cmd/tui"
+
+test("shutdown waits for in-flight warmup before disposing the backend", async () => {
+  const warming = Promise.withResolvers<void>()
+  const calls: string[] = []
+  const stop = stopWorker({
+    warming: warming.promise,
+    shutdown: async () => {
+      calls.push("shutdown")
+    },
+    terminate: async () => {
+      calls.push("terminate")
+    },
+  })
+  await Promise.resolve()
+  expect(calls).toEqual([])
+  warming.resolve()
+  await withTimeout(stop, 1000)
+  expect(calls).toEqual(["shutdown", "terminate"])
+})
+
+test("worker termination still runs when startup warmup fails", async () => {
+  const calls: string[] = []
+  await stopWorker({
+    warming: Promise.reject(new Error("warmup failed")),
+    shutdown: async () => {
+      calls.push("shutdown")
+    },
+    terminate: async () => {
+      calls.push("terminate")
+    },
+  })
+  expect(calls).toEqual(["terminate"])
+})
 
 test("failed session validation releases the backend worker without a forced process exit", async () => {
   await using tmp = await tmpdir()
