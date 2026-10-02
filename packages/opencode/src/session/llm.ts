@@ -39,6 +39,7 @@ export type StreamInput = {
   model: Provider.Model
   agent: Agent.Info
   permission?: PermissionV1.Ruleset
+  permissionDenials?: PermissionV1.Ruleset[]
   system: string[]
   messages: ModelMessage[]
   small?: boolean

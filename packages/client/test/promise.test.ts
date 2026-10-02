@@ -54,6 +54,20 @@ test("sessions.get returns the wire projection", async () => {
   expect(result.time.created).toBe(1_717_171_717_000)
 })
 
+test("sessions.activity exposes working background work with an idle foreground", async () => {
+  const activity = { type: "working", foreground: "idle", agents: 2, shells: 1 }
+  const client = OpenCode.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input) => {
+      expect(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).toBe(
+        "http://localhost:3000/api/session/ses_test/activity",
+      )
+      return Response.json({ data: activity })
+    },
+  })
+  expect(await client.sessions.activity({ sessionID: "ses_test" })).toEqual(activity)
+})
+
 test("events.subscribe exposes the Promise event stream wire projection", async () => {
   const client = OpenCode.make({
     baseUrl: "http://localhost:3000",

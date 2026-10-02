@@ -8,6 +8,7 @@ import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
+import { subagentPermissionDenials } from "../agent/subagent-permissions"
 import { Provider } from "@/provider/provider"
 
 import { type Tool as AITool, tool, jsonSchema } from "ai"
@@ -324,7 +325,7 @@ const layer = Layer.effect(
       const taskAbort = new AbortController()
       const result = yield* taskTool
         .execute(taskArgs, {
-          agent: task.agent,
+          agent: lastUser.agent,
           messageID: assistantMessage.id,
           sessionID,
           abort: taskAbort.signal,
@@ -1223,6 +1224,7 @@ const layer = Layer.effect(
             const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
+            const permissionDenials = yield* subagentPermissionDenials({ agent, session, agents, sessions })
 
             const tools = yield* SessionTools.resolve({
               agent,
@@ -1232,6 +1234,7 @@ const layer = Layer.effect(
               bypassAgentCheck,
               messages: msgs,
               promptOps,
+              permissionDenials,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),
@@ -1259,7 +1262,7 @@ const layer = Layer.effect(
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
-              sys.mcp(agent, session.permission),
+              sys.mcp(agent, session.permission, permissionDenials),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [
@@ -1274,6 +1277,7 @@ const layer = Layer.effect(
               user: lastUser,
               agent,
               permission: session.permission,
+              permissionDenials,
               sessionID,
               parentSessionID: session.parentID,
               system,

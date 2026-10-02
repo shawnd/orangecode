@@ -124,7 +124,7 @@ async function splitAuthenticatedPane(input: {
 }
 
 export function attachCommand(input: { url: string; sessionID: string; directory: string }, executable = ["oc"]) {
-  return [...executable, "attach", input.url, "--session", input.sessionID, "--dir", input.directory]
+  return [...executable, "attach", input.url, "--session", input.sessionID, "--fork", "--dir", input.directory]
     .map((arg) => {
       if (/[\r\n\0]/.test(arg)) throw new Error("Cannot send a multiline command to a Herdr pane")
       return "'" + arg.replaceAll("'", "'\"'\"'") + "'"
@@ -132,8 +132,13 @@ export function attachCommand(input: { url: string; sessionID: string; directory
     .join(" ")
 }
 
-async function herdr(args: string[]) {
-  const child = Bun.spawn(["herdr", ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+export async function herdr(args: string[]) {
+  const child = Bun.spawn([Bun.which("herdr", { PATH: process.env.PATH }) ?? "herdr", ...args], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 10_000,
+  })
   const [code, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),

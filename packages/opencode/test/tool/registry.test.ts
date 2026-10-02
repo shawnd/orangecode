@@ -20,6 +20,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { MCP } from "@/mcp"
+import { Permission } from "@/permission"
 import type { Tool as MCPToolDef } from "@modelcontextprotocol/sdk/types.js"
 
 const configLayer = TestConfig.layer({
@@ -172,6 +173,56 @@ describe("tool.registry", () => {
       })
 
       expect(tools.map((tool) => tool.id)).not.toContain("execute")
+    }),
+  )
+
+  withCodeMode.instance("role-denied MCP tools hide execute despite inherited grants", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const input = {
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+        permission: Permission.fromConfig({ "*": "allow" }),
+      }
+      const blocked = yield* registry.tools({
+        ...input,
+        permissionDenials: [Permission.fromConfig({ "weather_*": "deny" })],
+      })
+      expect(blocked.map((tool) => tool.id)).not.toContain("execute")
+      const permitted = yield* registry.tools({
+        ...input,
+        permissionDenials: [Permission.fromConfig({ "weather_*": "deny", weather_current: "allow" })],
+      })
+      expect(permitted.find((tool) => tool.id === "execute")?.description).toContain("tools.weather.current(")
+    }),
+  )
+
+  it.instance("task descriptions honor inherited restrictions and role-denial exceptions", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const input = {
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.get("build"),
+      }
+      const inherited = yield* registry.tools({
+        ...input,
+        permission: Permission.fromConfig({ task: { general: "deny" } }),
+      })
+      const description = inherited.find((tool) => tool.id === "task")?.description
+      expect(description).not.toContain("- general:")
+      expect(description).toContain("- explore:")
+      const constrained = yield* registry.tools({
+        ...input,
+        permission: Permission.fromConfig({ task: "allow" }),
+        permissionDenials: [Permission.fromConfig({ task: { "*": "deny", explore: "allow" } })],
+      })
+      const constrainedDescription = constrained.find((tool) => tool.id === "task")?.description
+      expect(constrainedDescription).not.toContain("- general:")
+      expect(constrainedDescription).toContain("- explore:")
     }),
   )
 

@@ -21,6 +21,7 @@ test("attach arguments survive shell parsing without expanding session or direct
     input.url,
     "--session",
     input.sessionID,
+    "--fork",
     "--dir",
     input.directory,
   ])
@@ -191,7 +192,7 @@ await splitSession({
         expect(attached).toEqual([
           {
             authorization,
-            args: ["attach", url, "--session", "ses_current", "--dir", "/remote/project's folder"],
+            args: ["attach", url, "--session", "ses_current", "--fork", "--dir", "/remote/project's folder"],
           },
         ])
       }

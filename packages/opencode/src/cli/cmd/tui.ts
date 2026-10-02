@@ -20,6 +20,18 @@ declare global {
   const OPENCODE_WORKER_PATH: string
 }
 
+export async function stopWorker(input: {
+  warming: Promise<unknown>
+  shutdown: () => Promise<unknown>
+  terminate: () => Promise<unknown>
+}) {
+  try {
+    await withTimeout(input.warming.then(input.shutdown), 5000).catch(() => {})
+  } finally {
+    await input.terminate()
+  }
+}
+
 async function target() {
   if (typeof OPENCODE_WORKER_PATH !== "undefined") return OPENCODE_WORKER_PATH
   const dist = new URL("./cli/tui/worker.js", import.meta.url)
@@ -49,14 +61,14 @@ export async function startTuiWorker(file: string | URL, network: Parameters<typ
   const client = Rpc.client<typeof rpc>(worker)
   let stopping: Promise<void> | undefined
   const stop = () =>
-    (stopping ??= (async () => {
-      try {
-        await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-      } finally {
+    (stopping ??= stopWorker({
+      warming: Promise.resolve(),
+      shutdown: () => client.call("shutdown", undefined),
+      terminate: async () => {
         client.dispose()
         await worker.terminate()
-      }
-    })())
+      },
+    }))
   const server = await withTimeout(client.call("server", network), timeout, "TUI worker startup timed out").catch(
     async (error) => {
       await stop()
@@ -204,7 +216,6 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
-
       const network = resolveNetworkOptionsNoConfig(args)
       const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
 
@@ -244,35 +255,31 @@ export const TuiThreadCommand = cmd({
       process.on("SIGUSR2", reload)
 
       try {
-        try {
-          await validateSession({
-            url: transport.url,
-            sessionID: args.session,
-            directory: cwd,
-            fetch: transport.fetch,
-            headers: transport.headers,
-          })
-        } catch (error) {
-          await stopEarlyInput()
-          UI.error(errorMessage(error))
-          process.exitCode = 1
-          return
-        }
-        setTimeout(() => {
-          transport.checkUpgrade().catch(() => {})
-        }, 1000).unref?.()
-        // Start the backend before loading UI/config modules, then overlap the
-        // independent reads and imports instead of serializing the startup path.
+        const validation = validateSession({
+          url: transport.url,
+          sessionID: args.session,
+          directory: cwd,
+          fetch: transport.fetch,
+          headers: transport.headers,
+        })
+        // Session validation and backend warmup overlap UI/config imports,
+        // including resumes and flag combinations without an early prompt.
         const [config, prompt, { Effect }, { run }, { createLegacyTuiPluginHost }] = await Promise.all([
           (async () => {
             const { TuiConfig } = await import("@/config/tui")
+            // Config loading can start dependency installs with their own lifetime.
+            await validation
             return TuiConfig.get()
           })(),
           input(args.prompt),
           import("effect"),
           import("../tui/layer"),
           import("@/plugin/tui/runtime"),
+          validation,
         ])
+        setTimeout(() => {
+          transport.checkUpgrade().catch(() => {})
+        }, 1000).unref?.()
         const requested = await Effect.runPromise(
           run({
             url: transport.url,
@@ -306,6 +313,11 @@ export const TuiThreadCommand = cmd({
             network: external ? network : undefined,
           })
         }
+      } catch (error) {
+        await stopEarlyInput()
+        UI.error(errorMessage(error))
+        process.exitCode = 1
+        return
       } finally {
         process.off("SIGUSR2", reload)
         await transport.stop()

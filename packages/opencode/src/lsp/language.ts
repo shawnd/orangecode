@@ -23,6 +23,7 @@ export const LANGUAGE_EXTENSIONS: Record<string, string> = {
   ".patch": "diff",
   ".dart": "dart",
   ".dockerfile": "dockerfile",
+  Dockerfile: "dockerfile",
   ".ex": "elixir",
   ".exs": "elixir",
   ".erl": "erlang",

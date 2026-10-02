@@ -2,7 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
-import { Deferred, Effect, Layer, Context } from "effect"
+import { Deferred, Effect, Layer, Context, Schedule } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -11,14 +11,18 @@ import { Config } from "@/config/config"
 export const Event = PermissionV1.Event
 
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
   readonly status: () => Effect.Effect<PermissionV1.Status>
 }
 
+export type AskInput = PermissionV1.AskInput & { denials?: PermissionV1.Ruleset[] }
+
 interface PendingEntry {
   info: PermissionV1.Request
+  ruleset: PermissionV1.Ruleset
+  denials: PermissionV1.Ruleset[]
   deferred: Deferred.Deferred<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>
 }
 
@@ -39,6 +43,10 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
   )
 }
 
+export function denied(permission: string, pattern: string, denials: PermissionV1.Ruleset[]) {
+  return denials.find((ruleset) => evaluate(permission, pattern, ruleset).action === "deny")
+}
+
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
 
 const layer = Layer.effect(
@@ -46,6 +54,37 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
+    const refreshGlobal = Effect.fn("Permission.refreshGlobal")(function* (current: State) {
+      if (!Array.from(current.pending.values()).some((item) => item.info.permission === "external_directory")) return
+      const folder = (yield* config.getGlobal()).permission?.external_directory
+      if (!folder) return
+      const global = fromConfig({ external_directory: folder })
+      for (const [id, item] of current.pending) {
+        if (item.info.permission !== "external_directory") continue
+        if (
+          !item.info.patterns.every(
+            (pattern) =>
+              evaluate(item.info.permission, pattern, item.ruleset).action !== "deny" &&
+              !denied(item.info.permission, pattern, item.denials) &&
+              evaluate(item.info.permission, pattern, item.ruleset, global, current.approved).action === "allow",
+          )
+        )
+          continue
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            // A manual reply may have settled this request while config was loading.
+            if (!current.pending.delete(id)) return
+            yield* events
+              .publish(Event.Replied, {
+                sessionID: item.info.sessionID,
+                requestID: id,
+                reply: "global",
+              })
+              .pipe(Effect.ensuring(Deferred.succeed(item.deferred, undefined)))
+          }),
+        )
+      }
+    })
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -63,13 +102,20 @@ const layer = Layer.effect(
           }),
         )
 
+        // Waiting tools must resume even when no new permission check occurs locally.
+        yield* refreshGlobal(state).pipe(
+          Effect.catchCause((cause) => Effect.logError("failed to refresh global permissions", { cause })),
+          Effect.repeat(Schedule.spaced("250 millis")),
+          Effect.forkScoped,
+        )
+
         return state
       }),
     )
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
-      const { ruleset, ...request } = input
+      const { ruleset, denials = [], ...request } = input
       const folder =
         request.permission === "external_directory"
           ? (yield* config.getGlobal()).permission?.external_directory
@@ -78,6 +124,12 @@ const layer = Layer.effect(
       let needsAsk = false
 
       for (const pattern of request.patterns) {
+        const ceiling = denied(request.permission, pattern, denials)
+        if (ceiling) {
+          return yield* new PermissionV1.DeniedError({
+            ruleset: ceiling.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+          })
+        }
         const configured = evaluate(request.permission, pattern, ruleset)
         const rule =
           configured.action === "deny" ? configured : evaluate(request.permission, pattern, ruleset, global, approved)
@@ -106,7 +158,7 @@ const layer = Layer.effect(
       yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
-      pending.set(id, { info, deferred })
+      pending.set(id, { info, ruleset, denials, deferred })
       yield* events.publish(Event.Asked, info)
       return yield* Effect.ensuring(
         Deferred.await(deferred),
@@ -117,7 +169,8 @@ const layer = Layer.effect(
     })
 
     const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
+      const current = yield* InstanceState.get(state)
+      const { approved, pending } = current
       const existing = pending.get(input.requestID)
       if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
 
@@ -131,36 +184,47 @@ const layer = Layer.effect(
         })
       }
 
-      pending.delete(input.requestID)
+      if (!pending.delete(input.requestID)) return
+      // Claim the whole rejection batch before event publication can yield to the global poller.
+      const rejected =
+        input.reply === "reject"
+          ? Array.from(pending.values()).filter((item) => item.info.sessionID === existing.info.sessionID)
+          : []
+      for (const item of rejected) pending.delete(item.info.id)
+      if (input.reply === "reject") {
+        return yield* Effect.forEach(
+          [existing, ...rejected],
+          (item) =>
+            events.publish(Event.Replied, {
+              sessionID: item.info.sessionID,
+              requestID: item.info.id,
+              reply: "reject",
+            }),
+          { discard: true },
+        ).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              // Claimed requests are no longer available to instance cleanup if publication fails or is interrupted.
+              yield* Deferred.fail(
+                existing.deferred,
+                input.message
+                  ? new PermissionV1.CorrectedError({ feedback: input.message })
+                  : new PermissionV1.RejectedError(),
+              )
+              for (const item of rejected) yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
+            }),
+          ),
+        )
+      }
+
       yield* events.publish(Event.Replied, {
         sessionID: existing.info.sessionID,
         requestID: existing.info.id,
         reply: input.reply,
       })
-
-      if (input.reply === "reject") {
-        yield* Deferred.fail(
-          existing.deferred,
-          input.message
-            ? new PermissionV1.CorrectedError({ feedback: input.message })
-            : new PermissionV1.RejectedError(),
-        )
-
-        for (const [id, item] of pending.entries()) {
-          if (item.info.sessionID !== existing.info.sessionID) continue
-          pending.delete(id)
-          yield* events.publish(Event.Replied, {
-            sessionID: item.info.sessionID,
-            requestID: item.info.id,
-            reply: "reject",
-          })
-          yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
-        }
-        return
-      }
-
       yield* Deferred.succeed(existing.deferred, undefined)
       if (input.reply === "once") return
+      if (input.reply === "global") return yield* refreshGlobal(current)
 
       for (const pattern of existing.info.always) {
         approved.push({
@@ -233,20 +297,30 @@ export function merge(...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule[] 
   return rulesets.flat()
 }
 
-export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {
+export function disabled(
+  tools: string[],
+  ruleset: PermissionV1.Ruleset,
+  denials: PermissionV1.Ruleset[] = [],
+): Set<string> {
   const edits = ["edit", "write", "apply_patch"]
   const reads = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
   return new Set(
     tools.filter((tool) => {
       const permission = edits.includes(tool) ? "edit" : reads.includes(tool) ? "read" : tool
-      const rule = ruleset.findLast((rule) => Wildcard.match(permission, rule.permission))
-      return rule?.pattern === "*" && rule.action === "deny"
+      return [ruleset, ...denials].some((rules) => {
+        const rule = rules.findLast((rule) => Wildcard.match(permission, rule.permission))
+        return rule?.pattern === "*" && rule.action === "deny"
+      })
     }),
   )
 }
 
-export function visibleTools<T>(tools: Record<string, T>, ruleset: PermissionV1.Ruleset): Record<string, T> {
-  const hidden = disabled(Object.keys(tools), ruleset)
+export function visibleTools<T>(
+  tools: Record<string, T>,
+  ruleset: PermissionV1.Ruleset,
+  denials: PermissionV1.Ruleset[] = [],
+): Record<string, T> {
+  const hidden = disabled(Object.keys(tools), ruleset, denials)
   return Object.fromEntries(Object.entries(tools).filter(([name]) => !hidden.has(name)))
 }
 

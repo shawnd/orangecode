@@ -116,6 +116,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   mock.module("@opentui/core", () => ({
     ...core,
     createCliRenderer: async (config: CliRendererConfig) => {
+      expect(config.useKittyKeyboard?.events).toBe(true)
       onDestroy = config.onDestroy
       return setup.renderer
     },

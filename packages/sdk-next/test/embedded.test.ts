@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,10 +6,21 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { Deferred, Effect, Latch, Option, Schema, Stream } from "effect"
 import type { OpenCodeEvent } from "../src"
 
+const database = Flag.OPENCODE_DB
+let storage: string
+beforeAll(async () => {
+  storage = await mkdtemp(join(tmpdir(), "opencode-embedded-db-"))
+  // Database.node captures its filename at module evaluation. Keep that file
+  // alive for the suite rather than deleting it with the first Location fixture.
+  Flag.OPENCODE_DB = join(storage, "opencode.sqlite")
+})
+afterAll(async () => {
+  Flag.OPENCODE_DB = database
+  await rm(storage, { recursive: true, force: true })
+})
+
 test("embedded client uses the real router and handlers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Agent, Location, Model, OpenCode, Prompt, Provider, Session, Tool } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
   const model = Model.Ref.make({ id: Model.ID.make("embedded"), providerID: Provider.ID.make("test") })
@@ -99,15 +110,56 @@ test("embedded client uses the real router and handlers", async () => {
     })
     await Effect.runPromise(Effect.scoped(program))
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
 })
 
+test("message pages fence their projected contents during concurrent durable writes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-snapshot-"))
+  const { AbsolutePath, Agent, Location, OpenCode, Session } = await import("../src")
+  const sessionID = Session.ID.make(`ses_snapshot_${crypto.randomUUID()}`)
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const opencode = yield* OpenCode.create()
+        yield* opencode.sessions.create({
+          id: sessionID,
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+        })
+        const empty = yield* opencode.messages.list({ sessionID, limit: 100, order: "asc" })
+        expect(empty.sequence).toBe(0)
+        expect(empty.data).toEqual([])
+        const [, snapshots] = yield* Effect.all(
+          [
+            Effect.forEach(Array.from({ length: 32 }), (_, index) =>
+              opencode.sessions.switchAgent({ sessionID, agent: Agent.ID.make(index % 2 ? "build" : "plan") }),
+            ),
+            Effect.forEach(Array.from({ length: 32 }), () =>
+              opencode.messages.list({ sessionID, limit: 100, order: "asc" }),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        )
+        const final = yield* opencode.messages.list({ sessionID, limit: 100, order: "asc" })
+        expect(final.sequence).toBe(32)
+        expect(final.data).toHaveLength(32)
+        for (const snapshot of [...snapshots, final]) {
+          expect(snapshot.sequence).toBe(snapshot.data.length)
+          expect(snapshot.data).toEqual(final.data.slice(0, snapshot.sequence))
+        }
+        const older = yield* opencode.messages.list({ sessionID, limit: 3, order: "asc" })
+        expect(older.data).toEqual(final.data.slice(0, 3))
+        expect(older.sequence).toBe(final.sequence)
+        expect(older.cursor.next).toBeDefined()
+      }).pipe(Effect.scoped),
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 10_000)
+
 test("Location-owned runner events reach the ready global client", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-events-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Location, OpenCode, Prompt, Session } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
 
@@ -138,15 +190,12 @@ test("Location-owned runner events reach the ready global client", async () => {
     })
     await Effect.runPromise(Effect.scoped(program))
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
 }, 10_000)
 
 test("independent embedded hosts do not share live notifications", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-hosts-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Agent, Location, OpenCode, Session } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
 
@@ -181,15 +230,12 @@ test("independent embedded hosts do not share live notifications", async () => {
     })
     await Effect.runPromise(Effect.scoped(program))
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
 }, 10_000)
 
 test("embedded client is available as a Layer service", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-layer-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Location, OpenCode, Session } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
 
@@ -206,7 +252,6 @@ test("embedded client is available as a Layer service", async () => {
 
     expect(created.id).toBe(sessionID)
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
 })

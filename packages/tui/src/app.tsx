@@ -242,7 +242,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                 targetFps: 60,
                 gatherStats: false,
                 exitOnCtrlC: false,
-                useKittyKeyboard: {},
+                useKittyKeyboard: { events: true },
                 autoFocus: false,
                 openConsoleOnError: false,
                 useMouse: !Flag.OPENCODE_DISABLE_MOUSE && input.config.mouse,
@@ -764,7 +764,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.cycle",
-        title: "Agent cycle",
+        title: "Mode cycle",
         category: "Agent",
         hidden: true,
         run: () => {
@@ -798,7 +798,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.cycle.reverse",
-        title: "Agent cycle reverse",
+        title: "Mode cycle reverse",
         category: "Agent",
         hidden: true,
         run: () => {

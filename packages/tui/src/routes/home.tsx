@@ -30,6 +30,7 @@ export function Home() {
   const editor = useEditorContext()
   const tuiConfig = useTuiConfig()
   let sent = false
+  let seeded = false
 
   onMount(() => {
     editor.clearSelection()
@@ -38,12 +39,14 @@ export function Home() {
   const bind = (r: PromptRef | undefined) => {
     setRef(r)
     promptRef.set(r)
-    if (once || !r) return
-    if (route.prompt) {
+    if (!r) return
+    if (route.prompt && !seeded) {
       r.set(route.prompt)
+      seeded = true
       once = true
       return
     }
+    if (once || seeded) return
     if (!args.prompt) return
     r.set({ input: args.prompt, parts: [] })
     once = true

@@ -1,14 +1,14 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { test, expect } from "bun:test"
 import os from "os"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Permission } from "../../src/permission"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
 import { InstanceStore } from "../../src/project/instance-store"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -22,8 +22,13 @@ const env = AppNodeBuilder.build(
 )
 const it = testEffect(env)
 
+class GlobalConfigGate extends Context.Service<
+  GlobalConfigGate,
+  { read: Ref.Ref<Effect.Effect<void>>; write: Ref.Ref<Effect.Effect<void>> }
+>()("test/GlobalConfigGate") {}
+
 const globalEnv = AppNodeBuilder.build(
-  LayerNode.group([Permission.node, EventV2Bridge.node, CrossSpawnSpawner.node, InstanceStore.node]),
+  LayerNode.group([Permission.node, Config.node, EventV2Bridge.node, CrossSpawnSpawner.node, InstanceStore.node]),
   [
     [InstanceStore.bootstrapNode, noopBootstrap],
     [
@@ -31,14 +36,22 @@ const globalEnv = AppNodeBuilder.build(
       Layer.effect(
         Config.Service,
         Effect.gen(function* () {
+          const gate = yield* GlobalConfigGate
           const rules = yield* Ref.make<Record<string, PermissionV1.Action>>({})
           return TestConfig.make({
             getGlobal: () =>
-              Ref.get(rules).pipe(Effect.map((external_directory) => ({ permission: { external_directory } }))),
+              Effect.gen(function* () {
+                const read = yield* Ref.get(gate.read)
+                yield* read
+                const external_directory = yield* Ref.get(rules)
+                return { permission: { external_directory } }
+              }),
             updateGlobal: (config) =>
               Effect.gen(function* () {
                 const next = config.permission?.external_directory
                 if (next && typeof next !== "string") yield* Ref.update(rules, (current) => ({ ...current, ...next }))
+                const write = yield* Ref.get(gate.write)
+                yield* write
                 return { info: config, changed: true }
               }),
           })
@@ -46,8 +59,355 @@ const globalEnv = AppNodeBuilder.build(
       ),
     ],
   ],
+).pipe(
+  Layer.provideMerge(
+    Layer.effect(
+      GlobalConfigGate,
+      Effect.gen(function* () {
+        return { read: yield* Ref.make(Effect.void), write: yield* Ref.make(Effect.void) }
+      }),
+    ),
+  ),
 )
 const globalIt = testEffect(globalEnv)
+
+globalIt.instance("reject claims same-session requests before a competing global refresh", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const config = yield* Config.Service
+    const events = yield* EventV2Bridge.Service
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+    const replies: Array<{ requestID: PermissionV1.ID; reply: PermissionV1.Reply }> = []
+    const firstID = PermissionV1.ID.make("per_reject_first")
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.gen(function* () {
+        if (event.type !== Permission.Event.Replied.type) return
+        const reply = Schema.decodeUnknownSync(Permission.Event.Replied)(event).data
+        replies.push({ requestID: reply.requestID, reply: reply.reply })
+        if (reply.requestID !== firstID) return
+        yield* Deferred.succeed(entered, undefined)
+        yield* Deferred.await(release)
+      }),
+    )
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const request = {
+      permission: "external_directory",
+      patterns: ["/shared/*"],
+      always: ["/shared/*"],
+      metadata: {},
+      ruleset: [],
+    }
+    const first = yield* permission
+      .ask({ ...request, id: firstID, sessionID: SessionID.make("session_reject") })
+      .pipe(Effect.exit, Effect.forkScoped)
+    const siblingID = PermissionV1.ID.make("per_reject_sibling")
+    const sibling = yield* permission
+      .ask({ ...request, id: siblingID, sessionID: SessionID.make("session_reject") })
+      .pipe(Effect.exit, Effect.forkScoped)
+    const otherID = PermissionV1.ID.make("per_reject_other")
+    const other = yield* permission
+      .ask({ ...request, id: otherID, sessionID: SessionID.make("session_other") })
+      .pipe(Effect.forkScoped)
+    yield* waitForPending(3)
+    const rejecting = yield* permission
+      .reply({ requestID: firstID, reply: "reject", message: "use another directory" })
+      .pipe(Effect.forkScoped)
+    yield* awaitWithTimeout(Deferred.await(entered), "reject did not reach its publication gate")
+    yield* config.updateGlobal({ permission: { external_directory: { "/shared/*": "allow" } } })
+    // The unrelated session proves the poller ran while rejection was suspended.
+    yield* awaitWithTimeout(Fiber.join(other), "competing global refresh did not run")
+    yield* Deferred.succeed(release, undefined)
+    yield* awaitWithTimeout(Fiber.join(rejecting), "reject did not finish")
+    const firstExit = yield* awaitWithTimeout(Fiber.join(first), "first request did not settle")
+    const siblingExit = yield* awaitWithTimeout(Fiber.join(sibling), "sibling request did not settle")
+    expect(Exit.isFailure(firstExit)).toBe(true)
+    if (Exit.isFailure(firstExit)) expect(Cause.squash(firstExit.cause)).toBeInstanceOf(PermissionV1.CorrectedError)
+    expect(Exit.isFailure(siblingExit)).toBe(true)
+    if (Exit.isFailure(siblingExit)) expect(Cause.squash(siblingExit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+    expect(replies.filter((event) => event.requestID === firstID)).toEqual([{ requestID: firstID, reply: "reject" }])
+    expect(replies.filter((event) => event.requestID === siblingID)).toEqual([
+      { requestID: siblingID, reply: "reject" },
+    ])
+    expect(replies.filter((event) => event.requestID === otherID)).toEqual([{ requestID: otherID, reply: "global" }])
+    expect(yield* permission.list()).toEqual([])
+  }),
+)
+
+for (const failure of ["defect", "interruption"] as const) {
+  for (const publication of ["selected", "sibling"] as const) {
+    globalIt.instance(`reject settles its claimed batch after ${publication} publication ${failure}`, () =>
+      Effect.gen(function* () {
+        const permission = yield* Permission.Service
+        const events = yield* EventV2Bridge.Service
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+        const selectedID = PermissionV1.ID.make("per_reject_lifetime_selected")
+        const siblingID = PermissionV1.ID.make("per_reject_lifetime_sibling")
+        const otherID = PermissionV1.ID.make("per_reject_lifetime_other")
+        const defect = new Error("rejection publication failed")
+        const replies: Array<{ requestID: PermissionV1.ID; reply: PermissionV1.Reply }> = []
+        const unsubscribe = yield* events.listen((event) =>
+          Effect.gen(function* () {
+            if (event.type !== Permission.Event.Replied.type) return
+            const reply = Schema.decodeUnknownSync(Permission.Event.Replied)(event).data
+            replies.push({ requestID: reply.requestID, reply: reply.reply })
+            if (reply.requestID !== (publication === "selected" ? selectedID : siblingID)) return
+            yield* Deferred.succeed(entered, undefined)
+            yield* Deferred.await(release)
+            if (failure === "defect") yield* Effect.die(defect)
+          }),
+        )
+        yield* Effect.addFinalizer(() => unsubscribe)
+        const request = {
+          sessionID: SessionID.make("session_reject_lifetime"),
+          permission: "external_directory",
+          patterns: ["/shared/*"],
+          always: ["/shared/*"],
+          metadata: {},
+          ruleset: [],
+        }
+        const selected = yield* permission.ask({ ...request, id: selectedID }).pipe(Effect.exit, Effect.forkScoped)
+        const sibling = yield* permission.ask({ ...request, id: siblingID }).pipe(Effect.exit, Effect.forkScoped)
+        const other = yield* permission
+          .ask({ ...request, id: otherID, sessionID: SessionID.make("session_unrelated") })
+          .pipe(Effect.forkScoped)
+        yield* waitForPending(3)
+        const rejecting = yield* permission
+          .reply({ requestID: selectedID, reply: "reject", message: "use another directory" })
+          .pipe(Effect.forkScoped)
+        yield* awaitWithTimeout(Deferred.await(entered), "reject did not enter its publication gate")
+        expect((yield* permission.list()).map((request) => request.id)).toEqual([otherID])
+        if (failure === "defect") yield* Deferred.succeed(release, undefined)
+        if (failure === "interruption")
+          yield* awaitWithTimeout(Fiber.interrupt(rejecting), "reject interruption stalled")
+        const replyExit = yield* awaitWithTimeout(Fiber.await(rejecting), "failed reject did not finish")
+        expect(Exit.isFailure(replyExit)).toBe(true)
+        if (Exit.isFailure(replyExit)) {
+          if (failure === "defect") expect(Cause.squash(replyExit.cause)).toBe(defect)
+          if (failure === "interruption") expect(Cause.hasInterrupts(replyExit.cause)).toBe(true)
+        }
+        const siblingExit = yield* awaitWithTimeout(Fiber.join(sibling), "claimed rejected sibling was stranded")
+        const selectedExit = yield* awaitWithTimeout(Fiber.join(selected), "selected rejected request was stranded")
+        expect(Exit.isFailure(siblingExit)).toBe(true)
+        if (Exit.isFailure(siblingExit))
+          expect(Cause.squash(siblingExit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+        expect(Exit.isFailure(selectedExit)).toBe(true)
+        if (Exit.isFailure(selectedExit)) {
+          expect(Cause.squash(selectedExit.cause)).toBeInstanceOf(PermissionV1.CorrectedError)
+          expect(Cause.squash(selectedExit.cause)).toMatchObject({ feedback: "use another directory" })
+        }
+        expect(replies).toEqual([
+          { requestID: selectedID, reply: "reject" },
+          ...(publication === "sibling" ? [{ requestID: siblingID, reply: "reject" as const }] : []),
+        ])
+        expect((yield* permission.list()).map((request) => request.id)).toEqual([otherID])
+        yield* permission.reply({ requestID: otherID, reply: "once" })
+        yield* awaitWithTimeout(Fiber.join(other), "unrelated request did not remain independently replyable")
+        expect(yield* permission.list()).toEqual([])
+      }),
+    )
+  }
+}
+
+globalIt.instance("global propagation completes a waiting check even when a reply listener fails", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const config = yield* Config.Service
+    const events = yield* EventV2Bridge.Service
+    const failed = yield* Ref.make(0)
+    const unsubscribe = yield* events.listen((event) => {
+      if (event.type !== Permission.Event.Replied.type) return Effect.void
+      return Ref.update(failed, (count) => count + 1).pipe(
+        Effect.andThen(Effect.die(new Error("permission reply listener failed"))),
+      )
+    })
+    yield* Effect.addFinalizer(() => unsubscribe)
+
+    for (const pattern of ["/shared/*", "/later/*"]) {
+      const fiber = yield* permission
+        .ask({
+          sessionID: SessionID.make("session_listener_failure"),
+          permission: "external_directory",
+          patterns: [pattern],
+          always: [pattern],
+          metadata: {},
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* config.updateGlobal({ permission: { external_directory: { [pattern]: "allow" } } })
+      yield* awaitWithTimeout(Fiber.join(fiber), "global propagation stranded the waiting tool after listener failure")
+      expect(yield* permission.list()).toEqual([])
+    }
+    expect(yield* Ref.get(failed)).toBe(2)
+  }),
+)
+
+globalIt.instance("a manual once reply wins against an in-flight global refresh exactly once", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const config = yield* Config.Service
+    const gate = yield* GlobalConfigGate
+    const events = yield* EventV2Bridge.Service
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+    const replies: Array<{ requestID: PermissionV1.ID; reply: PermissionV1.Reply }> = []
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if (event.type !== Permission.Event.Replied.type) return
+        const reply = Schema.decodeUnknownSync(Permission.Event.Replied)(event).data
+        replies.push({ requestID: reply.requestID, reply: reply.reply })
+      }),
+    )
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const request = {
+      sessionID: SessionID.make("session_once_race"),
+      permission: "external_directory",
+      patterns: ["/shared/*"],
+      always: ["/shared/*"],
+      metadata: {},
+      ruleset: [],
+    }
+    const targetID = PermissionV1.ID.make("per_once_race")
+    const target = yield* permission.ask({ ...request, id: targetID }).pipe(Effect.forkScoped)
+    const witnessID = PermissionV1.ID.make("per_once_witness")
+    const witness = yield* permission.ask({ ...request, id: witnessID }).pipe(Effect.forkScoped)
+    yield* waitForPending(2)
+    yield* Ref.set(
+      gate.read,
+      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+    )
+    yield* awaitWithTimeout(Deferred.await(entered), "poller did not enter the config read")
+    yield* config.updateGlobal({ permission: { external_directory: { "/shared/*": "allow" } } })
+    yield* permission.reply({ requestID: targetID, reply: "once" })
+    yield* awaitWithTimeout(Fiber.join(target), "manual once did not settle its request")
+    yield* Ref.set(gate.read, Effect.void)
+    yield* Deferred.succeed(release, undefined)
+    // This request can only finish when the suspended refresh resumes.
+    yield* awaitWithTimeout(Fiber.join(witness), "suspended refresh did not finish")
+    expect(replies).toEqual([
+      { requestID: targetID, reply: "once" },
+      { requestID: witnessID, reply: "global" },
+    ])
+    expect(yield* permission.list()).toEqual([])
+    expect((yield* permission.status()).approved).toEqual([])
+  }),
+)
+
+globalIt.instance("the poller wins against a suspended manual global save exactly once", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const gate = yield* GlobalConfigGate
+    const events = yield* EventV2Bridge.Service
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+    const replies: PermissionV1.Reply[] = []
+    const requestID = PermissionV1.ID.make("per_global_race")
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if (event.type !== Permission.Event.Replied.type) return
+        const reply = Schema.decodeUnknownSync(Permission.Event.Replied)(event).data
+        if (reply.requestID === requestID) replies.push(reply.reply)
+      }),
+    )
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const target = yield* permission
+      .ask({
+        id: requestID,
+        sessionID: SessionID.make("session_global_race"),
+        permission: "external_directory",
+        patterns: ["/shared/*"],
+        always: ["/shared/*"],
+        metadata: {},
+        ruleset: [],
+      })
+      .pipe(Effect.forkScoped)
+    yield* waitForPending(1)
+    // The stub exposes the saved rules before updateGlobal returns, as a real write does.
+    yield* Ref.set(
+      gate.write,
+      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+    )
+    const saving = yield* permission.reply({ requestID, reply: "global" }).pipe(Effect.forkScoped)
+    yield* awaitWithTimeout(Deferred.await(entered), "manual global save did not reach its gate")
+    yield* awaitWithTimeout(Fiber.join(target), "poller did not settle the request during the save")
+    expect(replies).toEqual(["global"])
+    yield* Deferred.succeed(release, undefined)
+    yield* awaitWithTimeout(Fiber.join(saving), "losing manual global reply did not finish")
+    expect(replies).toEqual(["global"])
+    expect(yield* permission.list()).toEqual([])
+    expect((yield* permission.status()).approved).toEqual([])
+  }),
+)
+
+for (const operation of ["dispose", "reload"] as const) {
+  globalIt.instance(`instance ${operation} interrupts an in-flight external-directory refresh`, () =>
+    Effect.gen(function* () {
+      const permission = yield* Permission.Service
+      const config = yield* Config.Service
+      const gate = yield* GlobalConfigGate
+      const events = yield* EventV2Bridge.Service
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+      const replies: PermissionV1.Reply[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === Permission.Event.Replied.type)
+            replies.push(Schema.decodeUnknownSync(Permission.Event.Replied)(event).data.reply)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const request = {
+        sessionID: SessionID.make("session_refresh_disposal"),
+        permission: "external_directory",
+        patterns: ["/shared/*"],
+        always: ["/shared/*"],
+        metadata: {},
+        ruleset: [],
+      }
+      const target = yield* permission.ask(request).pipe(Effect.exit, Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* Ref.set(
+        gate.read,
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+          Effect.asVoid,
+        ),
+      )
+      yield* awaitWithTimeout(Deferred.await(entered), "external refresh did not enter its read gate")
+      yield* config.updateGlobal({ permission: { external_directory: { "/shared/*": "allow" } } })
+      if (operation === "dispose") {
+        const ctx = yield* store.load({ directory: test.directory })
+        yield* awaitWithTimeout(store.dispose(ctx), "dispose did not stop the blocked poller")
+      }
+      if (operation === "reload")
+        yield* awaitWithTimeout(store.reload({ directory: test.directory }), "reload did not stop the blocked poller")
+      yield* awaitWithTimeout(Deferred.await(interrupted), "old refresh was not interrupted")
+      const exit = yield* awaitWithTimeout(Fiber.join(target), "disposed permission did not settle")
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+      yield* Ref.set(gate.read, Effect.void)
+      yield* Deferred.succeed(release, undefined)
+      // A new instance honors the grant; the old request must never emit a late reply.
+      yield* awaitWithTimeout(
+        store.provide({ directory: test.directory }, permission.ask(request)),
+        "new check stalled",
+      )
+      expect(replies).toEqual([])
+      expect(yield* store.provide({ directory: test.directory }, permission.list())).toEqual([])
+    }),
+  )
+}
 
 const rejectAll = (message?: string) =>
   Effect.gen(function* () {
@@ -1249,6 +1609,38 @@ it.instance(
       expect(yield* list()).toHaveLength(0)
     }),
   { git: true },
+)
+
+globalIt.instance("role denial ceilings survive configured, instance, and global grants", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const request = {
+      sessionID: SessionID.make("session_grant"),
+      permission: "external_directory",
+      patterns: ["/shared/*"],
+      always: ["/shared/*"],
+      metadata: {},
+      ruleset: Permission.fromConfig({ external_directory: "ask" }),
+    }
+    const approved = yield* ask(request).pipe(Effect.forkScoped)
+    const pending = yield* waitForPending(1)
+    yield* reply({ requestID: pending[0].id, reply: "always" })
+    yield* Fiber.join(approved)
+    yield* config.updateGlobal({ permission: { external_directory: { "/shared/*": "allow" } } })
+    const denials = [Permission.fromConfig({ external_directory: { "*": "deny", "/allowed/*": "allow" } })]
+
+    const err = yield* fail(
+      ask({
+        ...request,
+        sessionID: SessionID.make("session_child"),
+        ruleset: Permission.fromConfig({ external_directory: "allow" }),
+        denials,
+      }),
+    )
+    expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    yield* ask({ ...request, patterns: ["/allowed/*"], ruleset: Permission.fromConfig({ "*": "allow" }), denials })
+    expect(yield* list()).toHaveLength(0)
+  }),
 )
 
 it.instance(

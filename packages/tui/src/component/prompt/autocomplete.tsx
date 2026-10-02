@@ -76,6 +76,7 @@ export type AutocompleteOption = {
 }
 
 export function Autocomplete(props: {
+  enabled?: boolean
   value: string
   sessionID?: string
   setPrompt: (input: (prompt: PromptInfo) => void) => void
@@ -663,6 +664,7 @@ export function Autocomplete(props: {
   }))
 
   function show(mode: "@" | "/") {
+    if (props.enabled === false) return
     setStore({
       visible: mode,
       index: props.input().cursorOffset,
@@ -682,6 +684,10 @@ export function Autocomplete(props: {
     setStore("visible", false)
   }
 
+  createEffect(() => {
+    if (props.enabled === false) setStore("visible", false)
+  })
+
   onMount(() => {
     const unsubscribeMention = editor.onMention((mention) => {
       insertFileMention(mention)
@@ -693,6 +699,7 @@ export function Autocomplete(props: {
 
     props.ref({
       restoreSlash(selected) {
+        if (props.enabled === false) return
         if (!props.input().plainText.startsWith("/")) return
         setStore({ visible: "/", index: 0 })
         queueMicrotask(() => {
@@ -704,6 +711,7 @@ export function Autocomplete(props: {
         return store.visible
       },
       onInput(value) {
+        if (props.enabled === false) return
         if (store.visible) {
           if (
             // Typed text before the trigger

@@ -184,42 +184,35 @@ export const TaskTool = Tool.define(
           ? undefined
           : parentVariant
 
-      const session = params.task_id
-        ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-        : undefined
-      const childPermission = deriveSubagentSessionPermission({
-        parentSessionPermission: parent.permission ?? [],
-        subagent: next,
-      })
-      const childToolDenies = [
-        ...(next.permission.some((rule) => rule.permission === "todowrite")
-          ? []
-          : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
-        ...(next.permission.some((rule) => rule.permission === id)
-          ? []
-          : [{ permission: id, pattern: "*" as const, action: "deny" as const }]),
+      const session = params.task_id ? yield* sessions.get(SessionID.make(params.task_id)) : undefined
+      if (session && session.parentID !== parent.id) {
+        return yield* Effect.fail(new Error(`Task ${session.id} does not belong to this parent session`))
+      }
+      if (session?.agent && session.agent !== next.name) {
+        return yield* Effect.fail(new Error(`Task ${session.id} belongs to @${session.agent}, not @${next.name}`))
+      }
+      const caller = yield* agent.get(ctx.agent)
+      if (!caller) return yield* Effect.fail(new Error(`Unknown parent agent: ${ctx.agent}`))
+      const permission = [
+        ...deriveSubagentSessionPermission({
+          parentAgentPermission: caller.permission,
+          parentSessionPermission: parent.permission ?? [],
+          subagent: next,
+        }),
         ...(cfg.experimental?.primary_tools?.map((permission) => ({
           permission,
           pattern: "*" as const,
           action: "deny" as const,
         })) ?? []),
       ]
+      if (session) yield* sessions.setPermission({ sessionID: session.id, permission })
       const nextSession =
         session ??
         (yield* sessions.create({
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
           agent: next.name,
-          permission: [
-            ...childPermission,
-            ...childToolDenies.filter(
-              (deny) =>
-                !childPermission.some(
-                  (rule) =>
-                    rule.permission === deny.permission && rule.pattern === deny.pattern && rule.action === deny.action,
-                ),
-            ),
-          ],
+          permission,
         }))
 
       const metadata = {

@@ -16,10 +16,10 @@ describe("computePromptTraits", () => {
     expect(traits.status).toBeUndefined()
   })
 
-  test("shell mode disables capture and labels the prompt without suspending", () => {
+  test("terminal mode captures tab for mode cycling without suspending", () => {
     const traits = computePromptTraits({ mode: "shell", autocompleteVisible: false })
-    expect(traits.capture).toBeUndefined()
+    expect(traits.capture).toEqual(["tab"])
     expect(traits.suspend).toBeUndefined()
-    expect(traits.status).toBe("SHELL")
+    expect(traits.status).toBe("TERMINAL")
   })
 })

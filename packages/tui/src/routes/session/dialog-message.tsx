@@ -15,6 +15,7 @@ export function DialogMessage(props: {
   const sync = useSync()
   const sdk = useSDK()
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
+  const compaction = createMemo(() => sync.data.part[props.messageID]?.some((part) => part.type === "compaction"))
   const route = useRoute()
   const clipboard = useClipboard()
 
@@ -23,9 +24,9 @@ export function DialogMessage(props: {
       title="Message Actions"
       options={[
         {
-          title: "Revert",
+          title: compaction() ? "Undo compaction" : "Revert",
           value: "session.revert",
-          description: "undo messages and file changes",
+          description: compaction() ? "restore context before this compaction" : "undo messages and file changes",
           onSelect: (dialog) => {
             const msg = message()
             if (!msg) return
@@ -36,7 +37,7 @@ export function DialogMessage(props: {
             })
 
             if (props.setPrompt) {
-              const parts = sync.data.part[msg.id]
+              const parts = sync.data.part[msg.id] ?? []
               const promptInfo = parts.reduce(
                 (agg, part) => {
                   if (part.type === "text") {
@@ -45,7 +46,7 @@ export function DialogMessage(props: {
                   if (part.type === "file") agg.parts.push(strip(part))
                   return agg
                 },
-                { input: "", parts: [] as PromptInfo["parts"] },
+                { input: compaction() ? "/compact" : "", parts: [] as PromptInfo["parts"] },
               )
               props.setPrompt(promptInfo)
             }

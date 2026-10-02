@@ -18,7 +18,7 @@ const locationLayer = Layer.succeed(
 const it = testEffect(AppNodeBuilder.build(CommandV2.node, [[Location.node, locationLayer]]))
 
 describe("CommandPlugin.Plugin", () => {
-  it.effect("registers built-in init and review commands", () =>
+  it.effect("registers built-in init, review, commit, and tests commands", () =>
     Effect.gen(function* () {
       const command = yield* CommandV2.Service
       yield* CommandPlugin.Plugin.effect(
@@ -41,6 +41,16 @@ describe("CommandPlugin.Plugin", () => {
         name: "review",
         description: "review changes [commit|branch|pr], defaults to uncommitted",
         subtask: true,
+      })
+      expect(yield* command.get("commit")).toMatchObject({
+        name: "commit",
+        template: "git: stage and commit this diff in isolation (from other diffs)",
+        description: "stage and commit this diff in isolation from other diffs",
+      })
+      expect(yield* command.get("tests")).toMatchObject({
+        name: "tests",
+        template: "verify we have adequate tests for this diff",
+        description: "verify we have adequate tests for this diff",
       })
     }),
   )

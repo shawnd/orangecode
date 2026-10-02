@@ -37,6 +37,7 @@ async function mountRecovery(override?: FetchHandler, connected = true, headers?
     closed: boolean
   }[] = []
   const requests: Request[] = []
+  const removed = new Set<string>()
   const fallback = createFetch((url, request) => {
     if (request)
       requests.push(new Request(request.url, { method: request.method, headers: new Headers(request.headers) }))
@@ -72,6 +73,11 @@ async function mountRecovery(override?: FetchHandler, connected = true, headers?
         { headers: { "content-type": "text/event-stream" } },
       )
     }
+    const scoped = url.pathname.match(/^\/api\/session\/([^/]+)\/(permission|question)(?:\/|$)/)
+    // Production SessionLocationMiddleware rejects these reads before their
+    // handlers can return empty request arrays when the Session row is gone.
+    if (scoped && removed.has(scoped[1]!))
+      return json({ _tag: "SessionNotFoundError", sessionID: scoped[1], message: "Session not found" }, { status: 404 })
     const response = override?.(url, request)
     if (response) return response
     if (["/permission", "/question"].includes(url.pathname)) return json([])
@@ -135,6 +141,9 @@ async function mountRecovery(override?: FetchHandler, connected = true, headers?
     permission,
     streams,
     requests,
+    deleteSession(sessionID: string) {
+      removed.add(sessionID)
+    },
     async dispose() {
       app.renderer.destroy()
       streams.forEach((stream) => stream.end())
@@ -255,6 +264,449 @@ test("a request aborted before SSE readiness rejects immediately without a POST"
     if (previous !== undefined) process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = previous
   }
 })
+
+for (const selective of [false, true]) {
+  for (const observed of [false, true]) {
+    test(`Session deletion ${observed ? "observed before EOF" : "during an SSE outage"} prunes caches and releases survivor submissions (${selective ? "selective" : "default"})`, async () => {
+      const previous = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+      process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = selective ? "1" : "0"
+      const deletedID = "ses_deleted_recovery"
+      const deleted = { ...session, id: deletedID, title: "deleted" }
+      let missing = false
+      let staleReads = 0
+      let posts = 0
+      const client = await mountRecovery((url, request) => {
+        if (url.pathname === `/session/${deletedID}`) {
+          if (!missing) return json(deleted)
+          staleReads++
+          return json({ name: "NotFoundError", data: { message: "Session not found" } }, { status: 404 })
+        }
+        if (url.pathname === `/session/${deletedID}/message`)
+          return json([
+            {
+              info: { ...user("msg_deleted"), sessionID: deletedID },
+              parts: [{ id: "prt_deleted", sessionID: deletedID, messageID: "msg_deleted", type: "text", text: "old" }],
+            },
+          ])
+        if (url.pathname === `/session/${deletedID}/todo`)
+          return json([{ content: "deleted todo", status: "pending", priority: "high" }])
+        if (url.pathname === `/session/${deletedID}/diff`)
+          return json([{ file: "deleted.ts", additions: 1, deletions: 0 }])
+        if (url.pathname === `/api/session/${deletedID}/message`)
+          return missing
+            ? json(
+                { _tag: "SessionNotFoundError", sessionID: deletedID, message: "Session not found" },
+                { status: 404 },
+              )
+            : json({ sequence: 1, cursor: {}, data: [v2user("msg_deleted_v2")] })
+        if (url.pathname === `/api/session/${sessionID}/prompt` && request?.method === "POST") {
+          posts++
+          return json({})
+        }
+      })
+      try {
+        client.route.navigate({ type: "session", sessionID: deletedID })
+        client.sdk.adoptSession(deletedID)
+        await client.sdk.eventsReady()
+        await client.sync.session.sync(deletedID)
+        await client.data.session.message.refresh(deletedID)
+        expect(client.sync.data.part.msg_deleted).toHaveLength(1)
+        expect(client.sync.data.todo[deletedID]).toHaveLength(1)
+        expect(client.sync.data.session_diff[deletedID]).toHaveLength(1)
+        expect(client.data.session.message.list(deletedID)).toHaveLength(1)
+        if (observed) {
+          for (const title of ["live", "buffered"]) {
+            client.streams.at(-1)!.send({
+              id: `evt_update_${title}`,
+              type: "session.updated",
+              properties: { sessionID: deletedID, info: { ...deleted, title } },
+            })
+          }
+          client.streams
+            .at(-1)!
+            .send({ id: "evt_deleted", type: "session.deleted", properties: { sessionID: deletedID, info: deleted } })
+          await wait(() => client.sync.session.get(deletedID) === undefined)
+        }
+        missing = true
+        client.deleteSession(deletedID)
+        const epoch = client.sdk.connectionEpoch
+        client.streams.at(-1)!.end()
+        await wait(() => client.sdk.connectionEpoch !== epoch)
+        const submission = client.sdk.client.v2.session
+          .prompt({ sessionID, prompt: { text: "survive deletion" } }, { throwOnError: true })
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          )
+        await wait(() => posts === 1, 5000)
+        expect(await submission).toBeUndefined()
+        expect(client.sync.session.get(deletedID)).toBeUndefined()
+        expect(client.sync.data.message[deletedID]).toBeUndefined()
+        expect(client.sync.data.part.msg_deleted).toBeUndefined()
+        expect(client.sync.data.todo[deletedID]).toBeUndefined()
+        expect(client.sync.data.session_diff[deletedID]).toBeUndefined()
+        expect(client.data.session.message.list(deletedID)).toBeUndefined()
+        expect(client.sdk.interest.owns(deletedID)).toBe(false)
+        expect(client.sdk.interest.query().split(",")).not.toContain(deletedID)
+        expect(staleReads).toBe(observed ? 0 : 1)
+        const reads = client.requests.filter((request) => new URL(request.url).pathname.includes(deletedID)).length
+        const recoveredEpoch = client.sdk.connectionEpoch
+        client.streams.at(-1)!.end()
+        await wait(() => client.sdk.connectionEpoch !== recoveredEpoch)
+        await client.sdk.eventsReady()
+        expect(client.requests.filter((request) => new URL(request.url).pathname.includes(deletedID))).toHaveLength(
+          reads,
+        )
+      } finally {
+        await client.dispose()
+        if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+        if (previous !== undefined) process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = previous
+      }
+    })
+  }
+}
+
+for (const controlled of [false, true]) {
+  test(`request-only ${controlled ? "controlled" : "view-only"} deleted Sessions cannot poison recovery`, async () => {
+    const previous = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+    process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = "0"
+    const deletedID = "ses_deleted_requests"
+    let posts = 0
+    const client = await mountRecovery((url, request) => {
+      if (url.pathname === `/api/session/${sessionID}/prompt` && request?.method === "POST") {
+        posts++
+        return json({})
+      }
+    })
+    try {
+      if (controlled) client.sdk.adoptSession(deletedID)
+      const stream = client.streams.at(-1)!
+      stream.send({
+        id: "evt_request_only_permission",
+        type: "permission.v2.asked",
+        properties: { id: "per_request_only", sessionID: deletedID, action: "bash", resources: [] },
+      })
+      stream.send({
+        id: "evt_request_only_question",
+        type: "question.v2.asked",
+        properties: { id: "que_request_only", sessionID: deletedID, questions: [] },
+      })
+      await wait(() => client.data.session.question.list(deletedID)?.[0]?.id === "que_request_only")
+      expect(client.data.session.permission.list(deletedID)?.[0]?.id).toBe("per_request_only")
+      expect(client.sync.session.get(deletedID)).toBeUndefined()
+      expect(client.sync.data.message[deletedID]).toBeUndefined()
+      expect(client.data.session.message.list(deletedID)).toBeUndefined()
+      expect(client.sdk.interest.owns(deletedID)).toBe(controlled)
+      client.deleteSession(deletedID)
+      if (controlled) client.permission.set("auto")
+      const epoch = client.sdk.connectionEpoch
+      const connections = client.streams.length
+      stream.end()
+      await wait(() => client.sdk.connectionEpoch !== epoch)
+      const submission = client.sdk.client.v2.session
+        .prompt({ sessionID, prompt: { text: "survive request-only deletion" } }, { throwOnError: true })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+      await wait(() => posts === 1, 5000)
+      expect(await submission).toBeUndefined()
+      expect(client.sdk.connectionEpoch).toBe(epoch + 1)
+      expect(client.streams).toHaveLength(connections + 1)
+      expect(client.data.session.permission.list(deletedID)).toBeUndefined()
+      expect(client.data.session.question.list(deletedID)).toBeUndefined()
+      expect(client.sdk.interest.owns(deletedID)).toBe(false)
+      const reads = client.requests.filter((request) => new URL(request.url).pathname.includes(deletedID)).length
+      expect(reads).toBeGreaterThanOrEqual(2)
+      expect(
+        client.requests.some((request) => new URL(request.url).pathname === `/api/session/${deletedID}/message`),
+      ).toBe(false)
+      const recoveredEpoch = client.sdk.connectionEpoch
+      client.streams.at(-1)!.end()
+      await wait(() => client.sdk.connectionEpoch !== recoveredEpoch)
+      await client.sdk.eventsReady()
+      expect(client.requests.filter((request) => new URL(request.url).pathname.includes(deletedID))).toHaveLength(reads)
+    } finally {
+      await client.dispose()
+      if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+      if (previous !== undefined) process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = previous
+    }
+  })
+}
+
+for (const failure of ["503", "untyped 404", "foreign Session 404"]) {
+  test(`request-only recovery retries ${failure} without deleting the target or dispatching early`, async () => {
+    const previous = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+    process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = "0"
+    const target = "ses_request_retry"
+    const held = Promise.withResolvers<void>()
+    let gap = false
+    let reads = 0
+    let blocked = false
+    let posts = 0
+    let failedEpoch = 0
+    const client = await mountRecovery((url, request) => {
+      if (gap && url.pathname === `/api/session/${target}/permission`) {
+        reads++
+        if (reads === 1) {
+          failedEpoch = client.sdk.connectionEpoch
+          return json(
+            failure === "foreign Session 404"
+              ? { _tag: "SessionNotFoundError", sessionID: "ses_someone_else", message: "Session not found" }
+              : { error: "temporarily unavailable" },
+            { status: failure === "503" ? 503 : 404 },
+          )
+        }
+        blocked = true
+        return held.promise.then(() =>
+          json({ data: [{ id: "per_request_fresh", sessionID: target, action: "bash", resources: [] }] }),
+        )
+      }
+      if (url.pathname === `/api/session/${sessionID}/prompt` && request?.method === "POST") {
+        posts++
+        return json({})
+      }
+    })
+    try {
+      client.streams.at(-1)!.send({
+        id: "evt_request_retry",
+        type: "permission.v2.asked",
+        properties: { id: "per_request_cached", sessionID: target, action: "bash", resources: [] },
+      })
+      await wait(() => client.data.session.permission.list(target)?.length === 1)
+      gap = true
+      const epoch = client.sdk.connectionEpoch
+      client.streams.at(-1)!.end()
+      await wait(() => client.sdk.connectionEpoch !== epoch)
+      const submission = client.sdk.client.v2.session
+        .prompt({ sessionID, prompt: { text: "wait for request recovery" } }, { throwOnError: true })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+      await wait(() => blocked, 5000)
+      expect(client.sdk.connectionEpoch).toBeGreaterThan(failedEpoch)
+      expect(client.data.session.permission.list(target)?.[0]?.id).toBe("per_request_cached")
+      expect(posts).toBe(0)
+      held.resolve()
+      expect(await submission).toBeUndefined()
+      expect(posts).toBe(1)
+      expect(client.data.session.permission.list(target)?.[0]?.id).toBe("per_request_fresh")
+      expect(reads).toBe(2)
+    } finally {
+      held.resolve()
+      await client.dispose()
+      if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+      if (previous !== undefined) process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = previous
+    }
+  })
+}
+
+test("held recovery snapshots cannot restore deleted requests or status in the same SSE epoch", async () => {
+  const previous = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+  process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = "0"
+  const deletedID = "ses_deleted_held_requests"
+  const held = Promise.withResolvers<void>()
+  const blocked = new Set<string>()
+  let holding = false
+  let posts = 0
+  const legacyPermission = (id: string) => ({
+    id: `per_${id}`,
+    sessionID: id,
+    permission: "bash",
+    patterns: [],
+    always: [],
+    metadata: {},
+  })
+  const legacyQuestion = (id: string) => ({ id: `que_${id}`, sessionID: id, questions: [] })
+  const v2permission = (id: string) => ({ id: `per_v2_${id}`, sessionID: id, action: "bash", resources: [] })
+  const v2question = (id: string) => ({ id: `que_v2_${id}`, sessionID: id, questions: [] })
+  const client = await mountRecovery((url, request) => {
+    if (url.pathname === `/api/session/${sessionID}/prompt` && request?.method === "POST") {
+      posts++
+      return json({})
+    }
+    if (!holding) return
+    const response = (() => {
+      if (url.pathname === "/permission") return json([legacyPermission(deletedID), legacyPermission(sessionID)])
+      if (url.pathname === "/question") return json([legacyQuestion(deletedID), legacyQuestion(sessionID)])
+      if (url.pathname === "/session/status")
+        return json({ [deletedID]: { type: "busy" }, [sessionID]: { type: "busy" } })
+      if (url.pathname === "/api/permission/request")
+        return json({ data: [v2permission(deletedID), v2permission(sessionID)] })
+      if (url.pathname === "/api/question/request")
+        return json({ data: [v2question(deletedID), v2question(sessionID)] })
+      if (url.pathname === `/api/session/${deletedID}/permission`) return json({ data: [v2permission(deletedID)] })
+      if (url.pathname === `/api/session/${deletedID}/question`) return json({ data: [v2question(deletedID)] })
+    })()
+    if (!response) return
+    blocked.add(url.pathname)
+    return held.promise.then(() => response)
+  })
+  try {
+    const stream = client.streams.at(-1)!
+    stream.send({ id: "evt_held_legacy_permission", type: "permission.asked", properties: legacyPermission(deletedID) })
+    stream.send({ id: "evt_held_legacy_question", type: "question.asked", properties: legacyQuestion(deletedID) })
+    stream.send({ id: "evt_held_v2_permission", type: "permission.v2.asked", properties: v2permission(deletedID) })
+    stream.send({ id: "evt_held_v2_question", type: "question.v2.asked", properties: v2question(deletedID) })
+    await wait(() => client.data.session.question.list(deletedID)?.length === 1)
+    holding = true
+    const epoch = client.sdk.connectionEpoch
+    stream.end()
+    await wait(() => client.sdk.connectionEpoch !== epoch)
+    const submission = client.sdk.client.v2.session
+      .prompt({ sessionID, prompt: { text: "survive held deletion snapshots" } }, { throwOnError: true })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+    await wait(() => blocked.size === 7)
+    expect(posts).toBe(0)
+    const recoveryEpoch = client.sdk.connectionEpoch
+    client.deleteSession(deletedID)
+    client.streams.at(-1)!.send({
+      id: "evt_deleted_while_held",
+      type: "session.deleted",
+      properties: { sessionID: deletedID, info: { ...session, id: deletedID } },
+    })
+    await wait(() => client.data.session.question.list(deletedID) === undefined)
+    expect(client.sdk.connectionEpoch).toBe(recoveryEpoch)
+    holding = false
+    held.resolve()
+    expect(await submission).toBeUndefined()
+    expect(posts).toBe(1)
+    expect(client.sdk.connectionEpoch).toBe(recoveryEpoch)
+    expect(client.sync.data.permission[deletedID]).toBeUndefined()
+    expect(client.sync.data.question[deletedID]).toBeUndefined()
+    expect(client.sync.data.session_status[deletedID]).toBeUndefined()
+    expect(client.data.session.permission.list(deletedID)).toBeUndefined()
+    expect(client.data.session.question.list(deletedID)).toBeUndefined()
+    expect(client.sync.data.permission[sessionID]?.[0]?.id).toBe(`per_${sessionID}`)
+    expect(client.sync.data.question[sessionID]?.[0]?.id).toBe(`que_${sessionID}`)
+    expect(client.sync.data.session_status[sessionID]).toEqual({ type: "busy" })
+    expect(client.data.session.permission.list(sessionID)?.[0]?.id).toBe(`per_v2_${sessionID}`)
+    expect(client.data.session.question.list(sessionID)?.[0]?.id).toBe(`que_v2_${sessionID}`)
+    const reads = client.requests.filter((request) => new URL(request.url).pathname.includes(deletedID)).length
+    client.streams.at(-1)!.end()
+    await wait(() => client.sdk.connectionEpoch !== recoveryEpoch)
+    await client.sdk.eventsReady()
+    expect(client.requests.filter((request) => new URL(request.url).pathname.includes(deletedID))).toHaveLength(reads)
+  } finally {
+    held.resolve()
+    await client.dispose()
+    if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+    if (previous !== undefined) process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = previous
+  }
+})
+
+test("a deleted Session cached only in V2 cannot poison recovery", async () => {
+  const previous = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+  process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = "0"
+  const deletedID = "ses_deleted_v2_only"
+  let missing = false
+  let reads = 0
+  let posts = 0
+  const client = await mountRecovery((url, request) => {
+    if (url.pathname === `/api/session/${deletedID}/message`) {
+      reads++
+      return missing
+        ? json({ _tag: "SessionNotFoundError", sessionID: deletedID, message: "Session not found" }, { status: 404 })
+        : json({ sequence: 1, cursor: {}, data: [v2user("msg_v2_only")] })
+    }
+    if (url.pathname === `/api/session/${sessionID}/prompt` && request?.method === "POST") {
+      posts++
+      return json({})
+    }
+  })
+  try {
+    client.sdk.adoptSession(deletedID)
+    await client.data.session.message.refresh(deletedID)
+    expect(client.sync.session.get(deletedID)).toBeUndefined()
+    expect(client.sync.data.message[deletedID]).toBeUndefined()
+    expect(client.data.session.message.list(deletedID)).toHaveLength(1)
+    missing = true
+    client.deleteSession(deletedID)
+    const epoch = client.sdk.connectionEpoch
+    client.streams.at(-1)!.end()
+    await wait(() => client.sdk.connectionEpoch !== epoch)
+    const submission = client.sdk.client.v2.session
+      .prompt({ sessionID, prompt: { text: "recover despite deleted V2 history" } }, { throwOnError: true })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+    await wait(() => posts === 1, 5000)
+    expect(await submission).toBeUndefined()
+    expect(reads).toBe(2)
+    expect(client.data.session.message.list(deletedID)).toBeUndefined()
+    expect(client.sdk.interest.owns(deletedID)).toBe(false)
+    const recoveredEpoch = client.sdk.connectionEpoch
+    client.streams.at(-1)!.end()
+    await wait(() => client.sdk.connectionEpoch !== recoveredEpoch)
+    await client.sdk.eventsReady()
+    expect(reads).toBe(2)
+  } finally {
+    await client.dispose()
+    if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+    if (previous !== undefined) process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = previous
+  }
+})
+
+for (const status of [503, 404]) {
+  test(`session hydration ${status === 503 ? "503" : "untyped 404"} retries without deleting cached state or releasing submissions early`, async () => {
+    const held = Promise.withResolvers<Response>()
+    let gap = false
+    let reads = 0
+    let posted = false
+    let failedEpoch = 0
+    const client = await mountRecovery((url, request) => {
+      if (url.pathname === `/session/${sessionID}` && gap) {
+        reads++
+        if (reads === 1) {
+          failedEpoch = client.sdk.connectionEpoch
+          return json(
+            status === 503
+              ? { name: "NotFoundError", data: { message: "temporarily unavailable" } }
+              : { error: "route missing" },
+            { status },
+          )
+        }
+        return held.promise
+      }
+      if (url.pathname === `/api/session/${sessionID}/prompt` && request?.method === "POST") {
+        posted = true
+        return json({})
+      }
+    })
+    try {
+      client.route.navigate({ type: "session", sessionID })
+      await client.sdk.eventsReady()
+      await client.sync.session.sync(sessionID)
+      gap = true
+      const epoch = client.sdk.connectionEpoch
+      client.streams.at(-1)!.end()
+      await wait(() => client.sdk.connectionEpoch !== epoch)
+      const submission = client.sdk.client.v2.session
+        .prompt({ sessionID, prompt: { text: "wait for a valid snapshot" } }, { throwOnError: true })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+      await wait(() => reads === 2, 5000)
+      expect(client.sdk.connectionEpoch).toBeGreaterThan(failedEpoch)
+      expect(client.sync.session.get(sessionID)?.title).toBe("recovery")
+      expect(client.sdk.interest.owns(sessionID)).toBe(true)
+      expect(posted).toBe(false)
+      held.resolve(json({ ...session, title: "fresh" }))
+      expect(await submission).toBeUndefined()
+      expect(posted).toBe(true)
+      expect(client.sync.session.get(sessionID)?.title).toBe("fresh")
+    } finally {
+      held.resolve(json(session))
+      await client.dispose()
+    }
+  })
+}
 
 test("a failed recovery snapshot retries SSE and keeps submission blocked until recovery succeeds", async () => {
   const held = Promise.withResolvers<void>()
@@ -520,6 +972,66 @@ for (const selective of [false, true]) {
       }
     })
   }
+}
+
+for (const selective of [false, true]) {
+  test(`late sidebar hydration cannot overwrite recovered history or mark an old epoch synced (${selective ? "selective" : "default"})`, async () => {
+    const previous = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+    process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = selective ? "1" : "0"
+    const todo = Promise.withResolvers<Response>()
+    const diff = Promise.withResolvers<Response>()
+    const reads = { history: 0, todo: 0, diff: 0, info: 0 }
+    const client = await mountRecovery((url) => {
+      if (url.pathname === `/session/${sessionID}`) {
+        reads.info++
+        return json({ ...session, title: "recovered" })
+      }
+      if (url.pathname === `/session/${sessionID}/message`) {
+        reads.history++
+        return json([{ info: user(reads.history === 1 ? "msg_old" : "msg_gap"), parts: [] }])
+      }
+      if (url.pathname === `/session/${sessionID}/todo`) {
+        reads.todo++
+        return reads.todo === 1 ? todo.promise : json([{ content: "new", status: "pending", priority: "high" }])
+      }
+      if (url.pathname === `/session/${sessionID}/diff`) {
+        reads.diff++
+        return reads.diff === 1
+          ? diff.promise
+          : json([{ file: "new.ts", before: "", after: "new", additions: 1, deletions: 0 }])
+      }
+    })
+    try {
+      client.route.navigate({ type: "session", sessionID })
+      await client.sdk.eventsReady()
+      const hydration = client.sync.session.sync(sessionID, session)
+      await wait(() => client.sync.data.message[sessionID]?.[0]?.id === "msg_old" && reads.diff === 1)
+      expect(reads.info).toBe(0)
+      const epoch = client.sdk.connectionEpoch
+      client.streams.at(-1)!.end()
+      await wait(() => client.sdk.connectionEpoch !== epoch)
+      await client.sdk.eventsReady()
+      expect(client.sync.data.message[sessionID]?.map((message) => message.id)).toEqual(["msg_gap"])
+      expect(client.sync.session.get(sessionID)?.title).toBe("recovered")
+      expect(client.sync.data.todo[sessionID]?.[0]?.content).toBe("new")
+      expect(client.sync.data.session_diff[sessionID]?.[0]?.file).toBe("new.ts")
+      todo.resolve(json([{ content: "old", status: "pending", priority: "high" }]))
+      diff.resolve(json([{ file: "old.ts", before: "", after: "old", additions: 1, deletions: 0 }]))
+      await hydration
+      expect(client.sync.data.todo[sessionID]?.[0]?.content).toBe("new")
+      expect(client.sync.data.session_diff[sessionID]?.[0]?.file).toBe("new.ts")
+      const historyReads = reads.history
+      await client.sync.session.sync(sessionID)
+      expect(reads.history).toBe(historyReads)
+      expect(client.sync.data.message[sessionID]?.map((message) => message.id)).toEqual(["msg_gap"])
+    } finally {
+      todo.resolve(json([]))
+      diff.resolve(json([]))
+      await client.dispose()
+      if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
+      if (previous !== undefined) process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = previous
+    }
+  })
 }
 
 test("volatile text survives interleaved durable fragments until full-value settlement", async () => {

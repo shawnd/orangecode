@@ -5,6 +5,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
+import { subagentPermissionDenials } from "@/agent/subagent-permissions"
 import { Config } from "@/config/config"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
@@ -369,13 +370,15 @@ const layer = Layer.effect(
             }
 
             const agent = yield* agents.get(ctx.assistantMessage.agent)
+            const current = yield* session.get(ctx.assistantMessage.sessionID)
             yield* permission.ask({
               permission: "doom_loop",
               patterns: [value.name],
               sessionID: ctx.assistantMessage.sessionID,
               metadata: { tool: value.name, input },
               always: [value.name],
-              ruleset: agent.permission,
+              ruleset: Permission.merge(agent.permission, current.permission ?? []),
+              denials: yield* subagentPermissionDenials({ agent, session: current, agents, sessions: session }),
             })
             return
           }

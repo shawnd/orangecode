@@ -24,6 +24,7 @@ type PrepareInput = {
   readonly model: Provider.Model
   readonly agent: Agent.Info
   readonly permission?: PermissionV1.Ruleset
+  readonly permissionDenials?: PermissionV1.Ruleset[]
   readonly system: string[]
   readonly messages: ModelMessage[]
   readonly small?: boolean
@@ -205,10 +206,11 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
 })
 
-function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "user">) {
+function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "permissionDenials" | "user">) {
   const disabled = Permission.disabled(
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),
+    input.permissionDenials,
   )
   return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
 }

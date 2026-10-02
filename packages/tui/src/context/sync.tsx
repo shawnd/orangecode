@@ -33,6 +33,7 @@ import { useRoute } from "./route"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
+import { isSessionNotFound } from "../util/error"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -158,7 +159,13 @@ export const {
       { epoch: number; messages: Set<string>; parts: Set<string>; touched: Set<string> }
     >()
     let recovering:
-      | { permission: Set<string>; v2permission: Set<string>; question: Set<string>; status: Set<string> }
+      | {
+          permission: Set<string>
+          v2permission: Set<string>
+          question: Set<string>
+          status: Set<string>
+          removed: Set<string>
+        }
       | undefined
     const requestLocations = new Map<string, { directory: string; workspace?: string }>()
     const statusVersions = new Map<string, number>()
@@ -169,6 +176,28 @@ export const {
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
     }
+    onCleanup(
+      sdk.interest.onRemove((sessionID) => {
+        recovering?.removed.add(sessionID)
+        fullSyncedSessions.delete(sessionID)
+        syncingSessions.delete(sessionID)
+        hydratingSessions.delete(sessionID)
+        requestLocations.delete(sessionID)
+        statusVersions.delete(sessionID)
+        setStore(
+          produce((draft) => {
+            draft.session = draft.session.filter((session) => session.id !== sessionID)
+            for (const message of draft.message[sessionID] ?? []) delete draft.part[message.id]
+            delete draft.message[sessionID]
+            delete draft.todo[sessionID]
+            delete draft.session_diff[sessionID]
+            delete draft.session_status[sessionID]
+            delete draft.permission[sessionID]
+            delete draft.question[sessionID]
+          }),
+        )
+      }),
+    )
     onCleanup(
       sdk.interest.onChange(() => {
         setStore(
@@ -358,19 +387,6 @@ export const {
           setStore("session_diff", event.properties.sessionID, event.properties.diff)
           break
 
-        case "session.deleted": {
-          hydratingSessions.get(event.properties.info.id)?.touched.add("info")
-          const result = search(store.session, event.properties.info.id, (s) => s.id)
-          if (result.found) {
-            setStore(
-              "session",
-              produce((draft) => {
-                draft.splice(result.index, 1)
-              }),
-            )
-          }
-          break
-        }
         case "session.updated": {
           hydratingSessions.get(event.properties.info.id)?.touched.add("info")
           const result = search(store.session, event.properties.info.id, (s) => s.id)
@@ -716,7 +732,7 @@ export const {
           if (last.role === "user") return "working"
           return last.time.completed ? "idle" : "working"
         },
-        async sync(sessionID: string) {
+        async sync(sessionID: string, info?: Session) {
           await sdk.streamReady()
           if (!sdk.interest.includes(sessionID)) return
           if (fullSyncedSessions.has(sessionID)) return
@@ -731,75 +747,104 @@ export const {
           }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
-              sdk.client.session.get({ sessionID }, { throwOnError: true }),
-              sdk.client.session.messages({ sessionID, limit: 100 }),
-              sdk.client.session.todo({ sessionID }),
-              sdk.client.session.diff({ sessionID }),
-            ])
-            sdk.flushEvents()
-            if (
-              tracker.epoch !== sdk.connectionEpoch ||
-              !sdk.interest.includes(sessionID) ||
-              hydratingSessions.get(sessionID) !== tracker
-            )
-              return
-            setStore(
-              produce((draft) => {
-                const match = search(draft.session, sessionID, (s) => s.id)
-                if (!tracker.touched.has("info")) {
-                  if (match.found) draft.session[match.index] = session.data!
-                  if (!match.found) draft.session.splice(match.index, 0, session.data!)
-                }
-                if (!tracker.touched.has("todo")) draft.todo[sessionID] = todo.data ?? []
-                const currentMessages = draft.message[sessionID] ?? []
-                const infos = (messages.data ?? []).flatMap((message) => {
-                  if (!tracker.messages.has(message.info.id)) return [message.info]
-                  const current = currentMessages.find((item) => item.id === message.info.id)
-                  return current ? [current] : []
-                })
-                infos.push(
-                  ...currentMessages.filter(
-                    (message) => tracker.messages.has(message.id) && !infos.some((item) => item.id === message.id),
-                  ),
+            // History can render while sidebar details are still loading. Keep
+            // both branches in the same task so callers still await a full sync.
+            await Promise.all([
+              Promise.all([
+                info
+                  ? Promise.resolve({ data: info })
+                  : sdk.client.session.get({ sessionID }, { throwOnError: true }).catch((error: unknown) => {
+                      if (!isSessionNotFound(error, sessionID, true)) throw error
+                      sdk.flushEvents()
+                      if (tracker.epoch === sdk.connectionEpoch && hydratingSessions.get(sessionID) === tracker)
+                        sdk.interest.remove(sessionID)
+                    }),
+                sdk.client.session.messages({ sessionID, limit: 100 }),
+              ]).then(([session, messages]) => {
+                sdk.flushEvents()
+                if (
+                  !session ||
+                  tracker.epoch !== sdk.connectionEpoch ||
+                  !sdk.interest.includes(sessionID) ||
+                  hydratingSessions.get(sessionID) !== tracker
                 )
-                infos.sort(compareMessage)
-                const removed = infos.slice(0, -100)
-                const visible = infos.slice(-100)
-                const visibleIDs = new Set(visible.map((message) => message.id))
-                for (const message of messages.data ?? []) {
-                  if (!visibleIDs.has(message.info.id)) {
-                    delete draft.part[message.info.id]
-                    continue
-                  }
-                  const currentParts = draft.part[message.info.id] ?? []
-                  const parts = message.parts.flatMap((part) => {
-                    const current = currentParts.find((item) => item.id === part.id)
-                    if (tracker.parts.has(part.id)) return current ? [current] : []
-                    if (
-                      current &&
-                      (part.type === "text" || part.type === "reasoning") &&
-                      (current.type === "text" || current.type === "reasoning") &&
-                      part.text.length === 0 &&
-                      current.text.length > 0
-                    ) {
-                      return [current]
+                  return
+                setStore(
+                  produce((draft) => {
+                    const match = search(draft.session, sessionID, (s) => s.id)
+                    if (!tracker.touched.has("info")) {
+                      if (match.found) draft.session[match.index] = session.data!
+                      if (!match.found) draft.session.splice(match.index, 0, session.data!)
                     }
-                    return [part]
-                  })
-                  parts.push(
-                    ...currentParts.filter(
-                      (part) => tracker.parts.has(part.id) && !parts.some((item) => item.id === part.id),
-                    ),
-                  )
-                  draft.part[message.info.id] = parts
-                }
-                for (const message of removed) delete draft.part[message.id]
-                draft.message[sessionID] = visible
-                if (!tracker.touched.has("diff")) draft.session_diff[sessionID] = diff.data ?? []
+                    const currentMessages = draft.message[sessionID] ?? []
+                    const infos = (messages.data ?? []).flatMap((message) => {
+                      if (!tracker.messages.has(message.info.id)) return [message.info]
+                      const current = currentMessages.find((item) => item.id === message.info.id)
+                      return current ? [current] : []
+                    })
+                    infos.push(
+                      ...currentMessages.filter(
+                        (message) => tracker.messages.has(message.id) && !infos.some((item) => item.id === message.id),
+                      ),
+                    )
+                    infos.sort(compareMessage)
+                    const removed = infos.slice(0, -100)
+                    const visible = infos.slice(-100)
+                    const visibleIDs = new Set(visible.map((message) => message.id))
+                    for (const message of messages.data ?? []) {
+                      if (!visibleIDs.has(message.info.id)) {
+                        delete draft.part[message.info.id]
+                        continue
+                      }
+                      const currentParts = draft.part[message.info.id] ?? []
+                      const parts = message.parts.flatMap((part) => {
+                        const current = currentParts.find((item) => item.id === part.id)
+                        if (tracker.parts.has(part.id)) return current ? [current] : []
+                        if (
+                          current &&
+                          (part.type === "text" || part.type === "reasoning") &&
+                          (current.type === "text" || current.type === "reasoning") &&
+                          part.text.length === 0 &&
+                          current.text.length > 0
+                        ) {
+                          return [current]
+                        }
+                        return [part]
+                      })
+                      parts.push(
+                        ...currentParts.filter(
+                          (part) => tracker.parts.has(part.id) && !parts.some((item) => item.id === part.id),
+                        ),
+                      )
+                      draft.part[message.info.id] = parts
+                    }
+                    for (const message of removed) delete draft.part[message.id]
+                    draft.message[sessionID] = visible
+                  }),
+                )
               }),
+              Promise.all([sdk.client.session.todo({ sessionID }), sdk.client.session.diff({ sessionID })]).then(
+                ([todo, diff]) => {
+                  sdk.flushEvents()
+                  if (
+                    tracker.epoch !== sdk.connectionEpoch ||
+                    !sdk.interest.includes(sessionID) ||
+                    hydratingSessions.get(sessionID) !== tracker
+                  )
+                    return
+                  batch(() => {
+                    if (!tracker.touched.has("todo")) setStore("todo", sessionID, reconcile(todo.data ?? []))
+                    if (!tracker.touched.has("diff")) setStore("session_diff", sessionID, reconcile(diff.data ?? []))
+                  })
+                },
+              ),
+            ])
+            if (
+              tracker.epoch === sdk.connectionEpoch &&
+              sdk.interest.includes(sessionID) &&
+              hydratingSessions.get(sessionID) === tracker
             )
-            fullSyncedSessions.add(sessionID)
+              fullSyncedSessions.add(sessionID)
           })().finally(() => {
             if (hydratingSessions.get(sessionID) !== tracker) return
             syncingSessions.delete(sessionID)
@@ -819,6 +864,7 @@ export const {
           v2permission: new Set<string>(),
           question: new Set<string>(),
           status: new Set<string>(),
+          removed: new Set<string>(),
         }
         recovering = tracker
         const workspace = project.workspace.current()
@@ -851,17 +897,17 @@ export const {
               }),
             )
             sdk.flushEvents()
-            if (epoch !== sdk.connectionEpoch) return
+            if (epoch !== sdk.connectionEpoch || recovering !== tracker) return
             statusSnapshot++
             setStore(
               produce((draft) => {
                 const pending = snapshots
                   .flatMap((snapshot) => snapshot.permissions)
-                  .filter((item) => !tracker.permission.has(item.id))
+                  .filter((item) => !tracker.removed.has(item.sessionID) && !tracker.permission.has(item.id))
                 pending.push(
                   ...Object.values(draft.permission)
                     .flat()
-                    .filter((item) => tracker.permission.has(item.id)),
+                    .filter((item) => !tracker.removed.has(item.sessionID) && tracker.permission.has(item.id)),
                 )
                 draft.permission = Object.groupBy(
                   [...new Map(pending.map((item) => [item.id, item])).values()].toSorted((a, b) =>
@@ -871,11 +917,11 @@ export const {
                 ) as Record<string, PermissionRequest[]>
                 const asked = snapshots
                   .flatMap((snapshot) => snapshot.questions)
-                  .filter((item) => !tracker.question.has(item.id))
+                  .filter((item) => !tracker.removed.has(item.sessionID) && !tracker.question.has(item.id))
                 asked.push(
                   ...Object.values(draft.question)
                     .flat()
-                    .filter((item) => tracker.question.has(item.id)),
+                    .filter((item) => !tracker.removed.has(item.sessionID) && tracker.question.has(item.id)),
                 )
                 draft.question = Object.groupBy(
                   [...new Map(asked.map((item) => [item.id, item])).values()].toSorted((a, b) =>
@@ -884,8 +930,16 @@ export const {
                   (item) => item.sessionID,
                 ) as Record<string, QuestionRequest[]>
                 draft.session_status = {
-                  ...Object.fromEntries(snapshots.flatMap((snapshot) => Object.entries(snapshot.statuses))),
-                  ...Object.fromEntries(Object.entries(draft.session_status).filter(([id]) => tracker.status.has(id))),
+                  ...Object.fromEntries(
+                    snapshots
+                      .flatMap((snapshot) => Object.entries(snapshot.statuses))
+                      .filter(([id]) => !tracker.removed.has(id)),
+                  ),
+                  ...Object.fromEntries(
+                    Object.entries(draft.session_status).filter(
+                      ([id]) => !tracker.removed.has(id) && tracker.status.has(id),
+                    ),
+                  ),
                 }
               }),
             )
@@ -904,6 +958,7 @@ export const {
               if (epoch !== sdk.connectionEpoch) return
               if (
                 permission.mode !== "auto" ||
+                tracker.removed.has(item.request.sessionID) ||
                 !sdk.interest.owns(item.request.sessionID) ||
                 tracker.permission.has(item.request.id)
               )
@@ -920,17 +975,32 @@ export const {
           })(),
           ...(permission.mode === "auto"
             ? controlled.map(async (sessionID) => {
-                const response = await sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true })
+                const missing = (error: unknown) => {
+                  sdk.flushEvents()
+                  if (tracker.removed.has(sessionID)) return
+                  if (!isSessionNotFound(error, sessionID)) throw error
+                  if (epoch === sdk.connectionEpoch && recovering === tracker) sdk.interest.remove(sessionID)
+                }
+                const response = await sdk.client.v2.session.permission
+                  .list({ sessionID }, { throwOnError: true })
+                  .catch(missing)
                 sdk.flushEvents()
-                if (epoch !== sdk.connectionEpoch || !sdk.interest.owns(sessionID)) return
+                if (
+                  !response ||
+                  epoch !== sdk.connectionEpoch ||
+                  recovering !== tracker ||
+                  tracker.removed.has(sessionID) ||
+                  !sdk.interest.owns(sessionID)
+                )
+                  return
                 for (const request of response.data.data) {
                   sdk.flushEvents()
-                  if (epoch !== sdk.connectionEpoch) return
+                  if (epoch !== sdk.connectionEpoch || tracker.removed.has(sessionID) || !sdk.interest.owns(sessionID))
+                    return
                   if (tracker.v2permission.has(request.id)) continue
-                  await sdk.client.v2.session.permission.reply(
-                    { sessionID, requestID: request.id, reply: "once" },
-                    { throwOnError: true },
-                  )
+                  await sdk.client.v2.session.permission
+                    .reply({ sessionID, requestID: request.id, reply: "once" }, { throwOnError: true })
+                    .catch(missing)
                 }
               })
             : []),

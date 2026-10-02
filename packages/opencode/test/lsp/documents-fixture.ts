@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 import { LSPClient } from "@/lsp/client"
 import { withTestInstance } from "../fixture/fixture"
 
-export function documentClient(directory: string) {
+export function documentClient(directory: string, options?: { idleTimeoutMs?: number }) {
   return withTestInstance({
     directory,
     fn: (instance) =>
@@ -11,6 +11,7 @@ export function documentClient(directory: string) {
         directory,
         root: directory,
         instance,
+        ...options,
         server: {
           process: spawn(process.execPath, [new URL("../fixture/lsp/documents-server.ts", import.meta.url).pathname], {
             stdio: "pipe",

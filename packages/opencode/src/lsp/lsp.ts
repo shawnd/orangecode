@@ -6,14 +6,14 @@ import path from "path"
 import { pathToFileURL, fileURLToPath } from "url"
 import * as LSPServer from "./server"
 import { Config } from "@/config/config"
-import { Process } from "@/util/process"
-import { spawn as lspspawn } from "./launch"
+import { spawn, stop } from "./launch"
 import { Effect, Layer, Context, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { containsPath } from "@/project/instance-context"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LspEvent } from "@opencode-ai/schema/lsp-event"
+import { withTimeout } from "@/util/timeout"
 
 export const Event = LspEvent
 
@@ -109,11 +109,17 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
 
 type LocInput = { file: string; line: number; character: number }
 
+// Installations share a destination per server, even across project roots.
+// Serialize each server's spawn/install phase while starting different servers
+// concurrently. Never share a process handle between clients.
+const installations = new Map<string, Promise<void>>()
+
 interface State {
   clients: LSPClient.Info[]
   servers: Record<string, LSPServer.Info>
-  broken: Set<string>
+  broken: Map<string, number>
   spawning: Map<string, Promise<LSPClient.Info | undefined>>
+  disposed: boolean
 }
 
 export interface Interface {
@@ -174,7 +180,7 @@ const layer = Layer.effect(
                 root: existing?.root ?? (async (_file, ctx) => ctx.directory),
                 extensions: item.extensions ?? existing?.extensions ?? [],
                 spawn: async (root) => ({
-                  process: lspspawn(item.command[0], item.command.slice(1), {
+                  process: spawn(item.command[0], item.command.slice(1), {
                     cwd: root,
                     env: { ...process.env, ...item.env },
                   }),
@@ -194,12 +200,14 @@ const layer = Layer.effect(
         const s: State = {
           clients: [],
           servers,
-          broken: new Set(),
+          broken: new Map(),
           spawning: new Map(),
+          disposed: false,
         }
 
         yield* Effect.addFinalizer(() =>
           Effect.promise(async () => {
+            s.disposed = true
             await Promise.all(s.clients.map((client) => client.shutdown()))
           }),
         )
@@ -212,101 +220,115 @@ const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       if (!containsPath(file, ctx)) return [] as LSPClient.Info[]
       const s = yield* InstanceState.get(state)
-      const clients = yield* Effect.promise(async () => {
-        const extension = path.parse(file).ext || file
-        const result: LSPClient.Info[] = []
-        let updated = 0
-
-        async function schedule(server: LSPServer.Info, root: string, key: string) {
-          const handle = await server
-            .spawn(root, ctx, flags)
-            .then((value) => {
-              if (!value) s.broken.add(key)
-              return value
-            })
-            .catch(() => {
-              s.broken.add(key)
-              return undefined
-            })
-
-          if (!handle) return undefined
-          const client = await LSPClient.create({
-            serverID: server.id,
-            server: handle,
-            root,
-            directory: ctx.directory,
-            instance: ctx,
-          }).catch(async () => {
-            s.broken.add(key)
-            await Process.stop(handle.process)
+      const extension = path.parse(file).ext || path.basename(file)
+      s.clients = s.clients.filter((client) => client.connected)
+      if (s.disposed) return []
+      async function schedule(server: LSPServer.Info, root: string, key: string) {
+        let expired = false
+        const installation = (installations.get(server.id) ?? Promise.resolve()).then(() => {
+          if (expired || s.disposed) return
+          return server.spawn(root, ctx, flags)
+        })
+        const released = installation.then(
+          () => {},
+          () => {},
+        )
+        installations.set(server.id, released)
+        void released.then(() => {
+          if (installations.get(server.id) === released) installations.delete(server.id)
+        })
+        const handle = await withTimeout(
+          installation.then(async (handle) => {
+            if (!handle) return
+            if (expired || s.disposed) {
+              await stop(handle.process)
+              return
+            }
+            return handle
+          }),
+          120_000,
+        )
+          .then((value) => {
+            if (!value) s.broken.set(key, Date.now())
+            return value
+          })
+          .catch((error) => {
+            expired = true
+            s.broken.set(key, Date.now())
+            Effect.runSync(Effect.logError("LSP startup failed", { serverID: server.id, root, error }))
             return undefined
           })
 
-          if (!client) return undefined
+        if (!handle) return undefined
+        const client = await LSPClient.create({
+          serverID: server.id,
+          server: handle,
+          root,
+          directory: ctx.directory,
+          instance: ctx,
+        }).catch(async (error) => {
+          s.broken.set(key, Date.now())
+          Effect.runSync(Effect.logError("LSP initialization failed", { serverID: server.id, root, error }))
+          await stop(handle.process)
+          return undefined
+        })
 
-          const existing = s.clients.find((x) => x.root === root && x.serverID === server.id)
-          if (existing) {
-            await Process.stop(handle.process)
-            return existing
-          }
-
-          s.clients.push(client)
-          return client
+        if (!client) return undefined
+        if (s.disposed) {
+          await client.shutdown()
+          return undefined
         }
 
-        for (const server of Object.values(s.servers)) {
-          if (server.extensions.length && !server.extensions.includes(extension)) continue
-
-          const root = await server.root(file, ctx)
-          if (!root) continue
-          if (s.broken.has(root + server.id)) continue
-
-          const match = s.clients.find((x) => x.root === root && x.serverID === server.id)
-          if (match) {
-            result.push(match)
-            continue
-          }
-
-          const inflight = s.spawning.get(root + server.id)
-          if (inflight) {
-            const client = await inflight
-            if (!client) continue
-            result.push(client)
-            continue
-          }
-
-          const task = schedule(server, root, root + server.id)
-          s.spawning.set(root + server.id, task)
-
-          task.finally(() => {
-            if (s.spawning.get(root + server.id) === task) {
-              s.spawning.delete(root + server.id)
-            }
-          })
-
-          const client = await task
-          if (!client) continue
-
-          result.push(client)
-          updated++
+        const existing = s.clients.find((x) => x.root === root && x.serverID === server.id)
+        if (existing) {
+          await client.shutdown()
+          return existing
         }
 
-        return { result, updated }
-      })
-      yield* Effect.forEach(Array.from({ length: clients.updated }), () => events.publish(Event.Updated, {}), {
-        discard: true,
-      })
-      return clients.result
+        s.clients.push(client)
+        return client
+      }
+
+      const clients = yield* Effect.forEach(
+        Object.values(s.servers).filter((server) => !server.extensions.length || server.extensions.includes(extension)),
+        (server) =>
+          Effect.promise(async () => {
+            const root = await server.root(file, ctx).catch(() => undefined)
+            if (!root || s.disposed) return
+            const key = JSON.stringify([root, server.id])
+            const failed = s.broken.get(key)
+            if (failed !== undefined && Date.now() - failed < 60_000) return
+            s.broken.delete(key)
+            const match = s.clients.find((x) => x.root === root && x.serverID === server.id)
+            if (match?.connected) return { client: match, updated: false }
+            const inflight = s.spawning.get(key)
+            if (inflight) return { client: await inflight, updated: false }
+            const task = schedule(server, root, key)
+            s.spawning.set(key, task)
+            const client = await task.finally(() => {
+              if (s.spawning.get(key) === task) s.spawning.delete(key)
+            })
+            return { client, updated: Boolean(client) }
+          }),
+        { concurrency: 4 },
+      )
+      if (clients.some((result) => result?.updated)) yield* events.publish(Event.Updated, {})
+      return clients.flatMap((result) => (result?.client ? [result.client] : []))
     })
 
-    const run = Effect.fnUntraced(function* <T>(file: string, fn: (client: LSPClient.Info) => Promise<T>) {
+    const run = Effect.fnUntraced(function* <T>(
+      file: string,
+      fn: (client: LSPClient.Info, signal: AbortSignal) => Promise<T>,
+    ) {
       const clients = yield* getClients(file)
-      return yield* Effect.promise(() => Promise.all(clients.map((x) => fn(x))))
+      return yield* Effect.promise((signal) => Promise.all(clients.map((x) => fn(x, signal))))
     })
 
-    const runAll = Effect.fnUntraced(function* <T>(fn: (client: LSPClient.Info) => Promise<T>) {
+    const runAll = Effect.fnUntraced(function* <T>(fn: (client: LSPClient.Info, signal: AbortSignal) => Promise<T>) {
       const s = yield* InstanceState.get(state)
-      return yield* Effect.promise(() => Promise.all(s.clients.map((x) => fn(x))))
+      return yield* Effect.promise((signal) =>
+        Promise.all(s.clients.filter((client) => client.connected).map((x) => fn(x, signal))),
+      )
     })
 
     const init = Effect.fn("LSP.init")(function* () {
@@ -322,7 +344,7 @@ const layer = Layer.effect(
           id: client.serverID,
           name: s.servers[client.serverID].id,
           root: path.relative(ctx.directory, client.root),
-          status: "connected",
+          status: client.connected ? "connected" : "error",
         })
       }
       return result
@@ -332,12 +354,14 @@ const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const s = yield* InstanceState.get(state)
       return yield* Effect.promise(async () => {
-        const extension = path.parse(file).ext || file
+        if (!containsPath(file, ctx)) return false
+        const extension = path.parse(file).ext || path.basename(file)
         for (const server of Object.values(s.servers)) {
           if (server.extensions.length && !server.extensions.includes(extension)) continue
           const root = await server.root(file, ctx)
           if (!root) continue
-          if (s.broken.has(root + server.id)) continue
+          const failed = s.broken.get(JSON.stringify([root, server.id]))
+          if (failed !== undefined && Date.now() - failed < 60_000) continue
           return true
         }
         return false
@@ -416,48 +440,64 @@ const layer = Layer.effect(
     })
 
     const hover = Effect.fn("LSP.hover")(function* (input: LocInput) {
-      return yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/hover", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
+      return yield* run(input.file, (client, signal) =>
+        client
+          .request(
+            "textDocument/hover",
+            {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            },
+            signal,
+          )
           .catch(() => null),
       )
     })
 
     const definition = Effect.fn("LSP.definition")(function* (input: LocInput) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/definition", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
+      const results = yield* run(input.file, (client, signal) =>
+        client
+          .request(
+            "textDocument/definition",
+            {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            },
+            signal,
+          )
           .catch(() => null),
       )
       return results.flat().filter(Boolean)
     })
 
     const references = Effect.fn("LSP.references")(function* (input: LocInput) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/references", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-            context: { includeDeclaration: true },
-          })
+      const results = yield* run(input.file, (client, signal) =>
+        client
+          .request(
+            "textDocument/references",
+            {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+              context: { includeDeclaration: true },
+            },
+            signal,
+          )
           .catch(() => []),
       )
       return results.flat().filter(Boolean)
     })
 
     const implementation = Effect.fn("LSP.implementation")(function* (input: LocInput) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/implementation", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
+      const results = yield* run(input.file, (client, signal) =>
+        client
+          .request(
+            "textDocument/implementation",
+            {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            },
+            signal,
+          )
           .catch(() => null),
       )
       return results.flat().filter(Boolean)
@@ -465,29 +505,33 @@ const layer = Layer.effect(
 
     const documentSymbol = Effect.fn("LSP.documentSymbol")(function* (uri: string) {
       const file = fileURLToPath(uri)
-      const results = yield* run(file, (client) =>
-        client.connection.sendRequest("textDocument/documentSymbol", { textDocument: { uri } }).catch(() => []),
+      const results = yield* run(file, (client, signal) =>
+        client.request("textDocument/documentSymbol", { textDocument: { uri } }, signal).catch(() => []),
       )
       return (results.flat() as (DocumentSymbol | Symbol)[]).filter(Boolean)
     })
 
     const workspaceSymbol = Effect.fn("LSP.workspaceSymbol")(function* (query: string) {
-      const results = yield* runAll((client) =>
-        client.connection
-          .sendRequest<Symbol[]>("workspace/symbol", { query })
-          .then((result) => result.filter((x) => kinds.includes(x.kind)).slice(0, 10))
+      const results = yield* runAll((client, signal) =>
+        client
+          .request<Symbol[] | null>("workspace/symbol", { query }, signal)
+          .then((result) => (result ?? []).filter((x) => kinds.includes(x.kind)).slice(0, 10))
           .catch(() => [] as Symbol[]),
       )
       return results.flat()
     })
 
     const prepareCallHierarchy = Effect.fn("LSP.prepareCallHierarchy")(function* (input: LocInput) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/prepareCallHierarchy", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
+      const results = yield* run(input.file, (client, signal) =>
+        client
+          .request(
+            "textDocument/prepareCallHierarchy",
+            {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            },
+            signal,
+          )
           .catch(() => []),
       )
       return results.flat().filter(Boolean)
@@ -497,15 +541,19 @@ const layer = Layer.effect(
       input: LocInput,
       direction: "callHierarchy/incomingCalls" | "callHierarchy/outgoingCalls",
     ) {
-      const results = yield* run(input.file, async (client) => {
-        const items = await client.connection
-          .sendRequest<unknown[] | null>("textDocument/prepareCallHierarchy", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
+      const results = yield* run(input.file, async (client, signal) => {
+        const items = await client
+          .request<unknown[] | null>(
+            "textDocument/prepareCallHierarchy",
+            {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            },
+            signal,
+          )
           .catch(() => [] as unknown[])
         if (!items?.length) return []
-        return client.connection.sendRequest(direction, { item: items[0] }).catch(() => [])
+        return client.request(direction, { item: items[0] }, signal).catch(() => [])
       })
       return results.flat().filter(Boolean)
     })

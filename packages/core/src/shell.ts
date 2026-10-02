@@ -28,6 +28,16 @@ export type Item = {
   acceptable: boolean
 }
 
+export function alive(pid: number) {
+  if (pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH"
+  }
+}
+
 export async function killTree(proc: ChildProcess, opts?: { exited?: () => boolean }): Promise<void> {
   const pid = proc.pid
   if (!pid || opts?.exited?.()) return

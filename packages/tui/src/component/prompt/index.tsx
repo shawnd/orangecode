@@ -19,6 +19,7 @@ import {
   onCleanup,
   on,
   Show,
+  For,
   Switch,
   Match,
   useContext,
@@ -67,6 +68,7 @@ import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
+import { messagesBeforeRevert } from "../../util/session-history"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "../../context/args"
@@ -87,6 +89,9 @@ import { SessionCost, useSessionCostChildren } from "./cost"
 import { homeInputHeight } from "../../startup/presentation"
 import { cacheStartupPresentation } from "../../startup/cache"
 import type { StartupSlashDraft } from "../../startup/slashes"
+import { gatherHerdrSessions, parseHerdrCommand, type HerdrScope } from "../../util/herdr-sessions"
+import { DialogSelect } from "../../ui/dialog-select"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 
 registerOpencodeSpinner()
 
@@ -118,6 +123,7 @@ function pastedFilepath(value: string, platform: string) {
 
 export type PromptRef = {
   focused: boolean
+  readonly gatheringHerdr?: boolean
   current: PromptInfo
   set(prompt: PromptInfo): void
   reset(): void
@@ -165,10 +171,20 @@ function formatEditorContext(selection: EditorSelection) {
 }
 
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
+let activePrompt: PromptRef | undefined
+
+export function getPromptDraft(): PromptInfo | undefined {
+  // Plugin route memos can render before the previous route's prompt unmounts.
+  // Read the live draft in that case, and the handoff stash after unmount.
+  const prompt = activePrompt?.current ?? stashed?.prompt
+  return prompt ? structuredClone(unwrap(prompt)) : undefined
+}
 
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
+  let herdrRequest = 0
+  const [herdrGathering, setHerdrGathering] = createSignal(0)
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
 
   const leader = useLeaderActive()
@@ -373,7 +389,10 @@ export function Prompt(props: PromptProps) {
 
   const usage = createMemo(() => {
     if (!props.sessionID) return
-    const msg = sync.data.message[props.sessionID] ?? []
+    const msg = messagesBeforeRevert(
+      sync.data.message[props.sessionID] ?? [],
+      sync.session.get(props.sessionID)?.revert?.messageID,
+    )
     const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
     if (!last) return
 
@@ -390,7 +409,6 @@ export function Prompt(props: PromptProps) {
 
   const [store, setStore] = createStore<{
     prompt: PromptInfo
-    mode: "normal" | "shell"
     extmarkToPartIndex: Map<number, number>
     interrupt: number
     placeholder: number
@@ -400,7 +418,6 @@ export function Prompt(props: PromptProps) {
       input: "",
       parts: [],
     },
-    mode: "normal",
     extmarkToPartIndex: new Map(),
     interrupt: 0,
   })
@@ -430,7 +447,7 @@ export function Prompt(props: PromptProps) {
       const isPrimaryAgent = local.agent.list().some((x) => x.name === msg.agent)
       if (msg.agent && isPrimaryAgent) {
         // Keep command line --agent if specified.
-        if (!args.agent) local.agent.set(msg.agent)
+        if (!args.agent) local.agent.set(msg.agent, { preserveMode: true })
         if (msg.model) {
           local.model.set(msg.model)
           local.model.variant.set(msg.model.variant)
@@ -464,7 +481,7 @@ export function Prompt(props: PromptProps) {
             return
           }
           const handled = await submit()
-          if (!handled) return
+          if (handled !== true) return
 
           dialog.clear()
         },
@@ -476,7 +493,7 @@ export function Prompt(props: PromptProps) {
         category: "Prompt",
         enabled: !props.disabled && (!!store.prompt.input || hasPendingMessages()),
         run: async () => {
-          if (await submit(true)) dialog.clear()
+          if ((await submit(true)) === true) dialog.clear()
         },
       },
       {
@@ -509,11 +526,6 @@ export function Prompt(props: PromptProps) {
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
-          // TODO: this should be its own command
-          if (store.mode === "shell") {
-            setStore("mode", "normal")
-            return
-          }
           if (!props.sessionID) return
 
           setStore("interrupt", store.interrupt + 1)
@@ -644,6 +656,15 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Gather Herdr sessions",
+        desc: "Add session, status, and tab context from Herdr panes",
+        name: "prompt.herdr",
+        category: "Prompt",
+        slashName: "herdr",
+        enabled: process.env.HERDR_ENV === "1",
+        run: () => openHerdrScopes(),
+      },
+      {
         title: "Warp",
         desc: "Change the workspace for the session",
         name: "workspace.set",
@@ -726,6 +747,9 @@ export function Prompt(props: PromptProps) {
     get current() {
       return store.prompt
     },
+    get gatheringHerdr() {
+      return herdrGathering() !== 0
+    },
     focus() {
       input.focus()
     },
@@ -733,12 +757,14 @@ export function Prompt(props: PromptProps) {
       input.blur()
     },
     set(prompt) {
+      herdrRequest++
       input.setText(prompt.input)
       setStore("prompt", prompt)
       restoreExtmarksFromParts(prompt.parts)
       input.gotoBufferEnd()
     },
     reset() {
+      herdrRequest++
       input.clear()
       input.extmarks.clear()
       setStore("prompt", {
@@ -811,6 +837,8 @@ export function Prompt(props: PromptProps) {
   })
 
   onCleanup(() => {
+    herdrRequest++
+    if (activePrompt === ref) activePrompt = undefined
     if (store.prompt.input) {
       stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
     }
@@ -835,7 +863,7 @@ export function Prompt(props: PromptProps) {
     input.traits = {
       ...input.traits,
       ...computePromptTraits({
-        mode: store.mode,
+        mode: local.prompt.mode(),
         autocompleteVisible: !!auto()?.visible,
       }),
     }
@@ -883,6 +911,47 @@ export function Prompt(props: PromptProps) {
         })
       }
     })
+  }
+
+  function editAnnotationDraft(part: Extract<PromptInfo["parts"][number], { type: "text" }>, expand = false) {
+    if (props.disabled) return
+    const replace = (text: string, expanded: boolean) => {
+      const mark = input.extmarks
+        .getAllForTypeId(promptPartTypeId)
+        .find((mark) => store.extmarkToPartIndex.get(mark.id) === store.prompt.parts.indexOf(part))
+      if (!mark || !part.source) return
+      const value = expanded ? text : text.trim() ? part.source.text.value : ""
+      const delta = value.length - (mark.end - mark.start)
+      const parts = store.prompt.parts.flatMap<PromptInfo["parts"][number]>((item) => {
+        if (item === part) return expanded || !text.trim() ? [] : [{ ...part, text }]
+        const source = item.type === "agent" ? item.source : item.source?.text
+        if (!source || source.start < mark.end) return [item]
+        const moved = { ...source, start: source.start + delta, end: source.end + delta }
+        if (item.type === "agent") return [{ ...item, source: moved }]
+        if (item.type === "file" && item.source) return [{ ...item, source: { ...item.source, text: moved } }]
+        if (item.type === "text") return [{ ...item, source: { text: moved } }]
+        return [item]
+      })
+      ref.set({
+        ...store.prompt,
+        input: store.prompt.input.slice(0, mark.start) + value + store.prompt.input.slice(mark.end),
+        parts,
+      })
+      dialog.clear()
+    }
+    if (expand) return replace(part.text, true)
+    dialog.replace(() => (
+      <DialogPrompt
+        title="Edit diff annotations"
+        value={part.text}
+        height={Math.min(16, Math.max(3, dimensions().height - 10))}
+        description={() => (
+          <text fg={theme.textMuted}>Edit the review message below. Save empty text to remove it.</text>
+        )}
+        onConfirm={(value) => replace(value, false)}
+      />
+    ))
+    dialog.setSize("large")
   }
 
   function syncExtmarksWithPromptParts() {
@@ -1007,7 +1076,7 @@ export function Prompt(props: PromptProps) {
         return (
           inputTarget() !== undefined &&
           !props.disabled &&
-          store.mode === "normal" &&
+          local.prompt.mode() === "normal" &&
           !auto()?.visible &&
           input?.visualCursor.offset === 0
         )
@@ -1015,11 +1084,11 @@ export function Prompt(props: PromptProps) {
       bindings: [
         {
           key: "!",
-          desc: "Shell mode",
+          desc: "Terminal mode",
           group: "Prompt",
           cmd: () => {
             setStore("placeholder", randomIndex(shell().length))
-            setStore("mode", "shell")
+            local.prompt.setMode("shell")
           },
         },
       ],
@@ -1029,8 +1098,10 @@ export function Prompt(props: PromptProps) {
   useBindings(() => {
     return {
       target: inputTarget,
-      enabled: inputTarget() !== undefined && store.mode === "shell",
-      bindings: [{ key: "escape", desc: "Exit shell mode", group: "Prompt", cmd: () => setStore("mode", "normal") }],
+      enabled: inputTarget() !== undefined && local.prompt.mode() === "shell" && status().type === "idle",
+      bindings: [
+        { key: "escape", desc: "Exit terminal mode", group: "Prompt", cmd: () => local.prompt.setMode("normal") },
+      ],
     }
   })
 
@@ -1039,9 +1110,11 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
-        return inputTarget() !== undefined && store.mode === "shell" && input?.visualCursor.offset === 0
+        return inputTarget() !== undefined && local.prompt.mode() === "shell" && input?.visualCursor.offset === 0
       })(),
-      bindings: [{ key: "backspace", desc: "Exit shell mode", group: "Prompt", cmd: () => setStore("mode", "normal") }],
+      bindings: [
+        { key: "backspace", desc: "Exit terminal mode", group: "Prompt", cmd: () => local.prompt.setMode("normal") },
+      ],
     }
   })
 
@@ -1071,7 +1144,7 @@ export function Prompt(props: PromptProps) {
             if (!item) return false
             input.setText(item.input)
             setStore("prompt", item)
-            setStore("mode", item.mode ?? "normal")
+            local.prompt.setMode(item.mode ?? "normal")
             restoreExtmarksFromParts(item.parts)
             input.cursorOffset = 0
           },
@@ -1116,7 +1189,7 @@ export function Prompt(props: PromptProps) {
             if (!item) return false
             input.setText(item.input)
             setStore("prompt", item)
-            setStore("mode", item.mode ?? "normal")
+            local.prompt.setMode(item.mode ?? "normal")
             restoreExtmarksFromParts(item.parts)
             input.cursorOffset = input.plainText.length
           },
@@ -1127,6 +1200,71 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
+  createEffect(
+    on(
+      () => [props.sessionID, props.visible, props.disabled, local.prompt.mode(), dialog.stack.length],
+      () => herdrRequest++,
+    ),
+  )
+  function openHerdrScopes() {
+    if (process.env.HERDR_ENV !== "1") {
+      toast.show({ message: "/herdr requires a Herdr pane", variant: "error" })
+      return
+    }
+    dialog.replace(() => (
+      <DialogSelect<HerdrScope>
+        title="Gather Herdr sessions"
+        current="workspace"
+        options={[
+          { title: "Current workspace", value: "workspace", description: "Across all tabs in this workspace" },
+          { title: "Current tab", value: "tab", description: "All OpenCode panes in this tab" },
+          { title: "All workspaces", value: "all", description: "All OpenCode panes on the connected Herdr server" },
+        ]}
+        onSelect={(option) => {
+          dialog.clear()
+          void addHerdrContext(option.value)
+        }}
+      />
+    ))
+  }
+
+  async function addHerdrContext(scope: HerdrScope, command = false) {
+    const request = ++herdrRequest
+    const sessionID = props.sessionID
+    const original = input.plainText
+    const draft = JSON.stringify(unwrap(store.prompt))
+    const ownsDraft = () =>
+      request === herdrRequest &&
+      !input.isDestroyed &&
+      props.sessionID === sessionID &&
+      input.plainText === original &&
+      JSON.stringify(unwrap(store.prompt)) === draft &&
+      props.visible !== false &&
+      !props.disabled &&
+      local.prompt.mode() === "normal" &&
+      dialog.stack.length === 0
+    setHerdrGathering(request)
+    const snapshot = await gatherHerdrSessions(scope, sessionID).catch((error) => {
+      if (ownsDraft())
+        toast.show({ title: "Could not gather Herdr sessions", message: errorMessage(error), variant: "error" })
+      return undefined
+    })
+    if (herdrGathering() === request) setHerdrGathering(0)
+    if (!snapshot || !ownsDraft()) return false
+    if (command) {
+      history.append({ ...store.prompt, mode: local.prompt.mode() })
+      input.extmarks.clear()
+      input.clear()
+      setStore("prompt", { input: "", parts: [] })
+      setStore("extmarkToPartIndex", new Map())
+    }
+    input.gotoBufferEnd()
+    if (input.plainText && !/\s$/.test(input.plainText)) input.insertText("\n")
+    pasteText(snapshot.text, `[Herdr ${scope}: ${snapshot.count} OpenCode panes]`)
+    input.focus()
+    return true
+  }
+
   async function submit(sendNow = false) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -1144,6 +1282,7 @@ export function Prompt(props: PromptProps) {
   }
 
   async function submitInner(sendNow: boolean) {
+    herdrRequest++
     workspace.clearNotice()
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1158,7 +1297,27 @@ export function Prompt(props: PromptProps) {
     if (auto()?.visible) return false
     if (!store.prompt.input && !(sendNow && hasPendingMessages())) return false
     const trimmed = store.prompt.input.trim()
-    if (store.mode === "normal" && reminders && /^\/(remind|reminders|notifications)(?:\s|$)/.test(trimmed)) {
+    if (local.prompt.mode() === "normal" && /^\/herdr(?:\s|$)/.test(trimmed)) {
+      if (process.env.HERDR_ENV !== "1") {
+        toast.show({ message: "/herdr requires a Herdr pane", variant: "error" })
+        return false
+      }
+      const parsed = parseHerdrCommand(trimmed)
+      if (!parsed) return false
+      if (parsed.error) {
+        toast.show({ message: parsed.error, variant: "error" })
+        return false
+      }
+      if (parsed.scope) return addHerdrContext(parsed.scope, true)
+      history.append({ ...store.prompt, mode: local.prompt.mode() })
+      input.extmarks.clear()
+      input.clear()
+      setStore("prompt", { input: "", parts: [] })
+      setStore("extmarkToPartIndex", new Map())
+      openHerdrScopes()
+      return "dialog" as const
+    }
+    if (local.prompt.mode() === "normal" && reminders && /^\/(remind|reminders|notifications)(?:\s|$)/.test(trimmed)) {
       const text = trimmed.replace(/^\/(?:remind|reminders|notifications)\s*/, "")
       const list = /^\/(?:reminders|notifications)(?:\s|$)/.test(trimmed)
       const parsed =
@@ -1178,7 +1337,7 @@ export function Prompt(props: PromptProps) {
           <DialogReminderCreate />
         ),
       )
-      history.append({ ...store.prompt, mode: store.mode })
+      history.append({ ...store.prompt, mode: local.prompt.mode() })
       input.extmarks.clear()
       input.clear()
       setStore("prompt", { input: "", parts: [] })
@@ -1187,7 +1346,7 @@ export function Prompt(props: PromptProps) {
     }
     const agent = local.agent.current()
     if (!agent) return false
-    if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
+    if (local.prompt.mode() === "normal" && (trimmed === "exit" || trimmed === "quit" || trimmed === ":q")) {
       void exit()
       return true
     }
@@ -1281,8 +1440,7 @@ export function Prompt(props: PromptProps) {
     // Filter out text parts (pasted content) since they're now expanded inline
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
 
-    // Capture mode before it gets reset
-    const currentMode = store.mode
+    const currentMode = local.prompt.mode()
     const editorSelection = editorContext()
     const editorParts =
       editorSelection && editor.labelState() === "pending"
@@ -1301,18 +1459,24 @@ export function Prompt(props: PromptProps) {
           ]
         : []
 
-    if (store.mode === "shell") {
+    if (currentMode === "shell") {
       move.startSubmit()
-      void sdk.client.session.shell({
-        sessionID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          modelID: selectedModel.modelID,
-        },
-        command: inputText,
-      })
-      setStore("mode", "normal")
+      sdk.client.session
+        .shell(
+          {
+            sessionID,
+            agent: agent.name,
+            model: {
+              providerID: selectedModel.providerID,
+              modelID: selectedModel.modelID,
+            },
+            command: inputText,
+          },
+          { throwOnError: true },
+        )
+        .catch((error) => {
+          toast.show({ title: "Failed to run command", message: errorMessage(error), variant: "error" })
+        })
     } else if (
       inputText.startsWith("/") &&
       sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
@@ -1532,10 +1696,11 @@ export function Prompt(props: PromptProps) {
   }
 
   function clearPrompt() {
+    herdrRequest++
     if (store.prompt.input.trim().length >= DRAFT_RETENTION_MIN_CHARS || store.prompt.parts.length > 0) {
       history.append({
         ...store.prompt,
-        mode: store.mode,
+        mode: local.prompt.mode(),
       })
     }
     input.clear()
@@ -1549,7 +1714,7 @@ export function Prompt(props: PromptProps) {
 
   const highlight = createMemo(() => {
     if (leader()) return theme.border
-    if (store.mode === "shell") return theme.primary
+    if (local.prompt.mode() === "shell") return theme.textMuted
     const agent = local.agent.current()
     if (!agent) return theme.border
     return local.agent.color(agent.name)
@@ -1559,8 +1724,14 @@ export function Prompt(props: PromptProps) {
   // the background here would flash darker metadata during ownership transfer.
   const metadataAnimations = createMemo(() => animationsEnabled() && !earlyInput)
   const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), metadataAnimations)
-  const modelMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", metadataAnimations)
-  const variantMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", metadataAnimations)
+  const modelMetaAlpha = createFadeIn(
+    () => !!local.agent.current() && local.prompt.mode() === "normal",
+    metadataAnimations,
+  )
+  const variantMetaAlpha = createFadeIn(
+    () => !!local.agent.current() && local.prompt.mode() === "normal",
+    metadataAnimations,
+  )
   const borderHighlight = createMemo(() => tint(theme.border, highlight(), agentMetaAlpha()))
   createEffect(() => {
     if (props.sessionID) return
@@ -1568,7 +1739,7 @@ export function Prompt(props: PromptProps) {
     cacheStartupPresentation(paths.state, { border: rgbToHex(agent ? local.agent.color(agent.name) : theme.border) })
   })
   createEffect(() => {
-    if (props.sessionID || store.mode !== "normal" || !sync.ready || !local.model.ready) return
+    if (props.sessionID || local.prompt.mode() !== "normal" || !sync.ready || !local.model.ready) return
     const agent = local.agent.current()
     const model = local.model.current()
     if (!agent || !model) return
@@ -1619,9 +1790,8 @@ export function Prompt(props: PromptProps) {
 
   const placeholderText = createMemo(() => {
     if (props.showPlaceholder === false) return undefined
-    if (store.mode === "shell") {
-      if (!shell().length) return undefined
-      const example = shell()[store.placeholder % shell().length]
+    if (local.prompt.mode() === "shell") {
+      const example = shell().length ? shell()[store.placeholder % shell().length] : "ls -la"
       return `Run a command… "${example}"`
     }
     if (!list().length) return undefined
@@ -1675,6 +1845,26 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
+            <Show when={herdrGathering()}>
+              <text fg={theme.textMuted}>Gathering Herdr sessions…</text>
+            </Show>
+            <For
+              each={store.prompt.parts.filter(
+                (part): part is Extract<PromptInfo["parts"][number], { type: "text" }> =>
+                  part.type === "text" && part.metadata?.kind === "diff_annotations",
+              )}
+            >
+              {(part) => (
+                <box flexDirection="row" gap={1}>
+                  <text fg={theme.primary} onMouseUp={() => editAnnotationDraft(part)}>
+                    ✎ Diff annotations · edit
+                  </text>
+                  <text fg={theme.textMuted} onMouseUp={() => editAnnotationDraft(part, true)}>
+                    expand into input
+                  </text>
+                </box>
+              )}
+            </For>
             <textarea
               width="100%"
               placeholder={placeholderText()}
@@ -1686,6 +1876,7 @@ export function Prompt(props: PromptProps) {
               onContentChange={() => {
                 setTaskSelection(undefined)
                 const value = input.plainText
+                if (value !== store.prompt.input) herdrRequest++
                 setStore("prompt", "input", value)
                 auto()?.onInput(value)
                 syncExtmarksWithPromptParts()
@@ -1737,6 +1928,7 @@ export function Prompt(props: PromptProps) {
                 if (promptPartTypeId === 0) {
                   promptPartTypeId = input.extmarks.registerType("prompt-part")
                 }
+                activePrompt = ref
                 props.ref?.(ref)
                 setTimeout(() => {
                   // setTimeout is a workaround and needs to be addressed properly
@@ -1770,12 +1962,12 @@ export function Prompt(props: PromptProps) {
                         fg={fadeColor(highlight(), agentMetaAlpha())}
                         onMouseUp={() => keymap.dispatchCommand("agent.cycle")}
                       >
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
+                        {local.prompt.mode() === "shell" ? "Terminal" : Locale.titlecase(agent().name)}
                       </text>
-                      <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
+                      <Show when={local.prompt.mode() === "normal" && local.permission.mode === "auto"}>
                         <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
                       </Show>
-                      <Show when={store.mode === "normal"}>
+                      <Show when={local.prompt.mode() === "normal"}>
                         <box flexDirection="row" gap={1}>
                           <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
                           <text
@@ -2030,7 +2222,7 @@ export function Prompt(props: PromptProps) {
                   )}
                 </Show>
                 <Switch>
-                  <Match when={store.mode === "normal"}>
+                  <Match when={local.prompt.mode() === "normal"}>
                     <Switch>
                       <Match when={usage()}>
                         {(item) => (
@@ -2057,7 +2249,7 @@ export function Prompt(props: PromptProps) {
                       </Match>
                       <Match when={true}>
                         <text fg={theme.text}>
-                          {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
+                          {agentShortcut()} <span style={{ fg: theme.textMuted }}>modes</span>
                         </text>
                       </Match>
                     </Switch>
@@ -2073,9 +2265,12 @@ export function Prompt(props: PromptProps) {
                       Perms
                     </text>
                   </Match>
-                  <Match when={store.mode === "shell"}>
+                  <Match when={local.prompt.mode() === "shell"}>
                     <text fg={theme.text}>
-                      esc <span style={{ fg: theme.textMuted }}>exit shell mode</span>
+                      {agentShortcut()} <span style={{ fg: theme.textMuted }}>modes</span>
+                    </text>
+                    <text fg={theme.text}>
+                      esc <span style={{ fg: theme.textMuted }}>exit terminal mode</span>
                     </text>
                   </Match>
                 </Switch>
@@ -2103,6 +2298,7 @@ export function Prompt(props: PromptProps) {
         </box>
       </box>
       <Autocomplete
+        enabled={local.prompt.mode() === "normal"}
         sessionID={props.sessionID}
         ref={(r) => {
           setAuto(() => r)

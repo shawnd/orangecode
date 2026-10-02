@@ -142,6 +142,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       }
       if (event.payload.type === "session.created" || event.payload.type === "session.updated")
         interest.observe(event.payload.properties.info)
+      if (event.payload.type === "session.deleted") {
+        // Apply older batched updates before pruning so they cannot restore the deleted cache.
+        flush()
+        interest.remove(event.payload.properties.info.id)
+      }
       if (event.payload.type === "session.status")
         interest.status(event.payload.properties.sessionID, event.payload.properties.status.type !== "idle")
       if (!queue.offer(event)) return

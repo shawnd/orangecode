@@ -21,11 +21,54 @@ const experimentalTyIt = testEffect(
   Layer.mergeAll(lspLayer({ experimentalLspTy: true }), LayerNode.compile(CrossSpawnSpawner.node)),
 )
 const fakeServerPath = path.join(__dirname, "../fixture/lsp/fake-lsp-server.js")
+const documentsServerPath = path.join(__dirname, "../fixture/lsp/documents-server.ts")
 const disabledDownloadIt = testEffect(
   Layer.mergeAll(lspLayer({ disableLspDownload: true }), LayerNode.compile(CrossSpawnSpawner.node)),
 )
 
 describe("lsp.spawn", () => {
+  it.instance(
+    "starts matching servers concurrently and deduplicates simultaneous callers",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* TestInstance).directory
+        const lsp = yield* LSP.Service
+        const file = path.join(dir, "sample.parallel")
+        yield* Effect.promise(() => Bun.write(file, "sample"))
+        yield* awaitWithTimeout(
+          Effect.all([lsp.touchFile(file), lsp.touchFile(file)], { concurrency: 2 }),
+          "servers did not initialize concurrently",
+          "5 seconds",
+        )
+        expect((yield* lsp.status()).map((status) => status.id).sort()).toEqual(["parallel-a", "parallel-b"])
+      }),
+    {
+      config: {
+        lsp: {
+          "parallel-a": {
+            command: [process.execPath, documentsServerPath, "a.ready", "b.ready"],
+            extensions: [".parallel"],
+          },
+          "parallel-b": {
+            command: [process.execPath, documentsServerPath, "b.ready", "a.ready"],
+            extensions: [".parallel"],
+          },
+        },
+      },
+    },
+  )
+
+  it.instance(
+    "recognizes extensionless Dockerfile paths",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* TestInstance).directory
+        const lsp = yield* LSP.Service
+        expect(yield* lsp.hasClients(path.join(dir, "nested", "Dockerfile"))).toBe(true)
+      }),
+    { config: { lsp: { dockerfile: { command: [process.execPath, fakeServerPath] } } } },
+  )
+
   it.instance(
     "does not spawn builtin LSP for files outside instance",
     () =>

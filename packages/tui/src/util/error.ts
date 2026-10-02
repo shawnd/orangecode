@@ -2,6 +2,16 @@ import { isRecord } from "./record"
 
 type ConfigIssue = { message: string; path: string[] }
 
+export function isSessionNotFound(error: unknown, sessionID: string, legacy = false) {
+  if (!(error instanceof Error) || !isRecord(error.cause) || error.cause.status !== 404) return false
+  const body = error.cause.body
+  if (!isRecord(body)) return false
+  // Legacy session.get names its storage error; V2 identifies the Session.
+  return (
+    (legacy && body.name === "NotFoundError") || (body._tag === "SessionNotFoundError" && body.sessionID === sessionID)
+  )
+}
+
 export function cliErrorMessage(input: unknown): string | undefined {
   if (input instanceof Error && isRecord(input.cause) && "body" in input.cause) {
     const formatted = cliErrorMessage(input.cause.body)

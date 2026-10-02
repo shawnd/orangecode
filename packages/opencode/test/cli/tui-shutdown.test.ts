@@ -2,9 +2,47 @@ import path from "path"
 import { expect, test } from "bun:test"
 import { tmpdir } from "../fixture/fixture"
 import { withTimeout } from "../../src/util/timeout"
+import { stopWorker } from "../../src/cli/cmd/tui"
+
+test("shutdown waits for in-flight warmup before disposing the backend", async () => {
+  const warming = Promise.withResolvers<void>()
+  const calls: string[] = []
+  const stop = stopWorker({
+    warming: warming.promise,
+    shutdown: async () => {
+      calls.push("shutdown")
+    },
+    terminate: async () => {
+      calls.push("terminate")
+    },
+  })
+  await Promise.resolve()
+  expect(calls).toEqual([])
+  warming.resolve()
+  await withTimeout(stop, 1000)
+  expect(calls).toEqual(["shutdown", "terminate"])
+})
+
+test("worker termination still runs when startup warmup fails", async () => {
+  const calls: string[] = []
+  await stopWorker({
+    warming: Promise.reject(new Error("warmup failed")),
+    shutdown: async () => {
+      calls.push("shutdown")
+    },
+    terminate: async () => {
+      calls.push("terminate")
+    },
+  })
+  expect(calls).toEqual(["terminate"])
+})
 
 test("failed session validation releases the backend worker without a forced process exit", async () => {
   await using tmp = await tmpdir()
+  // Config loading migrates legacy files and can start dependency installation.
+  // Failed validation must precede those client-side filesystem side effects.
+  const config = JSON.stringify({ $schema: "https://opencode.ai/config.json", tui: { scroll_speed: 3 } })
+  await Bun.write(path.join(tmp.path, "opencode.json"), config)
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "tui-invalid-session.ts"), tmp.path], {
     env: {
       ...process.env,
@@ -27,6 +65,9 @@ test("failed session validation releases the backend worker without a forced pro
     expect(code, stderr).toBe(1)
     expect(stdout).toContain("invalid-session handler returned")
     expect(stderr).toContain("Session not found")
+    expect(await Bun.file(path.join(tmp.path, "opencode.json")).text()).toBe(config)
+    expect(await Bun.file(path.join(tmp.path, "tui.json")).exists()).toBe(false)
+    expect(await Bun.file(path.join(tmp.path, "opencode.json.tui-migration.bak")).exists()).toBe(false)
   } finally {
     if (child.exitCode === null) child.kill()
   }

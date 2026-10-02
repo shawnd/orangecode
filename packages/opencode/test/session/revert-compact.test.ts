@@ -1,12 +1,15 @@
 import { describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { Database } from "@opencode-ai/core/database/database"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import fs from "fs/promises"
 import path from "path"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { Effect } from "effect"
+import { Effect, Fiber, Latch, Ref } from "effect"
 import { Session } from "@/session/session"
+import { SessionRunState } from "@/session/run-state"
+import { SessionStatus } from "@/session/status"
 
 import { SessionRevert } from "../../src/session/revert"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -19,7 +22,16 @@ import { ModelV2 } from "@opencode-ai/core/model"
 
 const it = testEffect(
   LayerNode.compile(
-    LayerNode.group([Session.node, SessionRevert.node, Snapshot.node, SessionProjector.node, CrossSpawnSpawner.node]),
+    LayerNode.group([
+      Database.node,
+      Session.node,
+      SessionRevert.node,
+      SessionRunState.node,
+      SessionStatus.node,
+      Snapshot.node,
+      SessionProjector.node,
+      CrossSpawnSpawner.node,
+    ]),
   ),
 )
 
@@ -108,6 +120,163 @@ const tokens = {
 }
 
 describe("revert + compact workflow", () => {
+  it.live(
+    "undo discards queued inputs without interrupting the active turn",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+          const state = yield* SessionRunState.Service
+          const status = yield* SessionStatus.Service
+          const info = yield* session.create({})
+          const original = yield* user(info.id)
+          yield* text(info.id, original.id, "Keep working")
+          const reply = yield* assistant(info.id, original.id, dir)
+          const ready = Latch.makeUnsafe()
+          const release = Latch.makeUnsafe()
+          const interrupted = Ref.makeUnsafe(false)
+          const running = yield* state
+            .ensureRunning(
+              info.id,
+              Ref.set(interrupted, true).pipe(Effect.as({ info: reply, parts: [] })),
+              Effect.gen(function* () {
+                yield* status.set(info.id, { type: "busy" })
+                yield* ready.open
+                yield* release.await
+                return { info: reply, parts: [] }
+              }),
+            )
+            .pipe(Effect.forkChild)
+          yield* ready.await
+          const first = yield* user(info.id)
+          yield* text(info.id, first.id, "First queued input")
+          const second = yield* user(info.id)
+          yield* text(info.id, second.id, "Discard this input")
+
+          expect((yield* revert.revert({ sessionID: info.id, messageID: second.id })).revert).toBeUndefined()
+          expect((yield* status.get(info.id)).type).toBe("busy")
+          expect(yield* Ref.get(interrupted)).toBe(false)
+          expect((yield* MessageV2.filterCompactedEffect(info.id)).map((msg) => msg.info.id)).toEqual([
+            original.id,
+            reply.id,
+            first.id,
+          ])
+          yield* revert.revert({ sessionID: info.id, messageID: first.id })
+          expect((yield* MessageV2.filterCompactedEffect(info.id)).map((msg) => msg.info.id)).toEqual([
+            original.id,
+            reply.id,
+          ])
+          expect(
+            yield* revert.revert({ sessionID: info.id, messageID: original.id }).pipe(
+              Effect.as(false),
+              Effect.catchTag("SessionBusyError", () => Effect.succeed(true)),
+            ),
+          ).toBe(true)
+          yield* release.open
+          expect((yield* Fiber.join(running)).info.id).toBe(reply.id)
+          expect((yield* status.get(info.id)).type).toBe("idle")
+          expect(yield* Ref.get(interrupted)).toBe(false)
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live(
+    "undoing compaction restores the prior model history and redo restores the summary",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+          const info = yield* session.create({})
+          const original = yield* user(info.id)
+          yield* text(info.id, original.id, "Important original context")
+          const reply = yield* assistant(info.id, original.id, dir)
+          yield* text(info.id, reply.id, "Original response")
+          const compact = yield* user(info.id)
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            sessionID: info.id,
+            messageID: compact.id,
+            type: "compaction",
+            auto: false,
+          })
+          const summary = yield* assistant(info.id, compact.id, dir)
+          yield* session.updateMessage({ ...summary, summary: true })
+          yield* text(info.id, summary.id, "Compacted summary")
+
+          expect((yield* MessageV2.filterCompactedEffect(info.id)).map((message) => message.info.id)).toEqual([
+            compact.id,
+            summary.id,
+          ])
+          yield* revert.revert({ sessionID: info.id, messageID: compact.id })
+          expect((yield* session.get(info.id)).revert?.messageID).toBe(compact.id)
+          yield* revert.unrevert({ sessionID: info.id })
+          expect((yield* MessageV2.filterCompactedEffect(info.id)).map((message) => message.info.id)).toEqual([
+            compact.id,
+            summary.id,
+          ])
+
+          yield* revert.revert({ sessionID: info.id, messageID: compact.id })
+          // A new input commits the staged undo before loading model context.
+          yield* revert.cleanup(yield* session.get(info.id))
+          expect((yield* MessageV2.filterCompactedEffect(info.id)).map((message) => message.info.id)).toEqual([
+            original.id,
+            reply.id,
+          ])
+          yield* session.remove(info.id)
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live(
+    "undoing the latest compaction preserves the earlier summary and subsequent conversation",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+          const info = yield* session.create({})
+          const original = yield* user(info.id)
+          yield* text(info.id, original.id, "Original context")
+          const compact = Effect.fn("test.compact")(function* (content: string) {
+            const request = yield* user(info.id)
+            yield* session.updatePart({
+              id: PartID.ascending(),
+              sessionID: info.id,
+              messageID: request.id,
+              type: "compaction",
+              auto: false,
+            })
+            const summary = yield* assistant(info.id, request.id, dir)
+            yield* session.updateMessage({ ...summary, summary: true })
+            yield* text(info.id, summary.id, content)
+            return { request, summary }
+          })
+          const first = yield* compact("First summary")
+          const followup = yield* user(info.id)
+          yield* text(info.id, followup.id, "Follow-up after first compaction")
+          const reply = yield* assistant(info.id, followup.id, dir)
+          yield* text(info.id, reply.id, "Follow-up response")
+          const second = yield* compact("Second summary")
+          yield* revert.revert({ sessionID: info.id, messageID: second.request.id })
+          yield* revert.cleanup(yield* session.get(info.id))
+          const history = yield* MessageV2.filterCompactedEffect(info.id)
+          expect(history.map((message) => message.info.id)).toEqual([
+            first.request.id,
+            first.summary.id,
+            followup.id,
+            reply.id,
+          ])
+          expect(history[1].parts.some((part) => part.type === "text" && part.text === "First summary")).toBe(true)
+          yield* session.remove(info.id)
+        }),
+      { git: true },
+    ),
+  )
+
   it.live(
     "should properly handle compact command after revert",
     provideTmpdirInstance(

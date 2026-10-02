@@ -10,6 +10,7 @@ import { Session } from "@/session/session"
 import { Tool } from "@/tool/tool"
 import * as Truncate from "@/tool/truncate"
 import { MessageID, SessionID } from "@/session/schema"
+import { ProjectV2 } from "@opencode-ai/core/project"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 
 const ctx: Tool.Context = {
@@ -41,6 +42,8 @@ function harness(input: {
   mcpTools: Record<string, MCP.McpTool>
   servers: string[]
   permission?: PermissionV1.Rule[]
+  sessionPermission?: PermissionV1.Ruleset
+  parentID?: SessionID
   trigger?: Plugin.Interface["trigger"]
 }) {
   return Layer.mergeAll(
@@ -51,10 +54,28 @@ function harness(input: {
       output: (text: string) => Effect.succeed({ content: text, truncated: false as const }),
     }),
     Layer.mock(Agent.Service, {
-      get: () => Effect.succeed({ name: "build", permission: input.permission ?? [] } as any),
+      get: () =>
+        Effect.succeed({
+          name: "build",
+          mode: input.parentID ? "subagent" : "primary",
+          options: {},
+          permission: input.permission ?? [],
+        } satisfies Agent.Info),
     }),
     Layer.mock(Session.Service, {
-      get: () => Effect.succeed({ permission: [] } as any),
+      get: (sessionID) =>
+        Effect.succeed({
+          id: sessionID,
+          slug: "code-mode",
+          projectID: ProjectV2.ID.global,
+          directory: "/tmp",
+          title: "Code mode",
+          version: "test",
+          time: { created: 0, updated: 0 },
+          agent: "build",
+          permission: [...(input.sessionPermission ?? [])],
+          parentID: sessionID === ctx.sessionID ? input.parentID : undefined,
+        } satisfies Session.Info),
     }),
     Layer.mock(MCP.Service, {
       tools: () => Effect.succeed(input.mcpTools),
@@ -72,12 +93,22 @@ function build(
   servers?: string[],
   permission?: PermissionV1.Rule[],
   trigger?: Plugin.Interface["trigger"],
+  session?: { permission: PermissionV1.Ruleset; parentID: SessionID },
 ) {
   const names = serverNames(mcpTools, servers)
   return Effect.runPromise(
     CodeModeTool.pipe(
       Effect.flatMap(Tool.init),
-      Effect.provide(harness({ mcpTools, servers: names, permission, trigger })),
+      Effect.provide(
+        harness({
+          mcpTools,
+          servers: names,
+          permission,
+          trigger,
+          sessionPermission: session?.permission,
+          parentID: session?.parentID,
+        }),
+      ),
     ),
   )
 }
@@ -703,6 +734,32 @@ describe("code mode permission visibility", () => {
     const allowed = await Effect.runPromise(tool.execute({ code: "return await tools.github.list_issues({})" }, ctx))
     expect(allowed.metadata.error).toBeUndefined()
     expect(allowed.output).toBe("ok")
+  })
+
+  test("a child's role deny keeps an inherited grant out of executable MCP tools", async () => {
+    const called: string[] = []
+    const tool = await build(
+      {
+        github_create_issue: mcpTool("create_issue", () => {
+          called.push("create_issue")
+          return ok()
+        }),
+        github_list_issues: mcpTool("list_issues", () => {
+          called.push("list_issues")
+          return ok()
+        }),
+      },
+      ["github"],
+      Permission.fromConfig({ "github_*": "deny", github_list_issues: "allow" }),
+      undefined,
+      { parentID: SessionID.make("ses_parent"), permission: Permission.fromConfig({ "*": "allow" }) },
+    )
+    const error = await failure(tool.execute({ code: "return await tools.github.create_issue({})" }, ctx))
+    expect(error.message).toContain("Unknown tool 'github.create_issue'")
+    expect(called).toEqual([])
+    const allowed = await Effect.runPromise(tool.execute({ code: "return await tools.github.list_issues({})" }, ctx))
+    expect(allowed.output).toBe("ok")
+    expect(called).toEqual(["list_issues"])
   })
 
   test("an ask-level tool remains callable and still prompts via ctx.ask", async () => {

@@ -7,6 +7,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
+import { SessionWorkState } from "@/session/work-state"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -79,6 +80,7 @@ export const SessionPaths = {
   list: root,
   status: `${root}/status`,
   get: `${root}/:sessionID`,
+  activity: `${root}/:sessionID/activity`,
   children: `${root}/:sessionID/children`,
   todo: `${root}/:sessionID/todo`,
   diff: `${root}/:sessionID/diff`,
@@ -128,6 +130,19 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.status",
             summary: "Get session status",
             description: "Retrieve the current status of all sessions, including active, idle, and completed states.",
+          }),
+        ),
+        HttpApiEndpoint.get("activity", SessionPaths.activity, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(SessionWorkState.Info, "Aggregate session activity"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.activity",
+            summary: "Get session activity",
+            description:
+              "Aggregate foreground execution, active descendant agents, background shells, and pending interactions. Blocked takes precedence over working; idle means the entire subtree has no active work. Counts reflect live work owned by this process, not persisted tool history.",
           }),
         ),
         HttpApiEndpoint.get("get", SessionPaths.get, {

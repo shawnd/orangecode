@@ -18,7 +18,7 @@ import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Semaphore } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -346,9 +346,23 @@ const layer = Layer.effect(
       Duration.infinity,
     )
 
+    const globalContents = yield* Ref.make<string | undefined>(undefined)
+    const globalLock = Semaphore.makeUnsafe(1)
     const getGlobal = Effect.fn("Config.getGlobal")(function* () {
-      return yield* cachedGlobal
-    })
+      // Other processes can save approvals without invalidating this process's cache.
+      // Compare contents rather than mtimes, which can miss rapid same-sized edits.
+      const contents = JSON.stringify(
+        yield* Effect.forEach(["config.json", "opencode.json", "opencode.jsonc"], (name) =>
+          readConfigFile(path.join(Global.Path.config, name)),
+        ),
+      )
+      if (contents !== (yield* Ref.get(globalContents))) {
+        yield* invalidateGlobal
+      }
+      const info = yield* cachedGlobal.pipe(Effect.onError(() => invalidateGlobal))
+      yield* Ref.set(globalContents, contents)
+      return info
+    }, globalLock.withPermits(1))
 
     const ensureGitignore = Effect.fn("Config.ensureGitignore")(function* (dir: string) {
       yield* fs.ensureDir(dir)
@@ -727,36 +741,41 @@ const layer = Layer.effect(
         s.config = (yield* loadInstanceState(ctx).pipe(Effect.orDie)).config
         return file
       },
-      locks.withLock("config:mcp"),
+      (effect, _name, _config, scope) =>
+        effect.pipe(locks.withLock(scope === "global" ? "config:global" : "config:mcp")),
       Effect.orDie,
     )
 
-    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
-      const file = globalConfigFile()
-      const before = (yield* readConfigFile(file)) ?? "{}"
-      const patch = writableGlobal(config)
-      const prepared = preservePermissionDefaults(before, config, file)
+    const updateGlobal = Effect.fn("Config.updateGlobal")(
+      function* (config: Info) {
+        const file = globalConfigFile()
+        const before = (yield* readConfigFile(file)) ?? "{}"
+        const patch = writableGlobal(config)
+        const prepared = preservePermissionDefaults(before, config, file)
 
-      let next: Info
-      let changed: boolean
-      if (!file.endsWith(".jsonc")) {
-        const existing = ConfigParse.jsonc(prepared, file)
-        ConfigParse.schema(ConfigV1.Info, ConfigV2Compat.lower(normalizeLoadedConfig(existing), file).value, file)
-        const merged = mergeDeep(isRecord(existing) ? existing : {}, patch)
-        const serialized = JSON.stringify(merged, null, 2)
-        next = yield* decodeConfig(merged, file)
-        changed = serialized !== before
-        if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
-      } else {
-        const updated = patchJsonc(prepared, patch)
-        next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
-        changed = updated !== before
-        if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
-      }
+        let next: Info
+        let changed: boolean
+        if (!file.endsWith(".jsonc")) {
+          const existing = ConfigParse.jsonc(prepared, file)
+          ConfigParse.schema(ConfigV1.Info, ConfigV2Compat.lower(normalizeLoadedConfig(existing), file).value, file)
+          const merged = mergeDeep(isRecord(existing) ? existing : {}, patch)
+          const serialized = JSON.stringify(merged, null, 2)
+          next = yield* decodeConfig(merged, file)
+          changed = serialized !== before
+          if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
+        } else {
+          const updated = patchJsonc(prepared, patch)
+          next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
+          changed = updated !== before
+          if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        }
 
-      if (changed) yield* invalidate()
-      return { info: next, changed }
-    })
+        if (changed) yield* invalidate()
+        return { info: next, changed }
+      },
+      locks.withLock("config:global"),
+      Effect.orDie,
+    )
 
     return Service.of({
       get,

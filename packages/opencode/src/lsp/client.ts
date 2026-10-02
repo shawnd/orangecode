@@ -1,14 +1,20 @@
 import path from "path"
 import { pathToFileURL, fileURLToPath } from "url"
-import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from "vscode-jsonrpc/node"
+import {
+  CancellationToken,
+  createMessageConnection,
+  StreamMessageReader,
+  StreamMessageWriter,
+} from "vscode-jsonrpc/node"
 import type { Diagnostic as VSCodeDiagnostic } from "vscode-languageserver-types"
-import { Process } from "@/util/process"
+import { stop } from "./launch"
 import { LANGUAGE_EXTENSIONS } from "./language"
 import { Effect, Schema } from "effect"
 import type * as LSPServer from "./server"
 import { withTimeout } from "../util/timeout"
 import { Filesystem } from "@/util/filesystem"
 import type { InstanceContext } from "@/project/instance-context"
+import { request } from "./request"
 
 const DIAGNOSTICS_DEBOUNCE_MS = 150
 const DIAGNOSTICS_DOCUMENT_WAIT_TIMEOUT_MS = 5_000
@@ -16,6 +22,22 @@ const DIAGNOSTICS_FULL_WAIT_TIMEOUT_MS = 10_000
 const DIAGNOSTICS_REQUEST_TIMEOUT_MS = 3_000
 
 const INITIALIZE_TIMEOUT_MS = 45_000
+const REQUEST_TIMEOUT_MS = 15_000
+const IDLE_TIMEOUT_MS = 10 * 60_000
+const MAX_DIAGNOSTIC_FILES = 1024
+const MAX_DIAGNOSTIC_BYTES = 8 * 1024 * 1024
+
+const navigationCapabilities: Record<string, string> = {
+  "textDocument/hover": "hoverProvider",
+  "textDocument/definition": "definitionProvider",
+  "textDocument/references": "referencesProvider",
+  "textDocument/implementation": "implementationProvider",
+  "textDocument/documentSymbol": "documentSymbolProvider",
+  "workspace/symbol": "workspaceSymbolProvider",
+  "textDocument/prepareCallHierarchy": "callHierarchyProvider",
+  "callHierarchy/incomingCalls": "callHierarchyProvider",
+  "callHierarchy/outgoingCalls": "callHierarchyProvider",
+}
 
 // Per server: enough for an active working set without retaining an entire repo.
 // UTF-16 bytes conservatively account for the retained JS strings. Active waits
@@ -131,6 +153,7 @@ export async function create(input: {
   root: string
   directory: string
   instance: InstanceContext
+  idleTimeoutMs?: number
 }) {
   const instance = input.instance
 
@@ -150,15 +173,35 @@ export async function create(input: {
   const diagnosticListeners = new Set<(input: { path: string; serverID: string }) => void>()
   const files = new Map<string, { version: number; text: string; changedAt: number; pins: number; waited: boolean }>()
   const completedDiagnostics = new Map<string, { items: Diagnostic[]; timer: ReturnType<typeof setTimeout> }>()
+  const diagnosticSizes = new Map<string, number>()
+  let diagnosticBytes = 0
+  const boundDiagnostics = (filePath: string) => {
+    diagnosticBytes -= diagnosticSizes.get(filePath) ?? 0
+    diagnosticSizes.delete(filePath)
+    const size = JSON.stringify([pushDiagnostics.get(filePath), pullDiagnostics.get(filePath)]).length * 2
+    diagnosticSizes.set(filePath, size)
+    diagnosticBytes += size
+    for (const [file, bytes] of diagnosticSizes) {
+      if (diagnosticSizes.size <= MAX_DIAGNOSTIC_FILES && diagnosticBytes <= MAX_DIAGNOSTIC_BYTES) break
+      if (files.has(file)) continue
+      diagnosticSizes.delete(file)
+      diagnosticBytes -= bytes
+      pushDiagnostics.delete(file)
+      pullDiagnostics.delete(file)
+      published.delete(file)
+    }
+  }
   const mergedDiagnostics = (filePath: string) =>
     (!files.has(filePath) ? completedDiagnostics.get(filePath)?.items : undefined) ??
     dedupeDiagnostics([...(pushDiagnostics.get(filePath) ?? []), ...(pullDiagnostics.get(filePath) ?? [])])
   const updatePushDiagnostics = (filePath: string, next: Diagnostic[]) => {
     pushDiagnostics.set(filePath, next)
+    boundDiagnostics(filePath)
     for (const listener of diagnosticListeners) listener({ path: filePath, serverID: input.serverID })
   }
   const updatePullDiagnostics = (filePath: string, next: Diagnostic[]) => {
     pullDiagnostics.set(filePath, next)
+    boundDiagnostics(filePath)
   }
   const emitRegistrationChange = () => {
     for (const listener of [...registrationListeners]) listener()
@@ -177,6 +220,7 @@ export async function create(input: {
     })
     if (shouldSeedDiagnosticsOnFirstPush(input.serverID) && !pushDiagnostics.has(filePath)) {
       pushDiagnostics.set(filePath, params.diagnostics)
+      boundDiagnostics(filePath)
       return
     }
     updatePushDiagnostics(filePath, params.diagnostics)
@@ -192,9 +236,8 @@ export async function create(input: {
     const registrations = (params as { registrations?: CapabilityRegistration[] }).registrations ?? []
     let changed = false
     for (const registration of registrations) {
-      if (registration.method !== "textDocument/diagnostic") continue
       diagnosticRegistrations.set(registration.id, registration)
-      changed = true
+      if (registration.method === "textDocument/diagnostic") changed = true
     }
     if (changed) emitRegistrationChange()
   })
@@ -202,9 +245,8 @@ export async function create(input: {
     const registrations = (params as { unregisterations?: { id: string; method: string }[] }).unregisterations ?? []
     let changed = false
     for (const registration of registrations) {
-      if (registration.method !== "textDocument/diagnostic") continue
       diagnosticRegistrations.delete(registration.id)
-      changed = true
+      if (registration.method === "textDocument/diagnostic") changed = true
     }
     if (changed) emitRegistrationChange()
   })
@@ -219,49 +261,55 @@ export async function create(input: {
 
   // --- Initialize handshake ---
 
-  const initialized = await withTimeout(
-    connection.sendRequest<{ capabilities?: ServerCapabilities }>("initialize", {
-      rootUri: pathToFileURL(input.root).href,
-      processId: input.server.process.pid,
-      workspaceFolders: [
+  const initialized = await request(
+    (token) =>
+      connection.sendRequest<{ capabilities?: ServerCapabilities }>(
+        "initialize",
         {
-          name: "workspace",
-          uri: pathToFileURL(input.root).href,
+          rootUri: pathToFileURL(input.root).href,
+          processId: process.pid,
+          workspaceFolders: [
+            {
+              name: "workspace",
+              uri: pathToFileURL(input.root).href,
+            },
+          ],
+          initializationOptions: {
+            ...input.server.initialization,
+          },
+          capabilities: {
+            window: {
+              workDoneProgress: true,
+            },
+            workspace: {
+              configuration: true,
+              didChangeWatchedFiles: {
+                dynamicRegistration: true,
+              },
+              diagnostics: {
+                refreshSupport: false,
+              },
+            },
+            textDocument: {
+              synchronization: {
+                didOpen: true,
+                didChange: true,
+              },
+              diagnostic: {
+                dynamicRegistration: true,
+                relatedDocumentSupport: true,
+              },
+              publishDiagnostics: {
+                versionSupport: false,
+              },
+            },
+          },
         },
-      ],
-      initializationOptions: {
-        ...input.server.initialization,
-      },
-      capabilities: {
-        window: {
-          workDoneProgress: true,
-        },
-        workspace: {
-          configuration: true,
-          didChangeWatchedFiles: {
-            dynamicRegistration: true,
-          },
-          diagnostics: {
-            refreshSupport: false,
-          },
-        },
-        textDocument: {
-          synchronization: {
-            didOpen: true,
-            didChange: true,
-          },
-          diagnostic: {
-            dynamicRegistration: true,
-            relatedDocumentSupport: true,
-          },
-          publishDiagnostics: {
-            versionSupport: false,
-          },
-        },
-      },
-    }),
-    INITIALIZE_TIMEOUT_MS,
+        token,
+      ),
+    { timeout: INITIALIZE_TIMEOUT_MS },
   ).catch((err) => {
+    connection.dispose()
     throw new InitializeError({ serverID: input.serverID, cause: err })
   })
 
@@ -279,6 +327,7 @@ export async function create(input: {
   let bytes = 0
   let version = -1
   let stopping = false
+  let shutdown: Promise<void> | undefined
   let activeRequests = 0
   const documentRequests = new Map<string, number>()
   let pendingOperations = 0
@@ -286,6 +335,41 @@ export async function create(input: {
   let trimTimer: ReturnType<typeof setImmediate> | undefined
   const opening = new Set<string>()
   let openTimer: ReturnType<typeof setImmediate> | undefined
+  const interrupted = new AbortController()
+  let lastUsed = Date.now()
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+
+  function activity() {
+    lastUsed = Date.now()
+  }
+
+  function scheduleIdle() {
+    if (stopping) return
+    const timeout = input.idleTimeoutMs ?? IDLE_TIMEOUT_MS
+    idleTimer = setTimeout(() => {
+      const busy =
+        activeRequests || documentRequests.size || pendingOperations || [...files.values()].some((doc) => doc.pins)
+      if (busy || Date.now() - lastUsed < timeout) {
+        scheduleIdle()
+        return
+      }
+      void result.shutdown().catch((error) => Effect.runSync(Effect.logError("failed to stop idle LSP", error)))
+    }, timeout)
+    idleTimer.unref()
+  }
+
+  function supports(method: string) {
+    const capability = navigationCapabilities[method]
+    if (!capability) return true
+    return (
+      Boolean(initialized.capabilities?.[capability]) ||
+      [...diagnosticRegistrations.values()].some(
+        (registration) =>
+          registration.method === method ||
+          (method.startsWith("callHierarchy/") && registration.method === "textDocument/prepareCallHierarchy"),
+      )
+    )
+  }
 
   function handoff(filePath: string) {
     // An already-queued open can start trimming before the previous open's
@@ -325,6 +409,8 @@ export async function create(input: {
     published.delete(filePath)
     pushDiagnostics.delete(filePath)
     pullDiagnostics.delete(filePath)
+    diagnosticBytes -= diagnosticSizes.get(filePath) ?? 0
+    diagnosticSizes.delete(filePath)
   }
 
   function forgetDiagnostics(filePath: string) {
@@ -376,32 +462,63 @@ export async function create(input: {
     })
   }
 
-  // Consumers issue requests through connection directly. Keep their documents
-  // open through the actual RPC response, including pulls that outlive our wait
-  // timeout or the first matching identifier. Workspace requests pin the set.
+  // Keep documents open until the response or cancellation/deadline. Workspace
+  // requests pin the set; even an uncooperative server cannot pin it indefinitely.
   const sendRequest = connection.sendRequest.bind(connection)
-  connection.sendRequest = new Proxy(sendRequest, {
-    apply(target, thisArg, args) {
-      if (stopping) return Promise.reject(new Error("LSP client is shutting down"))
-      const params = args[1] as { textDocument?: { uri?: string }; item?: { uri?: string } } | undefined
-      const uri = params?.textDocument?.uri ?? params?.item?.uri
-      const filePath = uri ? getFilePath(uri) : undefined
-      if (filePath) documentRequests.set(filePath, (documentRequests.get(filePath) ?? 0) + 1)
-      if (!filePath) activeRequests++
-      return (async () => {
+  function dispatch<T>(args: unknown[], signal?: AbortSignal): Promise<T | null> {
+    if (stopping) return Promise.reject(new Error("LSP client is shutting down"))
+    const type = args[0] as string | { method: string }
+    const method = typeof type === "string" ? type : type.method
+    if (!supports(method)) return Promise.resolve(null)
+    activity()
+    const params = args[1] as { textDocument?: { uri?: string }; item?: { uri?: string } } | undefined
+    const uri = params?.textDocument?.uri ?? params?.item?.uri
+    const filePath = uri ? getFilePath(uri) : undefined
+    if (filePath) documentRequests.set(filePath, (documentRequests.get(filePath) ?? 0) + 1)
+    if (!filePath) activeRequests++
+    const last = args.at(-1)
+    const token = CancellationToken.is(last) ? last : undefined
+    if (token) args.pop()
+    const timeout =
+      method === "textDocument/diagnostic" || method === "workspace/diagnostic"
+        ? DIAGNOSTICS_REQUEST_TIMEOUT_MS
+        : REQUEST_TIMEOUT_MS
+    return request(
+      async (token) => {
         // A query may arrive long after a background read's document was evicted.
         await operations
+        if (token.isCancellationRequested) throw new Error("LSP request cancelled")
         if (filePath && !files.has(filePath)) await result.notify.open({ path: filePath })
-        return await Reflect.apply(target, thisArg, args)
-      })().finally(() => {
-        if (filePath) {
-          const count = (documentRequests.get(filePath) ?? 1) - 1
-          if (count) documentRequests.set(filePath, count)
-          if (!count) documentRequests.delete(filePath)
-        }
-        if (!filePath) activeRequests--
-        scheduleTrim()
-      })
+        if (token.isCancellationRequested) throw new Error("LSP request cancelled")
+        const transport = Reflect.apply(sendRequest, connection, [...args, token]) as Promise<T>
+        const subscription = token.onCancellationRequested(() => {
+          // A server that ignores cancellation retains pending JSON-RPC state
+          // and may keep doing expensive work. Retire it after a short grace.
+          void withTimeout(
+            transport.then(
+              () => {},
+              () => {},
+            ),
+            1_000,
+          ).catch(() => result.shutdown())
+        })
+        return await transport.finally(() => subscription.dispose())
+      },
+      { timeout, token, signal: signal ? AbortSignal.any([signal, interrupted.signal]) : interrupted.signal },
+    ).finally(() => {
+      if (filePath) {
+        const count = (documentRequests.get(filePath) ?? 1) - 1
+        if (count) documentRequests.set(filePath, count)
+        if (!count) documentRequests.delete(filePath)
+      }
+      if (!filePath) activeRequests--
+      activity()
+      scheduleTrim()
+    })
+  }
+  connection.sendRequest = new Proxy(sendRequest, {
+    apply(_target, _thisArg, args) {
+      return dispatch(args)
     },
   })
 
@@ -430,15 +547,14 @@ export async function create(input: {
 
   async function requestDiagnosticReport(filePath: string, identifier?: string): Promise<DiagnosticRequestResult> {
     const version = files.get(filePath)?.version
-    const report = await withTimeout(
-      connection.sendRequest<DocumentDiagnosticReport | null>("textDocument/diagnostic", {
+    const report = await connection
+      .sendRequest<DocumentDiagnosticReport | null>("textDocument/diagnostic", {
         ...(identifier ? { identifier } : {}),
         textDocument: {
           uri: pathToFileURL(filePath).href,
         },
-      }),
-      DIAGNOSTICS_REQUEST_TIMEOUT_MS,
-    ).catch(() => null)
+      })
+      .catch(() => null)
     if (!report || stopping || files.get(filePath)?.version !== version) {
       return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() }
     }
@@ -471,13 +587,12 @@ export async function create(input: {
     filePath: string,
     identifier?: string,
   ): Promise<DiagnosticRequestResult> {
-    const report = await withTimeout(
-      connection.sendRequest<WorkspaceDiagnosticReport | null>("workspace/diagnostic", {
+    const report = await connection
+      .sendRequest<WorkspaceDiagnosticReport | null>("workspace/diagnostic", {
         ...(identifier ? { identifier } : {}),
         previousResultIds: [],
-      }),
-      DIAGNOSTICS_REQUEST_TIMEOUT_MS,
-    ).catch(() => null)
+      })
+      .catch(() => null)
     if (!report || stopping) return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() }
 
     const byFile = new Map<string, Diagnostic[]>()
@@ -495,7 +610,9 @@ export async function create(input: {
 
   function documentPullState() {
     const documentRegistrations = [...diagnosticRegistrations.values()].filter(
-      (registration) => registration.registerOptions?.workspaceDiagnostics !== true,
+      (registration) =>
+        registration.method === "textDocument/diagnostic" &&
+        registration.registerOptions?.workspaceDiagnostics !== true,
     )
     return {
       documentIdentifiers: [
@@ -507,7 +624,9 @@ export async function create(input: {
 
   function workspacePullState() {
     const workspaceRegistrations = [...diagnosticRegistrations.values()].filter(
-      (registration) => registration.registerOptions?.workspaceDiagnostics === true,
+      (registration) =>
+        registration.method === "textDocument/diagnostic" &&
+        registration.registerOptions?.workspaceDiagnostics === true,
     )
     return {
       workspaceIdentifiers: [
@@ -701,6 +820,12 @@ export async function create(input: {
 
   const result = {
     root: input.root,
+    get connected() {
+      return !stopping && input.server.process.exitCode === null && input.server.process.signalCode === null
+    },
+    request<T>(method: string, params: unknown, signal?: AbortSignal) {
+      return dispatch<T>([method, params], signal)
+    },
     get serverID() {
       return input.serverID
     },
@@ -709,6 +834,7 @@ export async function create(input: {
     },
     notify: {
       async open(request: { path: string }) {
+        activity()
         const filePath = Filesystem.normalizePath(
           path.isAbsolute(request.path) ? request.path : path.resolve(input.directory, request.path),
         )
@@ -757,7 +883,7 @@ export async function create(input: {
             await connection.sendNotification("textDocument/didOpen", {
               textDocument: {
                 uri: pathToFileURL(filePath).href,
-                languageId: LANGUAGE_EXTENSIONS[path.extname(filePath)] ?? "plaintext",
+                languageId: LANGUAGE_EXTENSIONS[path.extname(filePath) || path.basename(filePath)] ?? "plaintext",
                 version: next,
                 text,
               },
@@ -808,6 +934,7 @@ export async function create(input: {
         path.isAbsolute(request.path) ? request.path : path.resolve(input.directory, request.path),
       )
       if (stopping) return
+      activity()
       const version = files.get(normalizedPath)?.version ?? (await result.notify.open({ path: normalizedPath }))
       const document = files.get(normalizedPath)
       if (!document) return
@@ -827,40 +954,54 @@ export async function create(input: {
         const current = files.get(normalizedPath)
         if (current) current.pins--
         scheduleTrim()
+        activity()
       }
     },
-    async shutdown() {
-      if (stopping) return
-      stopping = true
-      if (trimTimer) clearImmediate(trimTimer)
-      if (openTimer) clearImmediate(openTimer)
-      opening.clear()
-      for (const cancel of shutdownListeners) cancel()
-      await operations
-      for (const filePath of files.keys()) {
-        await close(filePath).catch((error) =>
-          Effect.runSync(Effect.logDebug("LSP document close during shutdown failed", error)),
-        )
-      }
-      // Use the original request function: the public connection now rejects
-      // new work. The timeout bounds teardown of a nonresponsive server.
-      await withTimeout(sendRequest("shutdown"), 1_000).catch(() => {})
-      await connection.sendNotification("exit").catch(() => {})
-      connection.end()
-      connection.dispose()
-      files.clear()
-      for (const filePath of completedDiagnostics.keys()) forgetDiagnostics(filePath)
-      bytes = 0
-      pushDiagnostics.clear()
-      pullDiagnostics.clear()
-      published.clear()
-      diagnosticRegistrations.clear()
-      diagnosticListeners.clear()
-      registrationListeners.clear()
-      await Process.stop(input.server.process)
+    shutdown(): Promise<void> {
+      if (shutdown) return shutdown
+      shutdown = (async () => {
+        stopping = true
+        interrupted.abort(new Error("LSP client is shutting down"))
+        if (idleTimer) clearTimeout(idleTimer)
+        if (trimTimer) clearImmediate(trimTimer)
+        if (openTimer) clearImmediate(openTimer)
+        opening.clear()
+        for (const cancel of shutdownListeners) cancel()
+        await operations
+        for (const filePath of files.keys()) {
+          await close(filePath).catch((error) =>
+            Effect.runSync(Effect.logDebug("LSP document close during shutdown failed", error)),
+          )
+        }
+        // Use the original request function: the public connection now rejects
+        // new work. The timeout bounds teardown of a nonresponsive server.
+        await withTimeout(sendRequest("shutdown"), 1_000).catch(() => {})
+        await connection.sendNotification("exit").catch(() => {})
+        connection.end()
+        connection.dispose()
+        files.clear()
+        for (const filePath of completedDiagnostics.keys()) forgetDiagnostics(filePath)
+        bytes = 0
+        pushDiagnostics.clear()
+        pullDiagnostics.clear()
+        published.clear()
+        diagnosticSizes.clear()
+        diagnosticBytes = 0
+        diagnosticRegistrations.clear()
+        diagnosticListeners.clear()
+        registrationListeners.clear()
+        await stop(input.server.process)
+      })()
+      return shutdown
     },
   }
 
+  const disconnected = () => {
+    void result.shutdown().catch((error) => Effect.runSync(Effect.logDebug("LSP disconnect cleanup failed", error)))
+  }
+  connection.onClose(disconnected)
+  input.server.process.once("exit", disconnected)
+  scheduleIdle()
   return result
 }
 

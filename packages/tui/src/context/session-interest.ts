@@ -7,6 +7,7 @@ export function createSessionInterest(selective = true) {
   const submitting = new Map<string, number>()
   let selected: string | undefined
   const changes = new Set<() => void>()
+  const removals = new Set<(sessionID: string) => void>()
   const notify = () => changes.forEach((fn) => fn())
   function belongs(sessionID: string, roots: Set<string>) {
     const seen = new Set<string>()
@@ -17,6 +18,19 @@ export function createSessionInterest(selective = true) {
     return false
   }
   return {
+    remove(sessionID: string) {
+      controlled.delete(sessionID)
+      active.delete(sessionID)
+      submitting.delete(sessionID)
+      parents.delete(sessionID)
+      if (selected === sessionID) selected = undefined
+      removals.forEach((fn) => fn(sessionID))
+      notify()
+    },
+    onRemove(fn: (sessionID: string) => void) {
+      removals.add(fn)
+      return () => removals.delete(fn)
+    },
     select(sessionID?: string) {
       if (selected === sessionID) return
       selected = sessionID

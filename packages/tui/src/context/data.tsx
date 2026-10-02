@@ -25,6 +25,7 @@ import { useEvent } from "./event"
 import { createSignal, onCleanup, onMount } from "solid-js"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { createRefresh } from "../util/refresh"
+import { isSessionNotFound } from "../util/error"
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -90,8 +91,26 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       { epoch: number; events: { sequence: number; durable: boolean; event: V2Event }[]; task?: Promise<void> }
     >()
     const volatile = new Map<string, V2Event[]>()
-    let recovering: { permission: Set<string>; question: Set<string> } | undefined
+    let recovering: { permission: Set<string>; question: Set<string>; removed: Set<string> } | undefined
     const requestLocations = new Map<string, LocationRef>()
+    onCleanup(
+      sdk.interest.onRemove((sessionID) => {
+        recovering?.removed.add(sessionID)
+        hydrating.delete(sessionID)
+        sequences.delete(sessionID)
+        volatile.delete(sessionID)
+        requestLocations.delete(sessionID)
+        setStore(
+          "session",
+          produce((draft) => {
+            delete draft.info[sessionID]
+            delete draft.message[sessionID]
+            delete draft.permission[sessionID]
+            delete draft.question[sessionID]
+          }),
+        )
+      }),
+    )
     const durableTypes = new Set<string>(SessionEvent.DurableDefinitions.map((definition) => definition.type))
     const versionedTypes = new Set(
       SessionEvent.DurableDefinitions.map((definition) => `${definition.type}.${definition.durable?.version}`),
@@ -607,9 +626,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             }
             hydrating.set(sessionID, tracker)
             tracker.task = (async () => {
-              const response = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
+              const response = await sdk.client.v2.session
+                .messages({ sessionID }, { throwOnError: true })
+                .catch((error: unknown) => {
+                  if (!isSessionNotFound(error, sessionID)) throw error
+                  sdk.flushEvents()
+                  if (tracker.epoch === sdk.connectionEpoch && hydrating.get(sessionID) === tracker)
+                    sdk.interest.remove(sessionID)
+                })
               sdk.flushEvents()
               if (
+                !response ||
                 tracker.epoch !== sdk.connectionEpoch ||
                 !sdk.interest.includes(sessionID) ||
                 hydrating.get(sessionID) !== tracker
@@ -746,7 +773,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onCleanup(
       sdk.onRecovery(async (epoch) => {
-        const tracker = { permission: new Set<string>(), question: new Set<string>() }
+        const tracker = { permission: new Set<string>(), question: new Set<string>(), removed: new Set<string>() }
         recovering = tracker
         const sessions = [
           ...new Set([
@@ -780,26 +807,33 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               ),
               Promise.all(
                 sessions.map(async (sessionID) => {
-                  const [permissions, questions] = await Promise.all([
+                  const requests = await Promise.all([
                     sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
                     sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
-                  ])
-                  return { permissions: permissions.data.data, questions: questions.data.data }
+                  ]).catch((error: unknown) => {
+                    sdk.flushEvents()
+                    if (tracker.removed.has(sessionID)) return
+                    if (!isSessionNotFound(error, sessionID)) throw error
+                    if (epoch === sdk.connectionEpoch && recovering === tracker) sdk.interest.remove(sessionID)
+                  })
+                  sdk.flushEvents()
+                  if (!requests || tracker.removed.has(sessionID)) return { permissions: [], questions: [] }
+                  return { permissions: requests[0].data.data, questions: requests[1].data.data }
                 }),
               ),
             ])
             sdk.flushEvents()
-            if (epoch !== sdk.connectionEpoch) return
+            if (epoch !== sdk.connectionEpoch || recovering !== tracker) return
             setStore(
               "session",
               produce((draft) => {
                 const pending = [...snapshots, ...owned]
                   .flatMap((item) => item.permissions)
-                  .filter((item) => !tracker.permission.has(item.id))
+                  .filter((item) => !tracker.removed.has(item.sessionID) && !tracker.permission.has(item.id))
                 pending.push(
                   ...Object.values(draft.permission)
                     .flat()
-                    .filter((item) => tracker.permission.has(item.id)),
+                    .filter((item) => !tracker.removed.has(item.sessionID) && tracker.permission.has(item.id)),
                 )
                 draft.permission = Object.groupBy(
                   [...new Map(pending.map((item) => [item.id, item])).values()],
@@ -807,11 +841,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 ) as Record<string, PermissionV2Request[]>
                 const asked = [...snapshots, ...owned]
                   .flatMap((item) => item.questions)
-                  .filter((item) => !tracker.question.has(item.id))
+                  .filter((item) => !tracker.removed.has(item.sessionID) && !tracker.question.has(item.id))
                 asked.push(
                   ...Object.values(draft.question)
                     .flat()
-                    .filter((item) => tracker.question.has(item.id)),
+                    .filter((item) => !tracker.removed.has(item.sessionID) && tracker.question.has(item.id)),
                 )
                 draft.question = Object.groupBy(
                   [...new Map(asked.map((item) => [item.id, item])).values()],

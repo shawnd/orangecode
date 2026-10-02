@@ -127,6 +127,67 @@ describe("session messages endpoint", () => {
   )
 
   it.instance(
+    "reconciles orphaned background shells through paginated and full-history responses",
+    withoutWatcher(
+      Effect.gen(function* () {
+        const sessions = yield* SessionNs.Service
+        const session = yield* sessionScoped
+        const [userID] = yield* fill(session.id, 1)
+        const assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          sessionID: session.id,
+          parentID: userID,
+          role: "assistant",
+          mode: "build",
+          agent: "build",
+          cost: 0,
+          path: { cwd: session.directory, root: session.directory },
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.modelID,
+          providerID: model.providerID,
+          time: { created: Date.now() },
+        } satisfies SessionV1.Assistant)
+        const part = {
+          id: PartID.ascending(),
+          sessionID: session.id,
+          messageID: assistant.id,
+          callID: "orphaned-shell",
+          type: "tool",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: { command: "bun run build" },
+            title: "Build",
+            output: "Background shell started",
+            metadata: { background: true, shellStatus: "running", jobId: "job_old", pid: process.pid, stdinOpen: true },
+            time: { start: 1, end: 2 },
+          },
+        } satisfies SessionV1.ToolPart
+        yield* sessions.updatePart(part)
+
+        const paged = yield* request(`/session/${session.id}/message?limit=1`)
+        expect(paged.status).toBe(200)
+        const page = yield* json<SessionV1.WithParts[]>(paged)
+        expect(page[0]?.parts[0]).toMatchObject({
+          id: part.id,
+          state: { metadata: { shellStatus: "cancelled", stdinOpen: false } },
+        })
+        expect(paged.headers["x-next-cursor"]).toBeTruthy()
+
+        yield* sessions.updatePart(part)
+        const full = yield* request(`/session/${session.id}/message`)
+        expect(full.status).toBe(200)
+        const history = yield* json<SessionV1.WithParts[]>(full)
+        expect(history.find((item) => item.info.id === assistant.id)?.parts[0]).toMatchObject({
+          id: part.id,
+          state: { metadata: { shellStatus: "cancelled", stdinOpen: false } },
+        })
+      }),
+    ),
+    { git: true },
+  )
+
+  it.instance(
     "rejects invalid cursors and missing sessions",
     withoutWatcher(
       Effect.gen(function* () {

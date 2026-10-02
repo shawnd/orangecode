@@ -2715,6 +2715,12 @@ export type SessionNotFoundError = {
   message: string
 }
 
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
+}
+
 export type PromptInput = {
   text: string
   files?: Array<PromptInputFileAttachment>
@@ -2725,12 +2731,6 @@ export type ConflictError = {
   _tag: "ConflictError"
   message: string
   resource?: string
-}
-
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
 }
 
 export type MessageNotFoundError = {
@@ -3870,6 +3870,25 @@ export type PermissionV1Status = {
   configured: PermissionRuleset
   approved: PermissionRuleset
   pending: Array<PermissionRequest>
+}
+
+export type SessionWorkStateInfo = {
+  /**
+   * Aggregate subtree activity. Pending interactions take precedence over active work.
+   */
+  type: "idle" | "working" | "blocked"
+  /**
+   * Execution status of the requested session only, excluding descendants and detached shells.
+   */
+  foreground: "idle" | "working"
+  /**
+   * Number of distinct active descendant agent sessions.
+   */
+  agents: number
+  /**
+   * Number of running detached shell jobs in the subtree.
+   */
+  shells: number
 }
 
 export type WorkspaceEventConnectionStatus = {
@@ -9617,6 +9636,40 @@ export type SessionStatusResponses = {
 
 export type SessionStatusResponse = SessionStatusResponses[keyof SessionStatusResponses]
 
+export type SessionActivityData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/activity"
+}
+
+export type SessionActivityErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionActivityError = SessionActivityErrors[keyof SessionActivityErrors]
+
+export type SessionActivityResponses = {
+  /**
+   * Aggregate session activity
+   */
+  200: SessionWorkStateInfo
+}
+
+export type SessionActivityResponse = SessionActivityResponses[keyof SessionActivityResponses]
+
 export type SessionDeleteData = {
   body?: never
   path: {
@@ -11583,6 +11636,47 @@ export type V2SessionActiveResponses = {
 }
 
 export type V2SessionActiveResponse = V2SessionActiveResponses[keyof V2SessionActiveResponses]
+
+export type V2SessionActivityData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/activity"
+}
+
+export type V2SessionActivityErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionActivityError = V2SessionActivityErrors[keyof V2SessionActivityErrors]
+
+export type V2SessionActivityResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionWorkStateInfo
+  }
+}
+
+export type V2SessionActivityResponse = V2SessionActivityResponses[keyof V2SessionActivityResponses]
 
 export type V2SessionGetData = {
   body?: never

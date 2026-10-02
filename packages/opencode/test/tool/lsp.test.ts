@@ -62,6 +62,10 @@ const it = testEffect(
   ]),
 )
 
+const realIt = testEffect(
+  LayerNode.compile(LayerNode.group([Agent.node, FSUtil.node, CrossSpawnSpawner.node, Truncate.node, LSP.node])),
+)
+
 const init = Effect.fn("LspToolTest.init")(function* () {
   const info = yield* LspTool
   return yield* info.init()
@@ -95,6 +99,31 @@ const asks = () => {
 }
 
 describe("tool.lsp", () => {
+  realIt.instance(
+    "navigation does not wait for a server that never publishes diagnostics",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* TestInstance).directory
+        const file = path.join(dir, "silent.repro")
+        yield* put(file)
+        const started = performance.now()
+        const result = yield* run({ operation: "hover", filePath: file, line: 1, character: 1 })
+        expect(result.title).toBe("hover silent.repro:1:1")
+        expect(performance.now() - started).toBeLessThan(3000)
+      }),
+    {
+      git: true,
+      config: {
+        lsp: {
+          silent: {
+            command: [process.execPath, path.join(__dirname, "../fixture/lsp/fake-lsp-server.js")],
+            extensions: [".repro"],
+          },
+        },
+      },
+    },
+  )
+
   describe("permission metadata", () => {
     it.instance(
       "keeps cursor details for position-based operations",

@@ -20,6 +20,14 @@ export const Plugin = define({
         command.description = "review changes [commit|branch|pr], defaults to uncommitted"
         command.subtask = true
       })
+      draft.update("commit", (command) => {
+        command.template = "git: stage and commit this diff in isolation (from other diffs)"
+        command.description = "stage and commit this diff in isolation from other diffs"
+      })
+      draft.update("tests", (command) => {
+        command.template = "verify we have adequate tests for this diff"
+        command.description = "verify we have adequate tests for this diff"
+      })
     })
   }),
 })

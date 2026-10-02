@@ -19,7 +19,7 @@ import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { provideTmpdirInstance, provideTmpdirServer } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -29,6 +29,7 @@ import { LLMEvent } from "@opencode-ai/llm"
 import { Snapshot } from "../../src/snapshot"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Permission } from "../../src/permission"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -212,6 +213,97 @@ const providerErrorLLM = Layer.succeed(
 )
 const providerErrorEnv = LayerNode.compile(root, [...replacements, [LLM.node, providerErrorLLM]])
 const itProviderError = testEffect(providerErrorEnv)
+
+const repeatedToolLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        ...[1, 2, 3].flatMap((index) => [
+          LLMEvent.toolInputStart({ id: `repeat-${index}`, name: "lookup" }),
+          LLMEvent.toolInputEnd({ id: `repeat-${index}`, name: "lookup" }),
+          LLMEvent.toolCall({ id: `repeat-${index}`, name: "lookup", input: {}, providerExecuted: true }),
+          LLMEvent.toolResult({
+            id: `repeat-${index}`,
+            name: "lookup",
+            result: { type: "json", value: "done" },
+            providerExecuted: true,
+          }),
+        ]),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ),
+  }),
+)
+const itRepeatedTool = testEffect(
+  LayerNode.compile(LayerNode.group([root, Permission.node]), [...replacements, [LLM.node, repeatedToolLLM]]),
+)
+
+for (const source of ["session", "role", "grant"] as const) {
+  itRepeatedTool.live(`doom-loop permission honors ${source} restrictions`, () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const services = yield* boot()
+          const permission = yield* Permission.Service
+          const rootSession = yield* services.session.create({
+            permission: Permission.fromConfig(
+              source === "session"
+                ? { doom_loop: "deny" }
+                : source === "grant"
+                  ? { doom_loop: "allow" }
+                  : { "*": "allow" },
+            ),
+          })
+          const chat =
+            source === "role"
+              ? yield* services.session.create({
+                  parentID: rootSession.id,
+                  agent: "general",
+                  permission: Permission.fromConfig({ "*": "allow" }),
+                })
+              : rootSession
+          const parent = yield* user(chat.id, "repeat lookup")
+          const seeded = yield* assistant(chat.id, parent.id, path.resolve(dir))
+          const msg = source === "role" ? { ...seeded, agent: "general", mode: "general" } : seeded
+          yield* services.session.updateMessage(msg)
+          const model = yield* services.provider.getModel(ref.providerID, ref.modelID)
+          const handle = yield* services.processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+          yield* awaitWithTimeout(
+            handle.process({
+              user: {
+                id: parent.id,
+                sessionID: chat.id,
+                role: "user",
+                time: parent.time,
+                agent: parent.agent,
+                model: ref,
+              },
+              sessionID: chat.id,
+              model,
+              agent: agent(),
+              system: [],
+              messages: [{ role: "user", content: "repeat lookup" }],
+              tools: {},
+            }),
+            "doom-loop permission did not settle",
+            "10 seconds",
+          )
+          if (source === "grant") {
+            expect(handle.message.error).toBeUndefined()
+            const parts = yield* MessageV2.parts(msg.id)
+            expect(parts.filter((part) => part.type === "tool" && part.state.status === "completed")).toHaveLength(3)
+          }
+          if (source !== "grant") {
+            expect(handle.message.error?.data).toMatchObject({ message: expect.stringContaining("specified a rule") })
+          }
+          expect(yield* permission.list()).toHaveLength(0)
+        }),
+      { config: { ...cfg, agent: { general: { permission: { doom_loop: "deny" } } } } },
+    ),
+  )
+}
 
 const fragmentFailureLLM = Layer.succeed(
   LLM.Service,

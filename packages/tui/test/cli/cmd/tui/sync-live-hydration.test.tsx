@@ -33,6 +33,111 @@ function global(payload: GlobalEvent["payload"]): GlobalEvent {
   return { directory: "/tmp/other", project: "proj_test", payload }
 }
 
+test("history hydrates before sidebar details and reuses resolved session metadata", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const todo = Promise.withResolvers<Response>()
+  const diff = Promise.withResolvers<Response>()
+  let reads = 0
+  const { app, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) {
+      reads++
+      return json(session)
+    }
+    if (url.pathname === `/session/${sessionID}/message`)
+      return json([{ info: assistant, parts: [{ id: partID, sessionID, messageID, type: "text", text: "history" }] }])
+    if (url.pathname === `/session/${sessionID}/todo`) return todo.promise
+    if (url.pathname === `/session/${sessionID}/diff`) return diff.promise
+  }, tmp.path)
+
+  try {
+    let settled = false
+    const hydrate = sync.session.sync(sessionID, { ...session, projectID: "proj_test", slug: "race" }).then(() => {
+      settled = true
+    })
+    await wait(() => sync.data.message[sessionID]?.length === 1)
+    expect(sync.session.get(sessionID)?.title).toBe("race")
+    expect(sync.data.part[messageID][0]).toMatchObject({ text: "history" })
+    expect(reads).toBe(0)
+    expect(settled).toBe(false)
+
+    todo.resolve(json([{ content: "loaded", status: "pending", priority: "high" }]))
+    diff.resolve(json([{ file: "file.ts", before: "", after: "text", additions: 1, deletions: 0 }]))
+    await hydrate
+    expect(settled).toBe(true)
+    expect(sync.data.todo[sessionID][0].content).toBe("loaded")
+    expect(sync.data.session_diff[sessionID][0].file).toBe("file.ts")
+    await sync.session.sync(sessionID)
+    expect(reads).toBe(0)
+  } finally {
+    todo.resolve(json([]))
+    diff.resolve(json([]))
+    await app.dispose()
+  }
+})
+
+test("reused metadata and independently held sidebar responses preserve live updates", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const messages = Promise.withResolvers<Response>()
+  const todo = Promise.withResolvers<Response>()
+  const diff = Promise.withResolvers<Response>()
+  const requested = new Set<string>()
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}/message`) {
+      requested.add("history")
+      return messages.promise
+    }
+    if (url.pathname === `/session/${sessionID}/todo`) {
+      requested.add("todo")
+      return todo.promise
+    }
+    if (url.pathname === `/session/${sessionID}/diff`) {
+      requested.add("diff")
+      return diff.promise
+    }
+  }, tmp.path)
+  try {
+    const hydrate = sync.session.sync(sessionID, { ...session, projectID: "proj_test", slug: "race" })
+    await wait(() => requested.size === 3)
+    emit(
+      global({
+        id: "evt_new_info",
+        type: "session.updated",
+        properties: { sessionID, info: { ...session, projectID: "proj_test", slug: "race", title: "live title" } },
+      }),
+    )
+    emit(
+      global({
+        id: "evt_new_todo",
+        type: "todo.updated",
+        properties: { sessionID, todos: [{ content: "live todo", status: "pending", priority: "high" }] },
+      }),
+    )
+    emit(
+      global({
+        id: "evt_new_diff",
+        type: "session.diff",
+        properties: { sessionID, diff: [{ file: "live.ts", additions: 1, deletions: 0 }] },
+      }),
+    )
+    await wait(() => sync.session.get(sessionID)?.title === "live title")
+    messages.resolve(json([{ info: assistant, parts: [] }]))
+    await wait(() => sync.data.message[sessionID]?.length === 1)
+    expect(sync.session.get(sessionID)?.title).toBe("live title")
+    todo.resolve(json([{ content: "old todo", status: "pending", priority: "high" }]))
+    diff.resolve(json([{ file: "old.ts", before: "", after: "old", additions: 1, deletions: 0 }]))
+    await hydrate
+    expect(sync.data.todo[sessionID]?.[0]?.content).toBe("live todo")
+    expect(sync.data.session_diff[sessionID]?.[0]?.file).toBe("live.ts")
+  } finally {
+    messages.resolve(json([]))
+    todo.resolve(json([]))
+    diff.resolve(json([]))
+    await app.dispose()
+  }
+})
+
 test("live messages use creation time with an ID tie-break", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")

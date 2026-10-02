@@ -699,6 +699,7 @@ async function run(
       process.exit(1)
     }
     const sessionID = sess.id
+    const failure = { stream: false, request: false }
 
     function emit(type: string, data: Record<string, unknown>) {
       if (args.format === "json") {
@@ -805,7 +806,8 @@ async function run(
 
         if (event.type === "session.error") {
           const props = event.properties
-          if (props.sessionID !== sessionID || !props.error) continue
+          if (props.sessionID !== sessionID || !props.error || failure.request) continue
+          failure.stream = true
           let err = String(props.error.name)
           if ("data" in props.error && props.error.data && "message" in props.error.data) {
             err = String(props.error.data.message)
@@ -877,7 +879,10 @@ async function run(
           variant: args.variant,
         })
         if (result.error) {
-          if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+          // A rejected request may also publish session.error. Emit its failure
+          // once regardless of which transport reports it first.
+          failure.request = true
+          if (!failure.stream && !emit("error", { error: result.error })) UI.error(formatRunError(result.error))
           process.exitCode = 1
           return
         }
@@ -894,7 +899,8 @@ async function run(
         parts: [...files, { type: "text", text: message }],
       })
       if (result.error) {
-        if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+        failure.request = true
+        if (!failure.stream && !emit("error", { error: result.error })) UI.error(formatRunError(result.error))
         process.exitCode = 1
         return
       }

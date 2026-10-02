@@ -20,6 +20,28 @@ const it = testEffect(
   ),
 )
 
+describe("built-in diff commands", () => {
+  it.instance("lists and resolves commit and tests without custom configuration", () =>
+    Effect.gen(function* () {
+      const command = yield* Command.Service
+      const listed = yield* command.list()
+      const commit = yield* command.get(Command.Default.COMMIT)
+      const tests = yield* command.get(Command.Default.TESTS)
+
+      expect(commit).toBe(listed.find((item) => item.name === "commit"))
+      expect(commit?.template).toBe("git: stage and commit this diff in isolation (from other diffs)")
+      expect(commit?.source).toBe("command")
+      expect(commit?.hints).toEqual([])
+      expect(commit?.subtask).toBeUndefined()
+      expect(tests).toBe(listed.find((item) => item.name === "tests"))
+      expect(tests?.template).toBe("verify we have adequate tests for this diff")
+      expect(tests?.source).toBe("command")
+      expect(tests?.hints).toEqual([])
+      expect(tests?.subtask).toBeUndefined()
+    }),
+  )
+})
+
 describe("built-in verify command", () => {
   it.instance("is listed and resolves to a project-specific verification prompt", () =>
     Effect.gen(function* () {

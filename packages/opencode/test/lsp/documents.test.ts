@@ -4,6 +4,154 @@ import { pathToFileURL } from "node:url"
 import { LSPClient } from "@/lsp/client"
 import { tmpdir } from "../fixture/fixture"
 import { documentClient, stats } from "./documents-fixture"
+import { request } from "@/lsp/request"
+
+test("aborting navigation sends cancellation and releases its document pin", () =>
+  withDocuments(async (client, directory) => {
+    const file = path.join(directory, "cancel.ts")
+    await Bun.write(file, "cancel")
+    await client.connection.sendRequest("test/configure", { hold: true })
+    const started = Promise.withResolvers<void>()
+    const listener = client.connection.onNotification("test/hover-started", () => started.resolve())
+    const controller = new AbortController()
+    const result = client
+      .request(
+        "textDocument/hover",
+        {
+          textDocument: { uri: pathToFileURL(file).href },
+        },
+        controller.signal,
+      )
+      .then(
+        () => "resolved",
+        () => "cancelled",
+      )
+    await started.promise
+    controller.abort()
+    expect(await result).toBe("cancelled")
+    listener.dispose()
+    expect(await client.connection.sendRequest<number>("test/cancellations")).toBe(1)
+    await fill(client, directory)
+    const events = await client.connection.sendRequest<{ method: string; uri: string }[]>("test/events")
+    expect(events.some((event) => event.method === "didClose" && event.uri === pathToFileURL(file).href)).toBe(true)
+  }))
+
+test("a request deadline sends cancellation even when the response is withheld", () =>
+  withDocuments(async (client, directory) => {
+    const file = path.join(directory, "timeout.ts")
+    await Bun.write(file, "timeout")
+    await client.notify.open({ path: file })
+    await client.connection.sendRequest("test/configure", { hold: true })
+    const cancelled = Promise.withResolvers<void>()
+    client.connection.onNotification("test/cancelled", () => cancelled.resolve())
+    await expect(
+      request(
+        (token) =>
+          client.connection.sendRequest(
+            "textDocument/hover",
+            {
+              textDocument: { uri: pathToFileURL(file).href },
+            },
+            token,
+          ),
+        { timeout: 1000 },
+      ),
+    ).rejects.toThrow("timed out")
+    await cancelled.promise
+    expect(await client.connection.sendRequest<number>("test/cancellations")).toBe(1)
+  }))
+
+test("idle clients shut down their server process", async () => {
+  await using tmp = await tmpdir()
+  const client = await documentClient(tmp.path, { idleTimeoutMs: 100 })
+  const stopped = Promise.withResolvers<void>()
+  client.connection.onNotification("test/shutdown", () => stopped.resolve())
+  await stopped.promise
+  await client.shutdown()
+  expect(client.connected).toBe(false)
+})
+
+test("a server that ignores cancellation is retired after the grace period", () =>
+  withDocuments(async (client, directory) => {
+    const file = path.join(directory, "uncooperative.ts")
+    await Bun.write(file, "uncooperative")
+    await client.connection.sendRequest("test/configure", { hold: true, ignoreCancellation: true })
+    const started = Promise.withResolvers<void>()
+    const stopped = Promise.withResolvers<void>()
+    client.connection.onNotification("test/hover-started", () => started.resolve())
+    client.connection.onNotification("test/shutdown", () => stopped.resolve())
+    const controller = new AbortController()
+    const response = client
+      .request(
+        "textDocument/hover",
+        {
+          textDocument: { uri: pathToFileURL(file).href },
+        },
+        controller.signal,
+      )
+      .catch(() => null)
+    await started.promise
+    controller.abort()
+    await response
+    await stopped.promise
+    await client.shutdown()
+    expect(client.connected).toBe(false)
+  }))
+
+test("idle reclamation preserves an active navigation request", async () => {
+  await using tmp = await tmpdir()
+  const client = await documentClient(tmp.path, { idleTimeoutMs: 100 })
+  try {
+    const file = path.join(tmp.path, "busy.ts")
+    await Bun.write(file, "busy")
+    await client.connection.sendRequest("test/configure", { hold: true })
+    const started = Promise.withResolvers<void>()
+    client.connection.onNotification("test/hover-started", () => started.resolve())
+    const response = client.request("textDocument/hover", { textDocument: { uri: pathToFileURL(file).href } })
+    await started.promise
+    // Advance past the idle deadline while an actual RPC remains outstanding.
+    await Bun.sleep(150)
+    expect(client.connected).toBe(true)
+    await client.connection.sendRequest("test/release")
+    expect(await response).toEqual({ open: true, text: "busy" })
+  } finally {
+    await client.shutdown()
+  }
+})
+
+test("unsupported navigation is skipped without opening a document", () =>
+  withDocuments(async (client, directory) => {
+    const file = path.join(directory, "unsupported.ts")
+    await Bun.write(file, "unsupported")
+    expect(
+      await client.request("textDocument/definition", { textDocument: { uri: pathToFileURL(file).href } }),
+    ).toBeNull()
+    expect(await stats(client)).toMatchObject({ didOpen: 0 })
+  }))
+
+test("extensionless Dockerfiles open with the Dockerfile language ID", () =>
+  withDocuments(async (client, directory) => {
+    const file = path.join(directory, "Dockerfile")
+    await Bun.write(file, "FROM alpine\n")
+    await client.notify.open({ path: file })
+    const events = await client.connection.sendRequest<{ method: string; languageId?: string }[]>("test/events")
+    expect(events.find((event) => event.method === "didOpen")?.languageId).toBe("dockerfile")
+  }))
+
+test("workspace diagnostic retention is bounded without discarding open files", () =>
+  withDocuments(async (client, directory) => {
+    const file = path.join(directory, "active.ts")
+    await Bun.write(file, "active")
+    await client.notify.open({ path: file })
+    for (let i = 0; i < 1030; i++) {
+      await client.connection.sendRequest("test/publish", {
+        uri: pathToFileURL(path.join(directory, `workspace-${i}.ts`)).href,
+        diagnostics: [],
+      })
+    }
+    expect([...client.diagnosticFiles()].length).toBeLessThanOrEqual(1024)
+    expect(client.diagnosticsFor(file)?.[0]?.message).toBe("fixture diagnostic")
+  }))
 
 async function withDocuments(fn: (client: LSPClient.Info, directory: string) => Promise<void>) {
   await using tmp = await tmpdir()

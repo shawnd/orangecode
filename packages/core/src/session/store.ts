@@ -1,6 +1,6 @@
 export * as SessionStore from "./store"
 
-import { eq } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -13,6 +13,7 @@ import { fromRow } from "./info"
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info | undefined>
+  readonly family: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info[]>
   readonly context: (sessionID: SessionSchema.ID) => Effect.Effect<SessionMessage.Message[], MessageDecodeError>
   readonly runnerContext: (
     sessionID: SessionSchema.ID,
@@ -35,6 +36,27 @@ const layer = Layer.effect(
       get: Effect.fn("SessionStore.get")(function* (sessionID) {
         const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
         return row ? fromRow(row) : undefined
+      }),
+      family: Effect.fn("SessionStore.family")(function* (sessionID) {
+        const rows = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        const family = new Map(rows.map((row) => [row.id, fromRow(row)]))
+        let parents = rows.map((row) => row.id)
+        while (parents.length) {
+          const children = yield* db
+            .select()
+            .from(SessionTable)
+            .where(inArray(SessionTable.parent_id, parents))
+            .all()
+            .pipe(Effect.orDie)
+          parents = children.filter((row) => !family.has(row.id)).map((row) => row.id)
+          children.forEach((row) => family.set(row.id, fromRow(row)))
+        }
+        return [...family.values()]
       }),
       context: Effect.fn("SessionStore.context")(function* (sessionID) {
         return yield* SessionHistory.load(db, sessionID)
