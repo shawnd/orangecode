@@ -16,6 +16,7 @@ import { Prompt } from "../component/prompt"
 import type { useToast } from "../ui/toast"
 import * as Keymap from "../keymap"
 import { createCommandShim } from "./command-shim"
+import type { PromptInfo } from "../prompt/history"
 import type { PluginRoutes } from "./api"
 export type { RouteMap } from "./api"
 export { createPluginRoutes, createTuiApi } from "./api"
@@ -39,15 +40,24 @@ type Input = {
 }
 
 function routeNavigate(route: ReturnType<typeof useRoute>, name: string, params?: Record<string, unknown>) {
+  const prompt =
+    params?.prompt &&
+    typeof params.prompt === "object" &&
+    "input" in params.prompt &&
+    typeof params.prompt.input === "string" &&
+    "parts" in params.prompt &&
+    Array.isArray(params.prompt.parts)
+      ? (params.prompt as PromptInfo)
+      : undefined
   if (name === "home") {
-    route.navigate({ type: "home" })
+    route.navigate({ type: "home", ...(prompt ? { prompt } : {}) })
     return
   }
 
   if (name === "session") {
     const sessionID = params?.sessionID
     if (typeof sessionID !== "string") return
-    route.navigate({ type: "session", sessionID })
+    route.navigate({ type: "session", sessionID, ...(prompt ? { prompt } : {}) })
     return
   }
 

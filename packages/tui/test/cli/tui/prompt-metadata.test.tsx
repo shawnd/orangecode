@@ -43,6 +43,7 @@ import { TuiStartupProvider, type EarlyInput } from "../../../src/context/runtim
 import { useStartupModelDialog } from "../../../src/component/startup-model-dialog"
 import type { StartupSlashDraft } from "../../../src/startup/slashes"
 import { chmod } from "node:fs/promises"
+import { annotationPrompt } from "../../../src/feature-plugins/system/diff-viewer-review"
 
 async function mount(
   root: string,
@@ -298,6 +299,55 @@ async function mount(
     },
   }
 }
+
+test("submitting compact annotations sends expanded review text and preserves attachments", async () => {
+  await using tmp = await tmpdir()
+  await using view = await mount(tmp.path, "parent")
+  await view.waitForFrame((frame) => frame.includes("Metadata Model"))
+  view.prompt().set(
+    annotationPrompt(
+      [
+        {
+          id: "a",
+          file: "review.ts",
+          source: "working tree",
+          hunk: "@@ -1 +1 @@",
+          side: "new",
+          start: 1,
+          end: 1,
+          preview: "changed",
+          comment: "Preserve the behavior",
+        },
+      ],
+      {
+        input: "Review [Image 1]",
+        parts: [
+          {
+            type: "file",
+            mime: "image/png",
+            url: "data:image/png;base64,aW1hZ2U=",
+            source: { type: "file", path: "image.png", text: { value: "[Image 1]", start: 7, end: 16 } },
+          },
+        ],
+      },
+    ),
+  )
+  await view.waitForFrame((frame) => frame.includes("Diff annotations · edit"))
+  view.app.mockInput.pressEnter()
+  await view.waitForFrame(() => view.submitted.length === 1 && view.prompt().current.input === "")
+  expect(view.submitted[0]).toMatchObject({
+    path: "/session/parent/message",
+    body: {
+      parts: [
+        {
+          type: "text",
+          text: "Review [Image 1]\n\nPlease address these diff review annotations:\n\n1. review.ts:1 (new, working tree)\nComment: Preserve the behavior\nSelected code:\n    changed",
+        },
+        { type: "file", mime: "image/png", url: "data:image/png;base64,aW1hZ2U=" },
+      ],
+    },
+  })
+})
 
 test("prompt context meter restores pre-compaction usage on undo and compacted usage on redo", async () => {
   await using tmp = await tmpdir()
