@@ -19,6 +19,7 @@ import {
   onCleanup,
   on,
   Show,
+  For,
   Switch,
   Match,
   useContext,
@@ -90,6 +91,7 @@ import { cacheStartupPresentation } from "../../startup/cache"
 import type { StartupSlashDraft } from "../../startup/slashes"
 import { gatherHerdrSessions, parseHerdrCommand, type HerdrScope } from "../../util/herdr-sessions"
 import { DialogSelect } from "../../ui/dialog-select"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 
 registerOpencodeSpinner()
 
@@ -169,6 +171,14 @@ function formatEditorContext(selection: EditorSelection) {
 }
 
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
+let activePrompt: PromptRef | undefined
+
+export function getPromptDraft(): PromptInfo | undefined {
+  // Plugin route memos can render before the previous route's prompt unmounts.
+  // Read the live draft in that case, and the handoff stash after unmount.
+  const prompt = activePrompt?.current ?? stashed?.prompt
+  return prompt ? structuredClone(unwrap(prompt)) : undefined
+}
 
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
@@ -828,6 +838,7 @@ export function Prompt(props: PromptProps) {
 
   onCleanup(() => {
     herdrRequest++
+    if (activePrompt === ref) activePrompt = undefined
     if (store.prompt.input) {
       stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
     }
@@ -900,6 +911,47 @@ export function Prompt(props: PromptProps) {
         })
       }
     })
+  }
+
+  function editAnnotationDraft(part: Extract<PromptInfo["parts"][number], { type: "text" }>, expand = false) {
+    if (props.disabled) return
+    const replace = (text: string, expanded: boolean) => {
+      const mark = input.extmarks
+        .getAllForTypeId(promptPartTypeId)
+        .find((mark) => store.extmarkToPartIndex.get(mark.id) === store.prompt.parts.indexOf(part))
+      if (!mark || !part.source) return
+      const value = expanded ? text : text.trim() ? part.source.text.value : ""
+      const delta = value.length - (mark.end - mark.start)
+      const parts = store.prompt.parts.flatMap<PromptInfo["parts"][number]>((item) => {
+        if (item === part) return expanded || !text.trim() ? [] : [{ ...part, text }]
+        const source = item.type === "agent" ? item.source : item.source?.text
+        if (!source || source.start < mark.end) return [item]
+        const moved = { ...source, start: source.start + delta, end: source.end + delta }
+        if (item.type === "agent") return [{ ...item, source: moved }]
+        if (item.type === "file" && item.source) return [{ ...item, source: { ...item.source, text: moved } }]
+        if (item.type === "text") return [{ ...item, source: { text: moved } }]
+        return [item]
+      })
+      ref.set({
+        ...store.prompt,
+        input: store.prompt.input.slice(0, mark.start) + value + store.prompt.input.slice(mark.end),
+        parts,
+      })
+      dialog.clear()
+    }
+    if (expand) return replace(part.text, true)
+    dialog.replace(() => (
+      <DialogPrompt
+        title="Edit diff annotations"
+        value={part.text}
+        height={Math.min(16, Math.max(3, dimensions().height - 10))}
+        description={() => (
+          <text fg={theme.textMuted}>Edit the review message below. Save empty text to remove it.</text>
+        )}
+        onConfirm={(value) => replace(value, false)}
+      />
+    ))
+    dialog.setSize("large")
   }
 
   function syncExtmarksWithPromptParts() {
@@ -1796,6 +1848,23 @@ export function Prompt(props: PromptProps) {
             <Show when={herdrGathering()}>
               <text fg={theme.textMuted}>Gathering Herdr sessions…</text>
             </Show>
+            <For
+              each={store.prompt.parts.filter(
+                (part): part is Extract<PromptInfo["parts"][number], { type: "text" }> =>
+                  part.type === "text" && part.metadata?.kind === "diff_annotations",
+              )}
+            >
+              {(part) => (
+                <box flexDirection="row" gap={1}>
+                  <text fg={theme.primary} onMouseUp={() => editAnnotationDraft(part)}>
+                    ✎ Diff annotations · edit
+                  </text>
+                  <text fg={theme.textMuted} onMouseUp={() => editAnnotationDraft(part, true)}>
+                    expand into input
+                  </text>
+                </box>
+              )}
+            </For>
             <textarea
               width="100%"
               placeholder={placeholderText()}
@@ -1859,6 +1928,7 @@ export function Prompt(props: PromptProps) {
                 if (promptPartTypeId === 0) {
                   promptPartTypeId = input.extmarks.registerType("prompt-part")
                 }
+                activePrompt = ref
                 props.ref?.(ref)
                 setTimeout(() => {
                   // setTimeout is a workaround and needs to be addressed properly
