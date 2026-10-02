@@ -304,6 +304,10 @@ for (const width of [80, 160]) {
       expect(viewer.app.captureCharFrame()).toContain("▎")
       viewer.commands.get("diff.mark_reviewed")!.run?.({} as never)
       await stable()
+      // Style rebuilds mutate sign/color maps in place. The cached highlight must
+      // still refresh when OpenTUI replaces its source-number map.
+      expect([...panes[0].getLineSigns().values()].some((sign) => sign.before === "▶")).toBe(true)
+      expect([...panes[0].getLineSigns().values()].some((sign) => sign.before === "▎")).toBe(true)
       // Moving to another hunk must not release the previous gutter reservation.
       const nextPane = nodes[1].getChildren().find((node) => node instanceof LineNumberRenderable)!
       const nextCode = nextPane.getChildren().find((node) => node instanceof CodeRenderable) as CodeRenderable
@@ -608,6 +612,52 @@ for (const width of [80, 160]) {
     }
   })
 
+  test(`${width === 80 ? "unified" : "split"} navigation follows wrapped source rows after resize and skips context-only hunks`, async () => {
+    const viewer = await renderDiffViewer(
+      [
+        {
+          ...reviewPatch,
+          patch:
+            "--- a/src/review.txt\n+++ b/src/review.txt\n@@ -1,4 +1,4 @@\n context\n-" +
+            "long old ".repeat(30) +
+            "\n-old two\n+new one\n+new two\n tail\n@@ -20 +20 @@\n only context\n@@ -40,0 +40,2 @@\n+last one\n+last two",
+        },
+      ],
+      45,
+      undefined,
+      width,
+    )
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("old two"))
+      const pane = findDiff(viewer.app.renderer.root)!.getChildren()[0] as LineNumberRenderable
+      const code = pane.getChildren().find((node) => node instanceof CodeRenderable) as CodeRenderable
+      const row = code.lineInfo.lineSources.findIndex((row) => pane.getLineNumbers().get(row) === 2)
+      await viewer.app.mockMouse.click(code.x + 1, code.y + row)
+      viewer.app.mockInput.pressArrow("down")
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ old:3"))
+      const height = findDiff(viewer.app.renderer.root)!.height
+      viewer.app.resize(width + 30, 45)
+      await viewer.app.flush()
+      expect(findDiff(viewer.app.renderer.root)!.height).toBeLessThan(height)
+      viewer.app.mockInput.pressArrow("up")
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ old:2"))
+      viewer.app.mockInput.pressKey("\x1b[1;1:2B".repeat(width === 80 ? 4 : 2))
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ new:40"))
+      viewer.app.mockInput.typeText("t")
+      viewer.app.mockInput.pressArrow("up")
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ new:20"))
+      viewer.app.mockInput.typeText("t")
+      viewer.app.mockInput.pressArrow("up")
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ new:3"))
+      viewer.commands.get("diff.toggle_view")!.run?.({} as never)
+      await viewer.app.flush()
+      viewer.app.mockInput.pressArrow("down")
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ new:40"))
+    } finally {
+      await viewer.dispose()
+    }
+  })
+
   test(`mouse ${width === 80 ? "unified" : "split"} deleted-line range creates a compact draft preserving existing input`, async () => {
     const viewer = await renderDiffViewer(
       [reviewPatch],
@@ -716,6 +766,95 @@ test("active-line navigation skips folded hunks and continues across files", asy
     await viewer.dispose()
   }
 })
+
+test.each([80, 160])(
+  "large diff arrow bursts cross hunk and file boundaries in both directions (%i columns)",
+  async (width) => {
+    const viewer = await renderDiffViewer(
+      Array.from({ length: 20 }, (_, file) => ({
+        file: `file-${String(file).padStart(2, "0")}.txt`,
+        additions: 200,
+        deletions: 0,
+        status: "modified",
+        patch:
+          `--- a/file-${file}.txt\n+++ b/file-${file}.txt\n` +
+          Array.from(
+            { length: 10 },
+            (_, hunk) =>
+              `@@ -${hunk * 100 + 1},0 +${hunk * 100 + 1},20 @@\n` +
+              Array.from({ length: 20 }, (_, line) => `+file${file} hunk${hunk} row${line + 1}`).join("\n"),
+          ).join("\n"),
+      })),
+      28,
+      undefined,
+      width,
+    )
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("file0 hunk0 row1"))
+      viewer.app.mockInput.pressArrow("down")
+      // Deliver the burst after the first reveal's layout, while its second RAF
+      // is still pending. New input must receive its own post-layout correction.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => viewer.app.renderer.once("frame", () => resolve())),
+      )
+      const expectVisible = (text: string) => {
+        const viewport = findScrollBox(viewer.app.renderer.root)!.viewport
+        const row = viewer.app
+          .captureCharFrame()
+          .split("\n")
+          .findIndex((line) => line.includes(text) && line.includes("▶"))
+        expect(row).toBeGreaterThanOrEqual(viewport.y)
+        expect(row).toBeLessThan(viewport.y + viewport.height)
+      }
+      const samples = []
+      for (let trial = 0; trial < 3; trial++) {
+        const start = performance.now()
+        viewer.app.mockInput.pressKey("\x1b[1;1:2B".repeat(205))
+        samples.push(performance.now() - start)
+        await viewer.app.waitForFrame((frame) => frame.includes("▶ new:6"))
+        await viewer.app.flush()
+        expectVisible("file1 hunk0 row6")
+        const scrollTop = findScrollBox(viewer.app.renderer.root)!.scrollTop
+        for (let frame = 0; frame < 3; frame++) {
+          await viewer.app.renderOnce()
+          expectVisible("file1 hunk0 row6")
+          expect(findScrollBox(viewer.app.renderer.root)!.scrollTop).toBe(scrollTop)
+        }
+        expect(viewer.app.captureCharFrame()).toContain("▶ new:6")
+        viewer.commands.get("diff.annotate")!.run?.({} as never)
+        await viewer.app.waitForFrame((frame) => frame.includes("file-01.txt:6 (new, working tree)"))
+        viewer.commands.get("dialog.prompt.submit")!.run?.({} as never)
+        await viewer.app.flush()
+        viewer.app.mockInput.pressKey("\x1b[1;1:2A".repeat(205))
+        await viewer.app.waitForFrame((frame) => frame.includes("file0 hunk0 row1") && frame.includes("▶ new:1"))
+        await viewer.app.flush()
+        expectVisible("file0 hunk0 row1")
+        expect(viewer.app.captureCharFrame()).toContain("▶ new:1")
+        expect(viewer.app.captureCharFrame()).toContain("file0 hunk0 row1")
+      }
+      if (process.env.DIFF_NAV_BENCH) console.log(JSON.stringify({ width, arrowBurst205Milliseconds: samples }))
+      viewer.app.mockInput.pressKey("\x1b[6~")
+      await viewer.app.waitForFrame((frame) => /▶ new:10\d/.test(frame))
+      viewer.app.mockInput.pressKey("\x1b[5~")
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ new:1"))
+      viewer.app.mockInput.pressKey("\x1b[6~".repeat(200))
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ new:920"))
+      await viewer.app.flush()
+      expectVisible("file19 hunk9 row20")
+      viewer.commands.get("diff.annotate")!.run?.({} as never)
+      await viewer.app.waitForFrame((frame) => frame.includes("file-19.txt:920 (new, working tree)"))
+      viewer.commands.get("dialog.prompt.submit")!.run?.({} as never)
+      await viewer.app.flush()
+      viewer.app.mockInput.pressKey("\x1b[5~".repeat(200))
+      await viewer.app.waitForFrame((frame) => frame.includes("▶ new:1") && frame.includes("file0 hunk0 row1"))
+      await viewer.app.flush()
+      expectVisible("file0 hunk0 row1")
+    } finally {
+      await viewer.dispose()
+    }
+  },
+  30000,
+)
 
 test("source switching carries annotations and the original prompt draft", async () => {
   const note = {

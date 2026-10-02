@@ -565,33 +565,35 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     return true
   }
 
-  const patchLines = () =>
+  const patchNodes = () =>
     visiblePatchFiles().flatMap((entry) =>
       (patchHunks()[entry.fileIndex] ?? []).flatMap((_, hunkIndex) => {
         if (review.collapsed[`${entry.fileIndex}`] || review.collapsed[`${entry.fileIndex}:${hunkIndex}`]) return []
         const node = diffNodes.get(`${entry.fileIndex}:${hunkIndex}`)
         if (!node || node.isDestroyed) return []
-        return diffLines(node, review.selection?.side).map((line) => ({
-          ...line,
-          fileIndex: entry.fileIndex,
-          hunkIndex,
-        }))
+        return [{ node, fileIndex: entry.fileIndex, hunkIndex }]
       }),
     )
+
+  const patchLines = (patch: ReturnType<typeof patchNodes>[number]) =>
+    diffLines(patch.node, review.selection?.side).map((line) => ({
+      ...line,
+      fileIndex: patch.fileIndex,
+      hunkIndex: patch.hunkIndex,
+    }))
 
   const revealActiveLine = () => {
     if (!scroll || !review.selection) return
     const selection = review.selection
-    const lines = patchLines()
-    const line = lines.find(
-      (line) =>
-        line.fileIndex === selection.fileIndex &&
-        line.hunkIndex === selection.hunkIndex &&
-        line.side === selection.side &&
-        line.line === selection.line,
+    const patches = patchNodes()
+    const patch = patches.find(
+      (patch) => patch.fileIndex === selection.fileIndex && patch.hunkIndex === selection.hunkIndex,
     )
+    if (!patch) return
+    const lines = diffLines(patch.node, selection.side)
+    const line = lines.find((line) => line.side === selection.side && line.line === selection.line)
     if (!line) return
-    if (line === lines[0]) {
+    if (patch === patches[0] && line === lines[0]) {
       scroll.scrollTo(0)
       return
     }
@@ -605,41 +607,62 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     if (line.y >= bottom) scroll.scrollBy(line.y - bottom + 1)
   }
 
-  let pendingLineScroll = false
+  let pendingLineScroll = 0
+  const revealPendingLine = () => {
+    revealActiveLine()
+    if (--pendingLineScroll > 0) requestAnimationFrame(revealPendingLine)
+  }
   const movePatchLine = (offset: number) => {
     if (!scroll) return
-    const all = patchLines()
-    const lines = navigation() === "changes" ? all.filter((line) => line.changed) : all
-    if (!lines.length) {
-      scroll.scrollBy(offset)
-      return
-    }
+    const patches = patchNodes()
     const selection = review.selection
-    const current = selection
-      ? lines.findIndex(
-          (line) =>
-            line.fileIndex === selection.fileIndex &&
-            line.hunkIndex === selection.hunkIndex &&
-            line.side === selection.side &&
-            line.line === selection.line,
-        )
+    const patchIndex = selection
+      ? patches.findIndex((patch) => patch.fileIndex === selection.fileIndex && patch.hunkIndex === selection.hunkIndex)
       : -1
-    const hunk = selection ? hunkNodes.get(`${selection.fileIndex}:${selection.hunkIndex}`) : undefined
-    const active = selection
-      ? all.find(
-          (line) =>
-            line.fileIndex === selection.fileIndex &&
-            line.hunkIndex === selection.hunkIndex &&
-            line.side === selection.side &&
-            line.line === selection.line,
-        )
-      : undefined
-    const y = active?.y ?? (hunk && !hunk.isDestroyed ? hunk.y : scroll.viewport.y)
-    const nearest = offset > 0 ? lines.findIndex((line) => line.y >= y) : lines.findLastIndex((line) => line.y <= y)
-    if (current === -1 && active && nearest === -1) return
-    const origin = current === -1 ? (nearest === -1 ? (offset > 0 ? lines.length - 1 : 0) : nearest) : current
-    const next =
-      lines[Math.max(0, Math.min(lines.length - 1, origin + offset - (current === -1 ? Math.sign(offset) : 0)))]
+    const rows = patchIndex === -1 ? [] : patchLines(patches[patchIndex])
+    const eligible = (lines: typeof rows) => (navigation() === "changes" ? lines.filter((line) => line.changed) : lines)
+    const lines = eligible(rows)
+    const current = selection
+      ? lines.findIndex((line) => line.side === selection.side && line.line === selection.line)
+      : -1
+    const next = (() => {
+      if (current !== -1) {
+        // Held arrows usually stay in one hunk. Read neighboring hunks only when
+        // crossing a boundary; native lineInfo getters allocate fresh row arrays.
+        // Geometry remains live, so wrapping, folds, and view changes need no cache.
+        const direction = Math.sign(offset)
+        let remaining = Math.abs(offset)
+        let target = lines[current]
+        for (let index = patchIndex; index >= 0 && index < patches.length; index += direction) {
+          const candidates = index === patchIndex ? lines : eligible(patchLines(patches[index]))
+          const origin = index === patchIndex ? current : direction > 0 ? -1 : candidates.length
+          const available = direction > 0 ? candidates.length - origin - 1 : origin
+          if (remaining <= available) return candidates[origin + direction * remaining]
+          if (available) target = candidates[direction > 0 ? candidates.length - 1 : 0]
+          remaining -= available
+        }
+        return target
+      }
+      // Initial selection, a folded selection, or a mouse-selected context line
+      // needs the nearest eligible screen row rather than a relative source row.
+      const all = patches.flatMap((patch, index) => (index === patchIndex ? rows : patchLines(patch)))
+      const candidates = eligible(all)
+      if (!candidates.length) {
+        scroll!.scrollBy(offset)
+        return
+      }
+      const hunk = selection ? hunkNodes.get(`${selection.fileIndex}:${selection.hunkIndex}`) : undefined
+      const active = selection
+        ? rows.find((line) => line.side === selection.side && line.line === selection.line)
+        : undefined
+      const y = active?.y ?? (hunk && !hunk.isDestroyed ? hunk.y : scroll!.viewport.y)
+      const nearest =
+        offset > 0 ? candidates.findIndex((line) => line.y >= y) : candidates.findLastIndex((line) => line.y <= y)
+      if (active && nearest === -1) return
+      const origin = nearest === -1 ? (offset > 0 ? candidates.length - 1 : 0) : nearest
+      return candidates[Math.max(0, Math.min(candidates.length - 1, origin + offset - Math.sign(offset)))]
+    })()
+    if (!next) return
     if (selectedFileIndex() !== next.fileIndex) selectPatchFile(next.fileIndex)
     setSelectedHunk({ fileIndex: next.fileIndex, hunkIndex: next.hunkIndex, scrollTop: scroll.scrollTop })
     setReview("selection", {
@@ -651,15 +674,11 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     })
     // Key repeats can arrive faster than a frame. Advance the cursor immediately
     // and reveal the latest target once layout (including selection footers) settles.
-    if (pendingLineScroll) return
-    pendingLineScroll = true
-    requestAnimationFrame(() => {
-      revealActiveLine()
-      requestAnimationFrame(() => {
-        pendingLineScroll = false
-        revealActiveLine()
-      })
-    })
+    // Reset both passes for new input even between callbacks: the first reveal
+    // can bring an offscreen file into layout and change its source row's y.
+    const scheduled = pendingLineScroll > 0
+    pendingLineScroll = 2
+    if (!scheduled) requestAnimationFrame(revealPendingLine)
   }
 
   let held: { name: string; stop: () => void } | undefined

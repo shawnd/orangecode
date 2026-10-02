@@ -79,28 +79,41 @@ export function diffLines(node: DiffRenderable, preferred: "old" | "new" = "new"
   return [...lines.values()].sort((left, right) => left.y - right.y)
 }
 
+const reservedGutters = new WeakMap<LineNumberRenderable, Map<number, number>>()
+
 export function highlightDiffSelection(
   node: DiffRenderable,
   selection: { side: "old" | "new"; anchor: number; line: number } | undefined,
   colors: { range: RGBA; current: RGBA; accent: RGBA },
 ) {
   const original = new Map<LineNumberRenderable, Map<number, { color: LineColorConfig; sign?: LineSign }>>()
+  const applied = new Map<LineNumberRenderable, Map<number, number>>()
   // Diff rebuilds its gutter maps after wrapping, syntax highlighting, and style
   // changes. Keep a marker cell in every pane, even without a selection: changing
   // the maximum sign width changes code wrapping on the next layout pass.
   const apply = () => {
     node.getChildren().forEach((pane, index) => {
       if (!(pane instanceof LineNumberRenderable)) return
+      const numbers = pane.getLineNumbers()
+      // OpenTUI replaces the source-number map whenever it rebuilds the gutter
+      // (including style and wrap changes), but mutates signs/colors in place.
+      // Use that revision to avoid scanning every row on every render pass.
+      if (applied.get(pane) === numbers) return
       const signs = pane.getLineSigns()
-      const missing = [...pane.getLineNumbers().keys()].filter((row) => !signs.get(row)?.before)
-      if (missing.length)
-        pane.setLineSigns(
-          new Map([...signs, ...missing.map((row) => [row, { ...signs.get(row), before: " " }] as const)]),
-        )
+      if (reservedGutters.get(pane) !== numbers) {
+        const missing = [...numbers.keys()].filter((row) => !signs.get(row)?.before)
+        if (missing.length)
+          pane.setLineSigns(
+            new Map([...signs, ...missing.map((row) => [row, { ...signs.get(row), before: " " }] as const)]),
+          )
+        reservedGutters.set(pane, numbers)
+      }
+      applied.set(pane, numbers)
       if (!selection) return
       const saved = original.get(pane) ?? new Map<number, { color: LineColorConfig; sign?: LineSign }>()
       original.set(pane, saved)
-      pane.getLineNumbers().forEach((line, row) => {
+      const updates = new Map<number, LineSign>()
+      numbers.forEach((line, row) => {
         const sign = pane.getLineSigns().get(row)
         const side = node.view === "split" ? (index === 0 ? "old" : "new") : sign?.after?.includes("-") ? "old" : "new"
         if (
@@ -116,15 +129,20 @@ export function highlightDiffSelection(
         if (current.content.get(row) === color && current.gutter.get(row) === color && sign?.before === marker) return
         saved.set(row, { color: { gutter: current.gutter.get(row), content: current.content.get(row) }, sign })
         pane.setLineColor(row, { gutter: color, content: color })
-        pane.setLineSign(row, { ...sign, before: marker, beforeColor: colors.accent })
+        updates.set(row, { ...sign, before: marker, beforeColor: colors.accent })
       })
+      // Every setLineSign recalculates widths across the entire gutter. Batch a
+      // selected range so applying its markers is linear rather than quadratic.
+      if (updates.size) pane.setLineSigns(new Map([...pane.getLineSigns(), ...updates]))
     })
   }
   return {
     apply,
     clear() {
+      applied.clear()
       original.forEach((rows, pane) => {
         if (pane.isDestroyed) return
+        const updates = new Map<number, LineSign | undefined>()
         rows.forEach((saved, row) => {
           const color = pane.getLineColors().content.get(row)
           if (color === colors.current || color === colors.range) {
@@ -133,10 +151,15 @@ export function highlightDiffSelection(
           }
           const sign = pane.getLineSigns().get(row)
           if (sign?.beforeColor !== colors.accent) return
-          if (saved.sign) pane.setLineSign(row, saved.sign)
-          else pane.clearLineSign(row)
+          updates.set(row, saved.sign)
         })
+        if (updates.size) {
+          const signs = new Map(pane.getLineSigns())
+          updates.forEach((sign, row) => (sign ? signs.set(row, sign) : signs.delete(row)))
+          pane.setLineSigns(signs)
+        }
       })
+      original.clear()
     },
   }
 }
