@@ -62,6 +62,21 @@ async function gone(pid: number, timeout = 5_000) {
 describe("cross-spawn spawner", () => {
   describe("basic spawning", () => {
     fx.effect(
+      "retains short-lived output until a late consumer subscribes",
+      Effect.gen(function* () {
+        const handle = yield* ChildProcess.make(process.execPath, [
+          "-e",
+          'process.stdout.end("late stdout"); process.stderr.end("late stderr")',
+        ])
+        expect(yield* handle.exitCode).toBe(ChildProcessSpawner.ExitCode(0))
+        const output = yield* Effect.all([decodeByteStream(handle.stdout), decodeByteStream(handle.stderr)], {
+          concurrency: 2,
+        })
+        expect(output).toEqual(["late stdout", "late stderr"])
+      }),
+    )
+
+    fx.effect(
       "captures stdout",
       Effect.gen(function* () {
         const out = yield* ChildProcessSpawner.ChildProcessSpawner.use((svc) =>
@@ -257,7 +272,31 @@ describe("cross-spawn spawner", () => {
       }),
     )
 
-    fx.effect(
+    for (const boundary of ["scope teardown", "explicit kill"]) {
+      fx.live(
+        `${boundary} reaps a producer with unconsumed backpressured output`,
+        Effect.gen(function* () {
+          const pid = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const handle = yield* js(
+                'process.stdout.write(Buffer.alloc(4 * 1024 * 1024, 120)); process.stderr.end("ready"); setInterval(() => {}, 1000)',
+                { forceKillAfter: 100 },
+              )
+              expect(yield* decodeByteStream(handle.stderr)).toBe("ready")
+              if (boundary === "explicit kill") {
+                yield* handle.kill({ forceKillAfter: 100 })
+                yield* decodeByteStream(handle.stdout)
+              }
+              return Number(handle.pid)
+            }),
+          )
+          expect(yield* Effect.promise(() => gone(pid))).toBe(true)
+        }),
+        5000,
+      )
+    }
+
+    fx.live(
       "forceKillAfter escalates for stubborn processes",
       Effect.gen(function* () {
         if (process.platform === "win32") return
@@ -265,7 +304,10 @@ describe("cross-spawn spawner", () => {
         const started = Date.now()
         const exit = yield* Effect.exit(
           Effect.gen(function* () {
-            const handle = yield* js('process.on("SIGTERM", () => {}); setInterval(() => {}, 10_000)')
+            const handle = yield* js(
+              'process.on("SIGTERM", () => {}); process.stderr.end("ready"); setInterval(() => {}, 10_000)',
+            )
+            expect(yield* decodeByteStream(handle.stderr)).toBe("ready")
             yield* handle.kill({ forceKillAfter: 100 })
             return yield* handle.exitCode
           }),

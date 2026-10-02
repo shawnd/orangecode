@@ -111,4 +111,27 @@ describe("McpOAuthCallback.ensureRunning", () => {
     expect(await canConnect("127.0.0.1", port)).toBe(true)
     expect(await canConnect("::1", port)).toBe(false)
   })
+
+  test("overlapping redirect ports and paths retain independent endpoint/state ownership", async () => {
+    const firstPort = await getFreeLoopbackPort()
+    const secondPort = await getFreeLoopbackPort()
+    const first = `http://127.0.0.1:${firstPort}/a`
+    const second = `http://127.0.0.1:${secondPort}/b`
+    const third = `http://127.0.0.1:${firstPort}/c`
+    await Promise.all([McpOAuthCallback.ensureRunning(first), McpOAuthCallback.ensureRunning(second), McpOAuthCallback.ensureRunning(third)])
+    const a = McpOAuthCallback.waitForCallback("state-a", first)
+    const b = McpOAuthCallback.waitForCallback("state-b", second)
+    const c = McpOAuthCallback.waitForCallback("state-c", third)
+    expect((await fetch(`${first}?state=state-b&code=foreign`)).status).toBe(400)
+    expect((await fetch(`${third}?state=state-a&code=foreign`)).status).toBe(400)
+    expect((await fetch(`${second}?code=foreign`)).status).toBe(400)
+    expect((await fetch(`${first}?state=state-a&code=a`)).status).toBe(200)
+    expect(await a).toBe("a")
+    expect(await canConnect("127.0.0.1", firstPort)).toBe(true)
+    expect((await fetch(`${second}?state=state-b&code=b`)).status).toBe(200)
+    expect(await b).toBe("b")
+    expect((await fetch(`${third}?state=state-c&code=c`)).status).toBe(200)
+    expect(await c).toBe("c")
+    expect(McpOAuthCallback.isRunning()).toBe(false)
+  })
 })

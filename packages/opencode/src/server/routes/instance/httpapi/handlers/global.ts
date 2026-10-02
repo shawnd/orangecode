@@ -72,9 +72,11 @@ export function eventResponse(
       subscribe(offer, stop) {
         return Effect.gen(function* () {
           let seeding = true
+          let stopped = false
           let bytes = 0
           const pending: GlobalBusEvent[] = []
           const handler = (event: GlobalBusEvent) => {
+            if (stopped) return
             if (!seeding) {
               if (!interest || interest.accepts(event)) offer(event)
               return
@@ -82,8 +84,7 @@ export function eventResponse(
             // Database seeding must not create an unbounded secondary backlog.
             bytes += Buffer.byteLength(JSON.stringify(event))
             if (bytes > EventBuffer.eventBufferBudget.bytes || pending.length >= EventBuffer.eventBufferBudget.events) {
-              GlobalBus.off("event", handler)
-              pending.length = 0
+              cleanup()
               stop("overflow")
               return
             }
@@ -96,13 +97,18 @@ export function eventResponse(
                 handler({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })
               }, 10_000)
               return () => {
+                if (stopped) return
+                stopped = true
                 clearInterval(timer)
                 GlobalBus.off("event", handler)
+                pending.length = 0
+                bytes = 0
               }
             }),
             (cleanup) => Effect.sync(cleanup),
           )
           const sessions = interest && db ? yield* interest.seed(db) : undefined
+          if (stopped) return cleanup
           offer({
             payload: {
               id: EventV2.ID.create(),

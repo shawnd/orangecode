@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { NodeServices } from "@effect/platform-node"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { stat } from "node:fs/promises"
+import { chmod, stat } from "node:fs/promises"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { Daemon } from "../../src/cli/daemon"
 import { tmpdirScoped } from "../fixture/fixture"
@@ -185,7 +185,13 @@ it.live("compatible older builds are reused and incompatible protocols are left 
       hostname: "127.0.0.1",
       port: 0,
       fetch: () =>
-        Response.json({ protocol: state.protocol, version: "older-build", pid: process.pid, started: Date.now() }),
+        Response.json({
+          protocol: state.protocol,
+          version: "older-build",
+          pid: process.pid,
+          started: Date.now(),
+          policy: Daemon.policy(),
+        }),
     })
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -202,6 +208,10 @@ it.live("compatible older builds are reused and incompatible protocols are left 
       ),
     )
     yield* Effect.promise(async () => {
+      await chmod(dir, 0o700)
+      await chmod(path.join(dir, "server.json"), 0o600)
+    })
+    yield* Effect.promise(async () => {
       expect((await Daemon.ensure(dir)).status.version).toBe("older-build")
       state.protocol += 1
       await expect(Daemon.ensure(dir)).rejects.toThrow("incompatible")
@@ -212,61 +222,199 @@ it.live("compatible older builds are reused and incompatible protocols are left 
   }),
 )
 
-it.live("server stop exits even when a server plugin is stuck during initialization", () =>
-  Effect.gen(function* () {
-    const dir = yield* tmpdirScoped()
-    const project = yield* tmpdirScoped({ git: true })
-    yield* Effect.promise(async () => {
-      const plugin = path.join(project, "stuck-plugin.ts")
-      await Bun.write(
-        plugin,
-        `
+it.live(
+  "server stop exits even when a server plugin is stuck during initialization",
+  () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const project = yield* tmpdirScoped({ git: true })
+      const healthy = yield* tmpdirScoped({ git: true })
+      yield* Effect.promise(async () => {
+        const plugin = path.join(project, "stuck-plugin.ts")
+        await Bun.write(
+          plugin,
+          `
         export default async ({ directory }) => {
           await Bun.write(directory + "/plugin-started.txt", "started")
           await new Promise(() => {})
           return {}
         }
       `,
-      )
-      await Bun.write(path.join(project, "opencode.json"), JSON.stringify({ plugin: [pathToFileURL(plugin).href] }))
-    })
-    const connection = yield* Effect.promise(() => Daemon.ensure(dir))
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        try {
-          process.kill(connection.status.pid, "SIGKILL")
-        } catch (error) {
-          if (typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH") return
-          throw error
-        }
-      }),
-    )
-    const pending = Daemon.request(connection, "upgrade", { directory: project }).catch(() => undefined)
-    yield* pollWithTimeout(
-      Effect.promise(async () =>
-        (await Bun.file(path.join(project, "plugin-started.txt")).exists()) ? true : undefined,
-      ),
-      "plugin never started",
-    )
-    const result = yield* Effect.promise(async () => {
-      const child = Bun.spawn([process.execPath, "src/index.ts", "server", "stop"], {
-        cwd: path.resolve(import.meta.dir, "../.."),
-        env: { ...process.env, OPENCODE_DAEMON_DIR: dir },
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
+        )
+        await Bun.write(path.join(project, "opencode.json"), JSON.stringify({ plugin: [pathToFileURL(plugin).href] }))
       })
-      const [code, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ])
-      return { code, stdout, stderr }
-    })
-    expect(result.code).toBe(0)
-    expect(result.stdout).toBe("")
-    expect(result.stderr).toContain("background server stopped")
-    yield* Effect.promise(() => pending)
-    expect(yield* Effect.promise(() => Daemon.read(dir))).toBeUndefined()
-  }),
+      const connection = yield* Effect.promise(() => Daemon.ensure(dir))
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(connection.status.pid, "SIGKILL")
+          } catch (error) {
+            if (typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH") return
+            throw error
+          }
+        }),
+      )
+      const pending = Daemon.request(connection, "upgrade", { directory: project }).catch(() => undefined)
+      yield* pollWithTimeout(
+        Effect.promise(async () =>
+          (await Bun.file(path.join(project, "plugin-started.txt")).exists()) ? true : undefined,
+        ),
+        "plugin never started",
+      )
+      yield* Effect.promise(async () => {
+        const plugin = path.join(healthy, "healthy-plugin.ts")
+        await Bun.write(
+          plugin,
+          `
+        import { Effect } from ${JSON.stringify(import.meta.resolve("effect"))}
+        import { BackgroundShell } from ${JSON.stringify(path.resolve(import.meta.dir, "../../src/background/shell.ts"))}
+        import { InstanceRef } from ${JSON.stringify(path.resolve(import.meta.dir, "../../src/effect/instance-ref.ts"))}
+        import { makeRuntime } from ${JSON.stringify(path.resolve(import.meta.dir, "../../src/effect/run-service.ts"))}
+        import { LayerNode } from ${JSON.stringify(path.resolve(import.meta.dir, "../../../core/src/effect/layer-node.ts"))}
+        export default async ({ directory, worktree, project }) => {
+          const runtime = makeRuntime(BackgroundShell.Service, LayerNode.compile(BackgroundShell.node))
+          const job = await runtime.runPromise(shell => shell.start({
+            sessionID: "daemon-cleanup-test", ancestors: [], shell: "/bin/sh",
+            command: "sleep 300 & echo $! > descendant.pid; wait", cwd: directory, env: process.env,
+          }).pipe(Effect.provideService(InstanceRef, { directory, worktree, project })))
+          await Bun.write(directory + "/leader.pid", String(job.pid))
+          return {}
+        }
+      `,
+        )
+        await Bun.write(path.join(healthy, "opencode.json"), JSON.stringify({ plugin: [pathToFileURL(plugin).href] }))
+        await Daemon.request(connection, "upgrade", { directory: healthy })
+      })
+      const pids = yield* pollWithTimeout(
+        Effect.promise(async () => {
+          if (!(await Bun.file(path.join(healthy, "descendant.pid")).exists())) return undefined
+          return Promise.all(
+            ["leader.pid", "descendant.pid"].map(async (file) =>
+              Number(await Bun.file(path.join(healthy, file)).text()),
+            ),
+          )
+        }),
+        "healthy project never spawned its process group",
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          pids.forEach((pid) => {
+            try {
+              process.kill(pid, "SIGKILL")
+            } catch {}
+          })
+        }),
+      )
+      const result = yield* Effect.promise(async () => {
+        const child = Bun.spawn([process.execPath, "src/index.ts", "server", "stop"], {
+          cwd: path.resolve(import.meta.dir, "../.."),
+          env: { ...process.env, OPENCODE_DAEMON_DIR: dir },
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [code, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ])
+        return { code, stdout, stderr }
+      })
+      expect(result.code).toBe(0)
+      expect(result.stdout).toBe("")
+      expect(result.stderr).toContain("background server stopped")
+      yield* Effect.promise(() => pending)
+      expect(yield* Effect.promise(() => Daemon.read(dir))).toBeUndefined()
+      yield* pollWithTimeout(
+        Effect.promise(async () => {
+          const alive = await Promise.all(pids.map((pid) => Bun.file(`/proc/${pid}/stat`).exists()))
+          return alive.some(Boolean) ? undefined : true
+        }),
+        "healthy project's detached process group survived daemon shutdown",
+      )
+    }),
+  40000,
+)
+
+it.live(
+  "Unix requests survive eleven silent seconds and streams span multiple heartbeats",
+  () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const project = yield* tmpdirScoped({ git: true })
+      const client = yield* Effect.promise(() => Daemon.ensure(dir))
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          const current = await Daemon.read(dir)
+          if (current) await Daemon.request(current, "stop")
+        }),
+      )
+      const sdk = createOpencodeClient({
+        baseUrl: client.url,
+        fetch: client.fetch,
+        headers: client.headers,
+        directory: project,
+        throwOnError: true,
+      })
+      const session = yield* Effect.promise(() => sdk.session.create({ title: "slow Unix request" }))
+      if (!session.data) throw new Error("session creation failed")
+      const sessionID = session.data.id
+      const abort = new AbortController()
+      yield* Effect.addFinalizer(() => Effect.sync(() => abort.abort()))
+      const events = yield* Effect.promise(() => sdk.global.event({ signal: abort.signal, sseMaxRetryAttempts: 0 }))
+      const iterator = events.stream[Symbol.asyncIterator]()
+      yield* Effect.promise(() => iterator.next())
+      const started = Date.now()
+      const heartbeats = (async () => {
+        let count = 0
+        while (count < 2) {
+          const next = await iterator.next()
+          expect(next.done).toBe(false)
+          // Transport heartbeats are intentionally absent from the generated SDK event union.
+          if (String(next.value?.payload.type) === "server.heartbeat") count++
+        }
+      })()
+      yield* Effect.promise(async () => {
+        const response = await sdk.session.shell({
+          sessionID,
+          agent: "build",
+          model: { providerID: "test", modelID: "test" },
+          command: "sleep 11; printf unix-alive",
+        })
+        expect(
+          response.data?.parts.some(
+            (part) =>
+              part.type === "tool" && part.state.status === "completed" && part.state.output.includes("unix-alive"),
+          ),
+        ).toBe(true)
+        await heartbeats
+        expect(Date.now() - started).toBeGreaterThan(19000)
+      })
+      abort.abort()
+      yield* Effect.promise(async () => {
+        await iterator.return?.()
+      })
+    }),
+  40000,
+)
+
+it.live(
+  "accepted stop fences attachment and overlapping ensure waits for a replacement",
+  () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const before = yield* Effect.promise(() => Daemon.ensure(dir))
+      yield* Effect.promise(() => Daemon.request(before, "stop"))
+      yield* Effect.promise(async () => {
+        const current = await Daemon.read(dir)
+        if (current) expect(current.status.stopping).toBe(true)
+        await expect(Daemon.attach(before)).rejects.toThrow()
+      })
+      const after = yield* Effect.promise(() => Daemon.ensure(dir))
+      yield* Effect.addFinalizer(() => Effect.promise(() => Daemon.request(after, "stop").then(() => undefined)))
+      expect(after.status.pid).not.toBe(before.status.pid)
+      expect(after.status.stopping).toBe(false)
+      yield* Effect.promise(() => Daemon.attach(after))
+    }),
+  40000,
 )

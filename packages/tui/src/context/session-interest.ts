@@ -4,6 +4,7 @@ export function createSessionInterest(selective = true) {
   const parents = new Map<string, string | undefined>()
   const controlled = new Set<string>()
   const active = new Set<string>()
+  const submitting = new Map<string, number>()
   let selected: string | undefined
   const changes = new Set<() => void>()
   const notify = () => changes.forEach((fn) => fn())
@@ -27,6 +28,14 @@ export function createSessionInterest(selective = true) {
       active.add(sessionID)
       notify()
     },
+    holdSubmission(sessionID: string) {
+      submitting.set(sessionID, (submitting.get(sessionID) ?? 0) + 1)
+      return () => {
+        const remaining = (submitting.get(sessionID) ?? 1) - 1
+        if (remaining === 0) submitting.delete(sessionID)
+        if (remaining > 0) submitting.set(sessionID, remaining)
+      }
+    },
     observe(info: { id: string; parentID?: string }, notifyChange = true) {
       const included = belongs(info.id, new Set([...active, ...(selected ? [selected] : [])]))
       parents.set(info.id, info.parentID)
@@ -38,6 +47,18 @@ export function createSessionInterest(selective = true) {
       if (busy) active.add(sessionID)
       if (!busy) active.delete(sessionID)
       notify()
+    },
+    reconcileStatus(statuses: Record<string, { type: string }>) {
+      const previous = [...active].sort().join(",")
+      // Recovery can observe idle before a readiness-blocked POST is dispatched.
+      // Keep that interest until all waiting submissions have left the barrier.
+      for (const id of active) {
+        if (!submitting.has(id) && (!statuses[id] || statuses[id].type === "idle")) active.delete(id)
+      }
+      for (const [id, status] of Object.entries(statuses)) {
+        if (status.type !== "idle" && belongs(id, controlled)) active.add(id)
+      }
+      if (previous !== [...active].sort().join(",")) notify()
     },
     owns(sessionID: string) {
       return belongs(sessionID, controlled)

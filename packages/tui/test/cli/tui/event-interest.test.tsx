@@ -255,7 +255,7 @@ test("two attached clients keep navigation view-only and submission/adoption aut
   }
 })
 
-test("legacy hydration retains live part updates and removals over an older snapshot", async () => {
+test("legacy hydration retains live metadata, todos, diffs, part updates and removals over an older snapshot", async () => {
   const previous = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST
   process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST = "1"
   const response = Promise.withResolvers<Response>()
@@ -304,6 +304,27 @@ test("legacy hydration retains live part updates and removals over an older snap
         properties: { sessionID: "ses_legacy", messageID: "msg_removed" },
       },
     })
+    client.emit({
+      directory,
+      payload: {
+        id: "evt_metadata",
+        type: "session.updated",
+        properties: {
+          sessionID: session.id,
+          info: { ...session, title: "Live title", time: { created: 0, updated: 2 } },
+        },
+      },
+    })
+    const todos = [{ content: "Live todo", priority: "high", status: "in_progress" }]
+    const diff = [{ file: "live.ts", before: "old", after: "new", additions: 1, deletions: 1 }]
+    client.emit({
+      directory,
+      payload: { id: "evt_todo", type: "todo.updated", properties: { sessionID: session.id, todos } },
+    })
+    client.emit({
+      directory,
+      payload: { id: "evt_diff", type: "session.diff", properties: { sessionID: session.id, diff } },
+    })
     response.resolve(
       json([
         {
@@ -318,6 +339,9 @@ test("legacy hydration retains live part updates and removals over an older snap
     expect(client.sync.data.part.msg_live?.map((part) => (part.type === "text" ? part.text : undefined))).toEqual([
       "fresh",
     ])
+    expect(client.sync.session.get(session.id)?.title).toBe("Live title")
+    expect(client.sync.data.todo[session.id]).toEqual(todos)
+    expect(client.sync.data.session_diff[session.id]).toEqual(diff)
     client.route.navigate({ type: "session", sessionID: "ses_other" })
     expect(client.sync.data.message.ses_legacy).toBeUndefined()
     expect(client.sync.data.part.msg_live).toBeUndefined()

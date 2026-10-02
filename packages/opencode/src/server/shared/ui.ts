@@ -85,9 +85,12 @@ export function serveUIEffect(
 
     if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI)
 
+    // These credentials authenticate the local server, never the hosted UI.
+    const upstreamHeaders = ProxyUtil.headers(request.headers, { host: UI_UPSTREAM.host })
+    upstreamHeaders.delete("authorization")
     const response = yield* services.client.execute(
       HttpClientRequest.make(request.method)(upstreamURL(path), {
-        headers: ProxyUtil.headers(request.headers, { host: UI_UPSTREAM.host }),
+        headers: upstreamHeaders,
         body: requestBody(request),
       }),
     )

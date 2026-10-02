@@ -40,6 +40,32 @@ export function resolveThreadDirectory(project?: string, envPWD = process.env.PW
   return Filesystem.resolve(cwd)
 }
 
+export async function startTuiWorker(file: string | URL, network: Parameters<typeof rpc.server>[0], timeout = 10_000) {
+  const worker = new Worker(file, {
+    env: Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    ),
+  })
+  const client = Rpc.client<typeof rpc>(worker)
+  let stopping: Promise<void> | undefined
+  const stop = () =>
+    (stopping ??= (async () => {
+      try {
+        await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
+      } finally {
+        client.dispose()
+        await worker.terminate()
+      }
+    })())
+  const server = await withTimeout(client.call("server", network), timeout, "TUI worker startup timed out").catch(
+    async (error) => {
+      await stop()
+      throw error
+    },
+  )
+  return { client, server, stop }
+}
+
 export const TuiThreadCommand = cmd({
   command: "$0 [project]",
   describe: "start orangecode tui",
@@ -199,26 +225,7 @@ export const TuiThreadCommand = cmd({
             },
           }
         }
-        const file = await target()
-        const worker = new Worker(file, {
-          env: Object.fromEntries(
-            Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-          ),
-        })
-        const client = Rpc.client<typeof rpc>(worker)
-        let stopping: Promise<void> | undefined
-        const stop = () =>
-          (stopping ??= (async () => {
-            try {
-              await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-            } finally {
-              await worker.terminate()
-            }
-          })())
-        const server = await client.call("server", network).catch(async (error) => {
-          await stop()
-          throw error
-        })
+        const { client, server, stop } = await startTuiWorker(await target(), network)
         return {
           url: server.url,
           fetch: undefined,

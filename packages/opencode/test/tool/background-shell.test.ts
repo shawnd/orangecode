@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Exit } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { utimes } from "node:fs/promises"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -21,8 +22,8 @@ import { ShellTool, type Parameters } from "@/tool/shell"
 import { ToolRegistry } from "@/tool/registry"
 import type { Tool } from "@/tool/tool"
 import type { SessionPrompt } from "@/session/prompt"
-import { TestInstance } from "../fixture/fixture"
-import { pollWithTimeout, testEffect } from "../lib/effect"
+import { provideInstance, TestInstance, tmpdirScoped } from "../fixture/fixture"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 
 const it = testEffect(
   LayerNode.compile(
@@ -45,6 +46,14 @@ const it = testEffect(
   ),
 )
 const code = (script: string) => `"${process.execPath}" -e '${script.replaceAll("'", "'\\''")}'`
+const processGone = (pid: number) =>
+  Effect.try({
+    try: () => {
+      process.kill(pid, 0)
+      return undefined
+    },
+    catch: () => true as const,
+  }).pipe(Effect.catch((gone) => Effect.succeed(gone)))
 
 const fixture = Effect.fn("BackgroundShellTest.fixture")(function* (params: Parameters, parentID?: SessionID) {
   const sessions = yield* Session.Service
@@ -149,6 +158,103 @@ const fixture = Effect.fn("BackgroundShellTest.fixture")(function* (params: Para
 })
 
 describe("background shells", () => {
+  for (const unavailable of ["deleted", "cleanup", "read-failure"] as const) {
+    it.instance(
+      `released ${unavailable} tails cannot prevent unrelated session or project cancellation`,
+      () =>
+        Effect.gen(function* () {
+          const shells = yield* BackgroundShell.Service
+          const jobs = yield* BackgroundJob.Service
+          const fs = yield* FSUtil.Service
+          const trunc = yield* Truncate.Service
+          const runState = yield* SessionRunState.Service
+          const instance = yield* TestInstance
+          const old = yield* fixture({ background: true, command: code('process.stdout.end("historical\\n")') })
+          yield* jobs.wait({ id: old.info.id })
+          const tail = `${old.info.outputPath}.tail`
+          yield* pollWithTimeout(
+            shells
+              .get(old.chat.id, old.info.id)
+              .pipe(Effect.map((info) => (info.outputAvailability === "available" ? true : undefined))),
+            "terminal payload was not released",
+          )
+          if (unavailable === "cleanup") {
+            yield* Effect.promise(() => utimes(tail, 0, Date.now() / 1000 - 8 * 86400))
+            yield* trunc.cleanup()
+            expect(yield* fs.exists(tail)).toBe(false)
+          }
+          if (unavailable !== "cleanup") yield* fs.remove(tail)
+          if (unavailable === "read-failure") yield* fs.makeDirectory(tail)
+          const state = unavailable === "read-failure" ? "unavailable" : "expired"
+          expect((yield* shells.list(old.chat.id))[0]).toMatchObject({ status: "completed", outputAvailability: state })
+          expect((yield* jobs.get(old.info.id))?.outputAvailability).toBe(state)
+          expect(
+            (yield* shells.output({ sessionID: old.chat.id, id: old.info.id, query: "historical" })).lines,
+          ).toEqual([{ line: 1, text: "historical" }])
+          // Exercise the legacy runner and real background process together, both
+          // beside the historical job and in a separate open Location.
+          const other = yield* tmpdirScoped({ git: true })
+          yield* Effect.forEach([instance.directory, other], (directory) =>
+            Effect.gen(function* () {
+              const live = yield* fixture({
+                background: true,
+                command: code('console.log("pid:"+process.pid);setInterval(()=>{},1000)'),
+              })
+              const output = yield* pollWithTimeout(
+                shells
+                  .output({ sessionID: live.chat.id, id: live.info.id })
+                  .pipe(Effect.map((result) => result.lines.find((line) => line.text.startsWith("pid:")))),
+                "live background process never started",
+              )
+              const pid = Number(output.text.slice(4))
+              const tool = yield* ShellTool
+              const def = yield* tool.init()
+              const ready = `${directory}/foreground.pid`
+              const work = yield* runState
+                .startShell(
+                  live.chat.id,
+                  Effect.succeed({ info: live.assistant, parts: [] }),
+                  def
+                    .execute(
+                      {
+                        command: code(
+                          `await Bun.write(${JSON.stringify(ready)},String(process.pid));setInterval(()=>{},1000)`,
+                        ),
+                        timeout: 30000,
+                      },
+                      { ...live.ctx, metadata: () => Effect.void },
+                    )
+                    .pipe(Effect.as({ info: live.assistant, parts: [] })),
+                )
+                .pipe(Effect.forkScoped)
+              yield* pollWithTimeout(
+                fs.exists(ready).pipe(Effect.map((exists) => (exists ? true : undefined))),
+                "foreground runner never started",
+              )
+              const foregroundPID = Number(yield* fs.readFileString(ready))
+              yield* awaitWithTimeout(runState.cancel(live.chat.id), "legacy cancellation blocked", "5 seconds")
+              expect(Exit.isSuccess(yield* Fiber.await(work))).toBe(true)
+              expect((yield* shells.get(live.chat.id, live.info.id)).status).toBe("cancelled")
+              yield* Effect.forEach([pid, foregroundPID], (pid) =>
+                pollWithTimeout(processGone(pid), `process ${pid} survived legacy cancellation`),
+              )
+            }).pipe(Effect.provideService(TestInstance, { directory }), provideInstance(directory)),
+          )
+          expect((yield* shells.get(old.chat.id, old.info.id)).status).toBe("completed")
+          if (unavailable === "read-failure") {
+            yield* fs.remove(tail, { recursive: true })
+            yield* fs.writeFileString(tail, "restored archive")
+            expect(yield* shells.get(old.chat.id, old.info.id)).toMatchObject({
+              status: "completed",
+              outputAvailability: "available",
+              output: "restored archive",
+            })
+            expect((yield* jobs.get(old.info.id))?.output).toBe("restored archive")
+          }
+        }),
+      20000,
+    )
+  }
   it.instance("keeps terminal output resident until delivery, then reloads it for late observers", () =>
     Effect.gen(function* () {
       const shells = yield* BackgroundShell.Service
@@ -223,6 +329,111 @@ describe("background shells", () => {
       expect(output.endsWith("\nEND\n")).toBe(true)
     }),
   )
+  if (process.platform !== "win32") {
+    for (const failure of ["metadata", "truncation", "write", "open"] as const) {
+      for (const leader of ["live", "exits"] as const) {
+        it.instance(
+          `actual foreground ShellTool fails promptly on ${failure} failure with ${leader} leader`,
+          () =>
+            Effect.gen(function* () {
+              const setup = yield* fixture({ background: true, command: code('console.log("ready")') })
+              const instance = yield* TestInstance
+              const fs = yield* FSUtil.Service
+              const trunc = yield* Truncate.Service
+              const parentPath = `${instance.directory}/parent.pid`
+              const childPath = `${instance.directory}/child.pid`
+              const consumerPath = `${instance.directory}/consumer-ready`
+              const spilling = yield* Deferred.make<void>()
+              const child = `await Bun.write(${JSON.stringify(childPath)},String(process.pid));setInterval(()=>{},1000)`
+              const script = [
+                `await Bun.write(${JSON.stringify(parentPath)},String(process.pid))`,
+                `Bun.spawn([process.execPath,"-e",${JSON.stringify(child)}],{stdout:"inherit",stderr:"inherit"})`,
+                `while(!await Bun.file(${JSON.stringify(childPath)}).exists())await Bun.sleep(10)`,
+                'process.stdout.write("x".repeat(70000))',
+                ...(failure === "open"
+                  ? []
+                  : [
+                      failure === "write"
+                        ? `while(!await Bun.file(${JSON.stringify(consumerPath)}).exists())await Bun.sleep(10)`
+                        : "await Bun.sleep(100)",
+                      'process.stdout.write("second chunk")',
+                    ]),
+                leader === "live" ? "setInterval(()=>{},1000)" : "process.stdout.end(()=>process.exit(0))",
+              ].join(";")
+              const afterExit =
+                leader === "live"
+                  ? Effect.void
+                  : pollWithTimeout(
+                      fs.readFileString(parentPath).pipe(Effect.flatMap((text) => processGone(Number(text)))),
+                      "producer did not exit before the output failure",
+                    ).pipe(Effect.orDie)
+              const started = Date.now()
+              const exit = yield* Effect.gen(function* () {
+                const tool = yield* ShellTool
+                const def = yield* tool.init()
+                return yield* def.execute(
+                  { command: code(script), timeout: 30000 },
+                  {
+                    ...setup.ctx,
+                    metadata: (input) =>
+                      failure === "metadata" && input.metadata?.output
+                        ? afterExit.pipe(Effect.andThen(Effect.die(new Error("metadata consumer failed"))))
+                        : failure === "write" && input.metadata?.output
+                          ? Effect.gen(function* () {
+                              if (!(yield* Deferred.isDone(spilling))) return
+                              // Release the producer only after the consumer has
+                              // opened its sink, ensuring a later real write fails.
+                              yield* fs.writeFileString(consumerPath, "ready").pipe(Effect.orDie)
+                              yield* afterExit
+                            })
+                          : Effect.void,
+                  },
+                )
+              }).pipe(
+                Effect.provideService(Truncate.Service, {
+                  ...trunc,
+                  write:
+                    failure === "truncation"
+                      ? () =>
+                          afterExit.pipe(
+                            Effect.andThen(fs.writeFileString(instance.directory, "cannot write a directory")),
+                            Effect.as(instance.directory),
+                            Effect.orDie,
+                          )
+                      : failure === "write"
+                        ? () => Deferred.succeed(spilling, undefined).pipe(Effect.as("/dev/full"))
+                        : failure === "open"
+                          ? () => afterExit.pipe(Effect.as(`${instance.directory}/missing/output`))
+                          : trunc.write,
+                }),
+                Effect.exit,
+                (self) => awaitWithTimeout(self, "output failure waited for command timeout", "5 seconds"),
+              )
+              expect(Date.now() - started).toBeLessThan(5000)
+              expect(Exit.isFailure(exit)).toBe(true)
+              if (Exit.isSuccess(exit)) throw new Error("output consumer failure was masked")
+              const error = String(Cause.squash(exit.cause))
+              expect(error).toMatch(
+                failure === "metadata"
+                  ? /metadata consumer failed/
+                  : failure === "write"
+                    ? /ENOSPC/
+                    : failure === "open"
+                      ? /ENOENT/
+                      : /BadResource: FileSystem.writeFile/,
+              )
+              const pids = yield* Effect.forEach([parentPath, childPath], (file) =>
+                fs.readFileString(file).pipe(Effect.map(Number)),
+              )
+              yield* Effect.forEach(pids, (pid) =>
+                pollWithTimeout(processGone(pid), `process ${pid} survived output consumer failure`),
+              )
+            }),
+          10000,
+        )
+      }
+    }
+  }
   it.instance("foreground timeout remains active while descendants hold the output pipe", () =>
     Effect.gen(function* () {
       const setup = yield* fixture({ background: true, command: code('console.log("ready")') })
@@ -237,6 +448,84 @@ describe("background shells", () => {
       expect(result.metadata.exit).toBeNull()
     }),
   )
+  it.instance("foreground abort remains active while descendants hold the output pipe", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture({ background: true, command: code('console.log("ready")') })
+      const tool = yield* ShellTool
+      const def = yield* tool.init()
+      const controller = new AbortController()
+      const result = yield* def
+        .execute(
+          { command: "sleep 30 & printf parent-done", timeout: 30000 },
+          {
+            ...setup.ctx,
+            abort: controller.signal,
+            metadata: (input) =>
+              Effect.sync(() => {
+                if (input.metadata?.output) controller.abort()
+              }),
+          },
+        )
+        .pipe((self) => awaitWithTimeout(self, "abort did not interrupt pipe drain", "5 seconds"))
+      expect(result.output).toContain("parent-done")
+      expect(result.output).toContain("User aborted the command")
+      expect(result.metadata.exit).toBeNull()
+    }),
+  )
+  it.instance("background timeout covers output draining with descendant-held pipes", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture({ background: true, command: "sleep 30 & printf parent-done", timeout: 100 })
+      const jobs = yield* BackgroundJob.Service
+      const shells = yield* BackgroundShell.Service
+      yield* awaitWithTimeout(jobs.wait({ id: setup.info.id }), "background output drain lost its timeout", "5 seconds")
+      expect((yield* shells.get(setup.chat.id, setup.info.id)).error).toContain("timed out after 100 ms")
+    }),
+  )
+  if (process.platform === "linux") {
+    it.instance("background output write failure promptly fails the job and cleans up the real process", () =>
+      Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const jobs = yield* BackgroundJob.Service
+        const instance = yield* TestInstance
+        const pidPath = `${instance.directory}/background.pid`
+        yield* Effect.gen(function* () {
+          const shells = yield* BackgroundShell.Service
+          const info = yield* shells.start({
+            sessionID: "output-failure",
+            ancestors: [],
+            shell: "/bin/bash",
+            cwd: instance.directory,
+            env: process.env,
+            timeout: 30000,
+            command: code(
+              `await Bun.write(${JSON.stringify(pidPath)},String(process.pid));console.log("output");setInterval(()=>{},1000)`,
+            ),
+          })
+          yield* awaitWithTimeout(jobs.wait({ id: info.id }), "background consumer failure was deferred", "5 seconds")
+          const result = yield* shells.get("output-failure", info.id)
+          expect(result.status).toBe("error")
+          expect(result.error).toMatch(/FileSystem.write/)
+          const pid = Number(yield* fs.readFileString(pidPath))
+          yield* pollWithTimeout(processGone(pid), `background process ${pid} survived write failure`)
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(
+              LayerNode.compile(BackgroundShell.node, [
+                [
+                  FSUtil.node,
+                  Layer.succeed(FSUtil.Service, {
+                    ...fs,
+                    open: (file, options) => fs.open(file.endsWith(".stdout.log") ? "/dev/full" : file, options),
+                  }),
+                ],
+                [BackgroundJob.node, Layer.succeed(BackgroundJob.Service, jobs)],
+              ]),
+            ),
+          ),
+        )
+      }),
+    )
+  }
   it.instance(
     "returns immediately, survives the foreground timeout, and supports stdin/EOF with distinct searchable logs",
     () =>

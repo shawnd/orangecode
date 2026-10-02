@@ -222,3 +222,7 @@ pre-sync revisions; they are not measurements of this subsequent merge.
 
 The subsequent post-sync paired rerun is documented separately in
 [`server-synced-rerun-results.md`](server-synced-rerun-results.md).
+That optimization comparison retains the old shared-server baseline. The
+architecture comparison of current `shawnd`'s per-terminal backends against the
+merged shared daemon is in
+[`server-approach-synced-results.md`](server-approach-synced-results.md).

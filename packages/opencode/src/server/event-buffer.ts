@@ -1,4 +1,4 @@
-import { Cause, Effect, Pull, Queue, Scope, Stream } from "effect"
+import { Cause, Effect, Fiber, Pull, Queue, Scope, Stream } from "effect"
 
 export const eventBufferBudget = { bytes: 4 * 1024 * 1024, events: 4096 }
 
@@ -16,6 +16,8 @@ export function bufferedEvents<A>(input: {
   budget?: typeof eventBufferBudget
   observe?: (state: { bytes: number; events: number; reason?: string }) => void
 }) {
+  // Register teardown atomically: subscribe can signal readiness and trigger
+  // consumer cancellation before it returns. Only setup is uninterruptible.
   return Stream.fromPull(
     Effect.gen(function* () {
       const budget = input.budget ?? eventBufferBudget
@@ -30,6 +32,7 @@ export function bufferedEvents<A>(input: {
       const queue = yield* Queue.bounded<{ data: string; bytes: number }, Cause.Done>(budget.events)
       const state = { bytes: 0, events: 0, reason: undefined as "overflow" | "offer-failed" | undefined }
       let unsubscribe: (() => void) | undefined
+      let subscriber: Fiber.Fiber<void> | undefined
       let closed = false
       let terminal = false
       const detach = () => {
@@ -41,6 +44,7 @@ export function bufferedEvents<A>(input: {
         if (closed || state.reason) return
         state.reason = reason
         detach()
+        subscriber?.interruptUnsafe()
         Queue.endUnsafe(queue)
         input.observe?.(state)
       }
@@ -60,23 +64,43 @@ export function bufferedEvents<A>(input: {
         state.events++
         input.observe?.(state)
       }
-      yield* Effect.acquireRelease(
-        Effect.gen(function* () {
-          const subscription = input.subscribe(offer, stop)
-          const cleanup = Effect.isEffect(subscription) ? yield* Effect.interruptible(subscription) : subscription
-          // A synchronous source can overflow before subscribe returns.
-          if (state.reason) cleanup()
-          if (!state.reason) unsubscribe = cleanup
-        }),
-        () =>
+      const install = (cleanup: () => void) => {
+        // Also reconcile a subscription that completes after stop/cancellation.
+        if (closed || state.reason) cleanup()
+        if (!closed && !state.reason) unsubscribe = cleanup
+      }
+      const subscription = input.subscribe(offer, stop)
+      if (!Effect.isEffect(subscription)) install(subscription)
+      if (Effect.isEffect(subscription)) {
+        // Acquisition must not gate the pull: a blocked seed can overflow before
+        // it returns its cleanup. Keep its scoped resources alive until teardown.
+        subscriber = yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
-            closed = true
-            detach()
-            yield* Queue.shutdown(queue)
-            state.bytes = 0
-            state.events = 0
-            input.observe?.(state)
+            install(yield* restore(subscription))
+            yield* restore(Effect.never)
           }),
+        ).pipe(
+          Effect.scoped,
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              if (!closed && !state.reason) Queue.failCauseUnsafe(queue, cause)
+            }),
+          ),
+          Effect.forkScoped({ startImmediately: true }),
+        )
+        if (state.reason) subscriber.interruptUnsafe()
+      }
+      // Close admission before the scoped subscriber is interrupted, including
+      // when its acquisition only returns a cleanup after cancellation.
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          closed = true
+          detach()
+          yield* Queue.shutdown(queue)
+          state.bytes = 0
+          state.events = 0
+          input.observe?.(state)
+        }),
       )
       return Effect.gen(function* () {
         const event = yield* Queue.take(queue)
@@ -95,7 +119,7 @@ export function bufferedEvents<A>(input: {
           return Effect.succeed<readonly [BufferedEvent]>([{ data: input.terminal(state.reason), terminal: true }])
         }),
       )
-    }),
+    }).pipe(Effect.uninterruptible),
   ).pipe(Stream.scoped)
 }
 

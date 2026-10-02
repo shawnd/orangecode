@@ -57,6 +57,15 @@ function locationQuery(ref?: LocationRef) {
   return ref ? { directory: ref.directory, workspace: ref.workspaceID } : undefined
 }
 
+function fragmentKey(event: V2Event) {
+  const data = event.data
+  if (!("assistantMessageID" in data)) return
+  if ("textID" in data) return JSON.stringify([data.assistantMessageID, "text", data.textID])
+  if ("reasoningID" in data) return JSON.stringify([data.assistantMessageID, "reasoning", data.reasoningID])
+  if ("callID" in data && event.type.startsWith("session.next.tool.input."))
+    return JSON.stringify([data.assistantMessageID, "input", data.callID])
+}
+
 export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
   init: () => {
@@ -78,8 +87,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const sequences = new Map<string, number>()
     const hydrating = new Map<
       string,
-      { events: { sequence: number; durable: boolean; event: V2Event }[]; task?: Promise<void> }
+      { epoch: number; events: { sequence: number; durable: boolean; event: V2Event }[]; task?: Promise<void> }
     >()
+    const volatile = new Map<string, V2Event[]>()
+    let recovering: { permission: Set<string>; question: Set<string> } | undefined
+    const requestLocations = new Map<string, LocationRef>()
     const durableTypes = new Set<string>(SessionEvent.DurableDefinitions.map((definition) => definition.type))
     const versionedTypes = new Set(
       SessionEvent.DurableDefinitions.map((definition) => `${definition.type}.${definition.durable?.version}`),
@@ -165,6 +177,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     function handleEvent(event: V2Event) {
       if (
+        (event.type.startsWith("permission.v2.") || event.type.startsWith("question.v2.")) &&
+        "sessionID" in event.data &&
+        typeof event.data.sessionID === "string" &&
+        event.location
+      )
+        requestLocations.set(event.data.sessionID, event.location)
+      if (
         event.type.startsWith("session.next.") &&
         "sessionID" in event.data &&
         typeof event.data.sessionID === "string" &&
@@ -173,17 +192,20 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         return
       switch (event.type) {
         case "permission.v2.asked":
+          recovering?.permission.add(event.data.id)
           setStore("session", "permission", event.data.sessionID, (items = []) => [
             ...items.filter((item) => item.id !== event.data.id),
             event.data,
           ])
           break
         case "permission.v2.replied":
+          recovering?.permission.add(event.data.requestID)
           setStore("session", "permission", event.data.sessionID, (items = []) =>
             items.filter((item) => item.id !== event.data.requestID),
           )
           break
         case "question.v2.asked":
+          recovering?.question.add(event.data.id)
           setStore("session", "question", event.data.sessionID, (items = []) => [
             ...items.filter((item) => item.id !== event.data.id),
             event.data,
@@ -191,6 +213,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "question.v2.replied":
         case "question.v2.rejected":
+          recovering?.question.add(event.data.requestID)
           setStore("session", "question", event.data.sessionID, (items = []) =>
             items.filter((item) => item.id !== event.data.requestID),
           )
@@ -486,6 +509,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               delete draft[sessionID]
               hydrating.delete(sessionID)
               sequences.delete(sessionID)
+              volatile.delete(sessionID)
             }
           }),
         ),
@@ -494,13 +518,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onMount(() => {
       const unsub = events.subscribe((event, metadata) => {
-        if (event.type === "server.connected" && sdk.selective) {
-          for (const sessionID of Object.keys(store.session.message)) {
-            void result.session.message
-              .refresh(sessionID)
-              .catch((error) => console.error("Failed to refresh Session messages", error))
-          }
-        }
         if (sdk.selective && durableTypes.has(event.type)) return
         const current = {
           ...event,
@@ -513,6 +530,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           "sessionID" in event.properties &&
           typeof event.properties.sessionID === "string"
         ) {
+          if (event.type.endsWith(".delta") && fragmentKey(current)) {
+            const pending = volatile.get(event.properties.sessionID) ?? []
+            pending.push(current)
+            volatile.set(event.properties.sessionID, pending)
+          }
           hydrating.get(event.properties.sessionID)?.events.push({
             sequence: sequences.get(event.properties.sessionID) ?? -1,
             durable: false,
@@ -533,6 +555,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             data: sync.data,
             location: { directory: envelope.directory, workspaceID: envelope.workspace },
           } as V2Event
+          if (
+            "sessionID" in event.data &&
+            typeof event.data.sessionID === "string" &&
+            event.type.endsWith(".ended") &&
+            fragmentKey(event)
+          ) {
+            volatile.set(
+              event.data.sessionID,
+              (volatile.get(event.data.sessionID) ?? []).filter(
+                (pending) => fragmentKey(pending) !== fragmentKey(event),
+              ),
+            )
+          }
           const tracker = hydrating.get(sync.aggregateID)
           tracker?.events.push({ sequence: sync.seq, durable: true, event })
           handleEvent(event)
@@ -547,7 +582,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           return store.session.info[sessionID]
         },
         async refresh(sessionID: string) {
+          await sdk.streamReady()
+          const epoch = sdk.connectionEpoch
           const result = await sdk.client.v2.session.get({ sessionID }, { throwOnError: true })
+          if (epoch !== sdk.connectionEpoch) return
           setStore("session", "info", sessionID, result.data.data)
         },
         message: {
@@ -555,28 +593,74 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
-            await sdk.eventsReady()
+            await sdk.streamReady()
             if (!sdk.interest.includes(sessionID)) return
             const current = hydrating.get(sessionID)
-            if (current) return current.task
-            const tracker: { events: { sequence: number; durable: boolean; event: V2Event }[]; task?: Promise<void> } =
-              { events: [] }
+            if (current?.epoch === sdk.connectionEpoch) return current.task
+            const tracker: {
+              epoch: number
+              events: { sequence: number; durable: boolean; event: V2Event }[]
+              task?: Promise<void>
+            } = {
+              epoch: sdk.connectionEpoch,
+              events: (volatile.get(sessionID) ?? []).map((event) => ({ sequence: -1, durable: false, event })),
+            }
             hydrating.set(sessionID, tracker)
             tracker.task = (async () => {
               const response = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
               sdk.flushEvents()
-              if (!sdk.interest.includes(sessionID) || hydrating.get(sessionID) !== tracker) return
+              if (
+                tracker.epoch !== sdk.connectionEpoch ||
+                !sdk.interest.includes(sessionID) ||
+                hydrating.get(sessionID) !== tracker
+              )
+                return
               if (sdk.selective && response.data.sequence === undefined) {
                 throw new Error("Selective Session hydration requires a server snapshot sequence")
               }
-              setStore("session", "message", sessionID, response.data.data)
               const sequence = response.data.sequence ?? -1
+              const settled = new Set(
+                tracker.events
+                  .filter(
+                    (pending) =>
+                      pending.durable && pending.sequence <= sequence && pending.event.type.endsWith(".ended"),
+                  )
+                  .map((pending) => fragmentKey(pending.event)),
+              )
+              // Determine representation before installing the response: Solid store
+              // updates can mutate its objects while replaying multiple deltas.
+              const replay = tracker.events.filter((pending) => {
+                if (pending.durable) return true
+                const key = fragmentKey(pending.event)
+                if (key && settled.has(key)) return false
+                const data = pending.event.data
+                return !response.data.data.some((item) => {
+                  if (
+                    item.type !== "assistant" ||
+                    !("assistantMessageID" in data) ||
+                    item.id !== data.assistantMessageID
+                  )
+                    return false
+                  return item.content.some((part) => {
+                    if (part.type === "text" && "textID" in data) return part.id === data.textID && part.text !== ""
+                    if (part.type === "reasoning" && "reasoningID" in data)
+                      return part.id === data.reasoningID && part.text !== ""
+                    if (part.type === "tool" && "callID" in data)
+                      return part.id === data.callID && (part.state.status !== "pending" || part.state.input !== "")
+                    return false
+                  })
+                })
+              })
+              setStore("session", "message", sessionID, response.data.data)
               sequences.set(sessionID, sequence)
               // Replay only commits newer than the atomic snapshot. Delayed older
               // stream events are rejected by the sequence floor above.
-              for (const pending of tracker.events) {
+              for (const pending of replay) {
                 if (!pending.durable) {
-                  if (pending.sequence >= sequence) handleEvent(pending.event)
+                  // A different fragment's commit does not persist this fragment's
+                  // deltas. Full-value settlement, rather than the aggregate floor,
+                  // determines whether volatile output is already represented.
+                  handleEvent(pending.event)
                   continue
                 }
                 if (pending.sequence <= (sequences.get(sessionID) ?? sequence)) continue
@@ -594,7 +678,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.permission[sessionID]
           },
           async refresh(sessionID: string) {
+            await sdk.streamReady()
+            const epoch = sdk.connectionEpoch
             const result = await sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true })
+            if (epoch !== sdk.connectionEpoch) return
             setStore("session", "permission", sessionID, result.data.data)
           },
         },
@@ -603,7 +690,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.question[sessionID]
           },
           async refresh(sessionID: string) {
+            await sdk.streamReady()
+            const epoch = sdk.connectionEpoch
             const result = await sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true })
+            if (epoch !== sdk.connectionEpoch) return
             setStore("session", "question", sessionID, result.data.data)
           },
         },
@@ -653,6 +743,91 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         ),
       },
     }
+
+    onCleanup(
+      sdk.onRecovery(async (epoch) => {
+        const tracker = { permission: new Set<string>(), question: new Set<string>() }
+        recovering = tracker
+        const sessions = [
+          ...new Set([
+            ...Object.keys(store.session.message),
+            ...Object.keys(store.session.permission),
+            ...Object.keys(store.session.question),
+            ...hydrating.keys(),
+            ...sdk.interest.query().split(",").filter(Boolean),
+          ]),
+        ]
+        await Promise.all([
+          (async () => {
+            const locations = [
+              ...new Map(
+                [
+                  defaultLocation(),
+                  ...Object.values(store.session.info).map((session) => session.location),
+                  ...requestLocations.values(),
+                ].map((location) => [locationKey(location), location]),
+              ).values(),
+            ]
+            const [snapshots, owned] = await Promise.all([
+              Promise.all(
+                locations.map(async (ref) => {
+                  const [permissions, questions] = await Promise.all([
+                    sdk.client.v2.permission.request.list({ location: locationQuery(ref) }, { throwOnError: true }),
+                    sdk.client.v2.question.request.list({ location: locationQuery(ref) }, { throwOnError: true }),
+                  ])
+                  return { permissions: permissions.data.data, questions: questions.data.data }
+                }),
+              ),
+              Promise.all(
+                sessions.map(async (sessionID) => {
+                  const [permissions, questions] = await Promise.all([
+                    sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
+                    sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
+                  ])
+                  return { permissions: permissions.data.data, questions: questions.data.data }
+                }),
+              ),
+            ])
+            sdk.flushEvents()
+            if (epoch !== sdk.connectionEpoch) return
+            setStore(
+              "session",
+              produce((draft) => {
+                const pending = [...snapshots, ...owned]
+                  .flatMap((item) => item.permissions)
+                  .filter((item) => !tracker.permission.has(item.id))
+                pending.push(
+                  ...Object.values(draft.permission)
+                    .flat()
+                    .filter((item) => tracker.permission.has(item.id)),
+                )
+                draft.permission = Object.groupBy(
+                  [...new Map(pending.map((item) => [item.id, item])).values()],
+                  (item) => item.sessionID,
+                ) as Record<string, PermissionV2Request[]>
+                const asked = [...snapshots, ...owned]
+                  .flatMap((item) => item.questions)
+                  .filter((item) => !tracker.question.has(item.id))
+                asked.push(
+                  ...Object.values(draft.question)
+                    .flat()
+                    .filter((item) => tracker.question.has(item.id)),
+                )
+                draft.question = Object.groupBy(
+                  [...new Map(asked.map((item) => [item.id, item])).values()],
+                  (item) => item.sessionID,
+                ) as Record<string, QuestionV2Request[]>
+              }),
+            )
+          })(),
+          ...[...new Set([...Object.keys(store.session.message), ...hydrating.keys()])]
+            .filter((id) => sdk.interest.includes(id))
+            .map((id) => result.session.message.refresh(id)),
+        ]).finally(() => {
+          if (recovering === tracker) recovering = undefined
+        })
+      }),
+    )
 
     onMount(() => {
       void Promise.allSettled([

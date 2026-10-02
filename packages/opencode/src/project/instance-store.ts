@@ -165,7 +165,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
 
     const disposeAllOnce = Effect.fnUntraced(function* () {
       yield* Effect.logInfo("disposing all instances")
-      yield* Effect.forEach(
+      const results = yield* Effect.forEach(
         [...cache.entries()],
         (item) =>
           Effect.gen(function* () {
@@ -176,9 +176,11 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
               return
             }
             yield* disposeEntry(item[0], item[1], exit.value)
-          }),
-        { discard: true },
+          }).pipe(Effect.exit),
+        { concurrency: "unbounded" },
       )
+      const failure = results.find(Exit.isFailure)
+      if (failure) yield* failure
     })
 
     const cachedDisposeAll = yield* Effect.cachedWithTTL(disposeAllOnce(), Duration.zero)

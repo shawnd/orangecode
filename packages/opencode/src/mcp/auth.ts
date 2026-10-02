@@ -42,7 +42,7 @@ export interface Interface {
   readonly get: (mcpName: string) => Effect.Effect<Entry | undefined>
   readonly getForUrl: (mcpName: string, serverUrl: string) => Effect.Effect<Entry | undefined>
   readonly set: (mcpName: string, entry: Entry, serverUrl?: string) => Effect.Effect<void>
-  readonly remove: (mcpName: string) => Effect.Effect<void>
+  readonly remove: (mcpName: string, serverUrl?: string) => Effect.Effect<void>
   readonly updateTokens: (mcpName: string, tokens: Tokens, serverUrl?: string) => Effect.Effect<void>
   readonly updateClientInfo: (mcpName: string, clientInfo: ClientInfo, serverUrl?: string) => Effect.Effect<void>
   readonly updateCodeVerifier: (mcpName: string, codeVerifier: string) => Effect.Effect<void>
@@ -101,8 +101,9 @@ const layer = Layer.effect(
       }))
     })
 
-    const remove = Effect.fn("McpAuth.remove")(function* (mcpName: string) {
+    const remove = Effect.fn("McpAuth.remove")(function* (mcpName: string, serverUrl?: string) {
       yield* mutate((data) => {
+        if (serverUrl && data[mcpName]?.serverUrl !== serverUrl) return undefined
         const next = { ...data }
         delete next[mcpName]
         return next
@@ -112,7 +113,7 @@ const layer = Layer.effect(
     const updateField = <K extends keyof Entry>(field: K, spanName: string) =>
       Effect.fn(`McpAuth.${spanName}`)(function* (mcpName: string, value: NonNullable<Entry[K]>, serverUrl?: string) {
         yield* mutate((data) => {
-          const entry = data[mcpName] ?? {}
+          const entry = serverUrl && data[mcpName]?.serverUrl !== serverUrl ? {} : (data[mcpName] ?? {})
           entry[field] = value
           if (serverUrl) entry.serverUrl = serverUrl
           return { ...data, [mcpName]: entry }

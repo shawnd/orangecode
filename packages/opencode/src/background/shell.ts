@@ -6,12 +6,13 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Identifier } from "@opencode-ai/core/id/id"
 import { Shell } from "@opencode-ai/core/shell"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { archivedOutput, type OutputAvailability } from "@opencode-ai/core/background-job"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "./job"
 import { Truncate } from "@/tool/truncate"
 
-export type Info = {
+export type Info = OutputAvailability & {
   id: string
   sessionID: string
   command: string
@@ -48,6 +49,7 @@ type Entry = {
   stdin?: Queue.Queue<Uint8Array, Cause.Done>
   dirty?: Queue.Queue<void>
   tailPath?: string
+  tailExpiresAt?: number
   revision: number
 }
 
@@ -97,11 +99,17 @@ const layer = Layer.effect(
     })
 
     const snapshot = Effect.fnUntraced(function* (entry: Entry) {
+      if (!entry.tailPath) return { ...entry.info }
+      const output = yield* archivedOutput({
+        load: fs
+          .readFileString(entry.tailPath)
+          .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined))),
+        expiresAt: entry.tailExpiresAt,
+      })
       return {
         ...entry.info,
-        output: entry.tailPath
-          ? yield* fs.readFileString(entry.tailPath).pipe(Effect.mapError(error))
-          : entry.info.output,
+        ...output,
+        output: "output" in output ? (output.output ?? "") : "",
       }
     })
 
@@ -182,15 +190,15 @@ const layer = Layer.effect(
           // look exited while a descendant still holds stdout/stderr and keeps running.
           yield* Effect.addFinalizer(() => handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.ignore))
           yield* Deferred.succeed(ready, undefined)
-          const code = yield* input.timeout === undefined
-            ? handle.exitCode
-            : handle.exitCode.pipe(
+          const completed = Effect.all([handle.exitCode, Fiber.join(output)], { concurrency: "unbounded" })
+          const [code] = yield* input.timeout === undefined
+            ? completed
+            : completed.pipe(
                 Effect.timeoutOrElse({
                   duration: input.timeout,
                   orElse: () => Effect.fail(new Error(`Shell timed out after ${input.timeout} ms`)),
                 }),
               )
-          yield* Fiber.join(output)
           entry.info.exit = code
           if (code !== 0) return yield* Effect.fail(new Error(`Shell exited with code ${code}`))
           return entry.info.output
@@ -260,15 +268,22 @@ const layer = Layer.effect(
                   yield* Deferred.await(delivered)
                   yield* jobs.wait({ id: entry.info.id })
                   const tailPath = `${entry.info.outputPath}.tail`
-                  // Persist before releasing either resident copy. Log paths and
-                  // lightweight status descriptors retain their owner lifetime.
+                  // Persist before releasing either resident copy. Tail payloads
+                  // share truncation's seven-day retention; descriptors outlive them.
                   yield* fs.writeFileString(tailPath, entry.info.output)
-                  yield* jobs.acknowledge(entry.info.id, fs.readFileString(tailPath).pipe(Effect.orDie))
+                  const tailExpiresAt = (yield* Clock.currentTimeMillis) + 7 * 24 * 60 * 60 * 1000
+                  yield* jobs.acknowledge(entry.info.id, {
+                    load: fs
+                      .readFileString(tailPath)
+                      .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined))),
+                    expiresAt: tailExpiresAt,
+                  })
                   data.entries.set(entry.info.id, {
                     info: { ...entry.info, output: "" },
                     ancestors: entry.ancestors,
                     revision: entry.revision,
                     tailPath,
+                    tailExpiresAt,
                   })
                 }).pipe(Effect.forkIn(data.scope), Effect.asVoid)
             }
@@ -365,6 +380,9 @@ export function metadata(info: Info) {
     pid: info.pid,
     exit: info.exit ?? null,
     error: info.error,
+    outputAvailability: info.outputAvailability,
+    outputExpiresAt: info.outputExpiresAt,
+    outputError: info.outputError,
     truncated: false,
   }
 }

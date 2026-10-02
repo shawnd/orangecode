@@ -395,15 +395,22 @@ describe("HttpApi UI fallback", () => {
 
   it.live("accepts basic auth for the web UI", () =>
     Effect.gen(function* () {
+      let upstreamRequest: HttpClientRequest.HttpClientRequest | undefined
       const response = yield* uiApp({
         password: "secret",
         username: "opencode",
         disableEmbeddedWebUi: true,
+        client: httpClient(new Response("ui"), (request) => {
+          upstreamRequest = request
+        }),
       }).request("/", {
         headers: { authorization: `Basic ${btoa("opencode:secret")}` },
       })
 
       expect(response.status).toBe(200)
+      expect(upstreamRequest?.url).toBe("https://app.opencode.ai/")
+      expect(upstreamRequest?.headers.authorization).toBeUndefined()
+      expect(JSON.stringify(upstreamRequest?.headers)).not.toContain(btoa("opencode:secret"))
     }),
   )
 

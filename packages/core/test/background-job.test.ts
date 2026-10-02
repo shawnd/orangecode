@@ -4,6 +4,8 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Deferred, Effect, Exit, Fiber, Scope } from "effect"
 import { it } from "./lib/effect"
 import { unlink } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 
 const jobsLayer = LayerNode.compile(BackgroundJob.node)
 
@@ -13,12 +15,12 @@ describe("BackgroundJob", () => {
       const jobs = yield* BackgroundJob.make
       const latch = yield* Deferred.make<void>()
       const output = "late-output".repeat(3000)
-      const path = `/tmp/opencode/server-jobs-core-${process.pid}.tail`
+      const file = path.join(os.tmpdir(), `server-jobs-core-${process.pid}.tail`)
       yield* Effect.acquireRelease(
-        Effect.promise(() => Bun.write(path, output)),
-        () => Effect.promise(() => unlink(path)),
+        Effect.promise(() => Bun.write(file, output)),
+        () => Effect.promise(() => unlink(file)),
       )
-      const load = Effect.promise(() => Bun.file(path).text())
+      const load = Effect.promise(() => Bun.file(file).text())
       const job = yield* jobs.start({ type: "test", run: Deferred.await(latch).pipe(Effect.as(output)) })
       expect(yield* jobs.acknowledge(job.id, load)).toBe(false)
       const waiting = yield* jobs.wait({ id: job.id }).pipe(Effect.forkScoped)
@@ -26,13 +28,47 @@ describe("BackgroundJob", () => {
       const completed = yield* jobs.wait({ id: job.id })
       if (!completed.info) throw new Error("Completed job disappeared before acknowledgement")
       expect(yield* jobs.acknowledge(job.id, load)).toBe(true)
-      expect(yield* jobs.wait({ id: job.id })).toEqual(completed)
-      expect(yield* jobs.get(job.id)).toEqual(completed.info)
-      expect(yield* jobs.cancel(job.id)).toEqual(completed.info)
-      expect(yield* jobs.list()).toEqual([completed.info])
-      expect(yield* Fiber.join(waiting)).toEqual(completed)
+      expect(yield* jobs.wait({ id: job.id })).toMatchObject(completed)
+      expect(yield* jobs.get(job.id)).toMatchObject({ ...completed.info, outputAvailability: "available" })
+      expect(yield* jobs.cancel(job.id)).toMatchObject(completed.info)
+      expect(yield* jobs.list()).toMatchObject([{ id: job.id, status: "completed", outputAvailability: "archived" }])
+      expect((yield* jobs.list())[0].output).toBeUndefined()
+      expect(yield* Fiber.join(waiting)).toMatchObject(completed)
       expect(yield* jobs.extend({ id: job.id, run: Effect.succeed("no") })).toBe(false)
       expect(yield* jobs.acknowledge("missing", load)).toBe(false)
+    }),
+  )
+  it.live("lists without historical reads and distinguishes expiry from retryable archive failures", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.make
+      let reads = 0
+      const old = yield* jobs.start({ type: "test", run: Effect.succeed("old") })
+      yield* jobs.wait({ id: old.id })
+      yield* jobs.acknowledge(old.id, {
+        load: Effect.sync(() => {
+          reads++
+          throw new Error("archive read failed")
+        }),
+        expiresAt: Date.now() + 10000,
+      })
+      const live = yield* jobs.start({ type: "test", run: Effect.never })
+      expect((yield* jobs.list()).find((job) => job.id === old.id)?.outputAvailability).toBe("archived")
+      expect(reads).toBe(0)
+      expect((yield* jobs.cancel(live.id))?.status).toBe("cancelled")
+      expect(yield* jobs.get(old.id)).toMatchObject({
+        status: "completed",
+        outputAvailability: "unavailable",
+        outputError: "archive read failed",
+      })
+      const expired = yield* jobs.start({ type: "test", run: Effect.succeed("expired") })
+      yield* jobs.wait({ id: expired.id })
+      yield* jobs.acknowledge(expired.id, { load: Effect.never, expiresAt: Date.now() - 1 })
+      expect((yield* jobs.get(expired.id))?.outputAvailability).toBe("expired")
+      const missing = yield* jobs.start({ type: "test", run: Effect.succeed("missing") })
+      yield* jobs.wait({ id: missing.id })
+      yield* jobs.acknowledge(missing.id, Effect.succeed(undefined))
+      expect((yield* jobs.wait({ id: missing.id })).info?.outputAvailability).toBe("expired")
+      expect(reads).toBe(1)
     }),
   )
   it.live("tracks process-local work through explicit observation", () =>

@@ -49,6 +49,13 @@ describe("ProxyUtil", () => {
   })
 
   describe("headers", () => {
+    test("preserves authorization for legitimate API proxies", () => {
+      const authorization = "Bearer api-proxy-token"
+      expect(
+        ProxyUtil.headers(new Request("http://localhost", { headers: { authorization } })).get("authorization"),
+      ).toBe(authorization)
+    })
+
     test("strips hop-by-hop headers", () => {
       const req = new Request("http://localhost", {
         headers: {

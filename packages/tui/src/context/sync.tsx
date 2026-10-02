@@ -153,7 +153,16 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
-    const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    const hydratingSessions = new Map<
+      string,
+      { epoch: number; messages: Set<string>; parts: Set<string>; touched: Set<string> }
+    >()
+    let recovering:
+      | { permission: Set<string>; v2permission: Set<string>; question: Set<string>; status: Set<string> }
+      | undefined
+    const requestLocations = new Map<string, { directory: string; workspace?: string }>()
+    const statusVersions = new Map<string, number>()
+    let statusSnapshot = 0
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
@@ -200,6 +209,25 @@ export const {
     }
 
     event.subscribe((event, { directory, workspace }) => {
+      if (
+        (event.type.startsWith("permission.") ||
+          event.type.startsWith("question.") ||
+          event.type === "session.status") &&
+        "sessionID" in event.properties &&
+        typeof event.properties.sessionID === "string"
+      )
+        requestLocations.set(event.properties.sessionID, { directory, workspace })
+      if (event.type === "permission.asked") recovering?.permission.add(event.properties.id)
+      if (event.type === "permission.replied") recovering?.permission.add(event.properties.requestID)
+      if (event.type === "permission.v2.asked") recovering?.v2permission.add(event.properties.id)
+      if (event.type === "permission.v2.replied") recovering?.v2permission.add(event.properties.requestID)
+      if (event.type === "question.asked") recovering?.question.add(event.properties.id)
+      if (event.type === "question.replied" || event.type === "question.rejected")
+        recovering?.question.add(event.properties.requestID)
+      if (event.type === "session.status") {
+        recovering?.status.add(event.properties.sessionID)
+        statusVersions.set(event.properties.sessionID, (statusVersions.get(event.properties.sessionID) ?? 0) + 1)
+      }
       const properties = event.properties as {
         sessionID?: string
         info?: { sessionID?: string }
@@ -222,19 +250,17 @@ export const {
           })
           break
         }
-        case "server.connected":
-          fullSyncedSessions.clear()
-          for (const session of store.session.filter((session) => sdk.interest.includes(session.id)))
-            void result.session.sync(session.id)
-          break
         case "server.instance.disposed":
           void bootstrap()
           break
         case "mcp.tools.changed":
-          void sdk.client.mcp
-            .status({ directory, workspace }, { throwOnError: true })
-            .then((result) => {
-              if (result.data) setStore("mcp", reconcile(result.data))
+          void Promise.all([
+            sdk.client.mcp.status({}, { throwOnError: true }),
+            sdk.client.experimental.resource.list({}, { throwOnError: true }),
+          ])
+            .then(([status, resources]) => {
+              setStore("mcp", reconcile(status.data))
+              setStore("mcp_resource", reconcile(resources.data))
             })
             .catch((error) => console.error("Failed to refresh MCP status:", error))
           break
@@ -323,14 +349,17 @@ export const {
         }
 
         case "todo.updated":
+          hydratingSessions.get(event.properties.sessionID)?.touched.add("todo")
           setStore("todo", event.properties.sessionID, event.properties.todos)
           break
 
         case "session.diff":
+          hydratingSessions.get(event.properties.sessionID)?.touched.add("diff")
           setStore("session_diff", event.properties.sessionID, event.properties.diff)
           break
 
         case "session.deleted": {
+          hydratingSessions.get(event.properties.info.id)?.touched.add("info")
           const result = search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
             setStore(
@@ -343,6 +372,7 @@ export const {
           break
         }
         case "session.updated": {
+          hydratingSessions.get(event.properties.info.id)?.touched.add("info")
           const result = search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
             setStore("session", result.index, reconcile(event.properties.info))
@@ -360,6 +390,7 @@ export const {
         case "session.next.moved": {
           const result = search(store.session, event.properties.sessionID, (s) => s.id)
           if (!result.found) break
+          hydratingSessions.get(event.properties.sessionID)?.touched.add("info")
           setStore(
             "session",
             result.index,
@@ -595,14 +626,28 @@ export const {
             }),
             sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
             sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
-            sdk.client.mcp.status({ workspace }).then((x) => setStore("mcp", reconcile(x.data ?? {}))),
-            sdk.client.experimental.resource
-              .list({ workspace })
-              .then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
+            sdk.client.mcp.status({}).then((x) => setStore("mcp", reconcile(x.data ?? {}))),
+            sdk.client.experimental.resource.list({}).then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
             sdk.client.formatter.status({ workspace }).then((x) => setStore("formatter", reconcile(x.data ?? []))),
-            sdk.client.session.status({ workspace }).then((x) => {
-              setStore("session_status", reconcile(x.data ?? {}))
-            }),
+            (async () => {
+              const epoch = sdk.connectionEpoch
+              const snapshot = statusSnapshot
+              const versions = new Map(statusVersions)
+              const response = await sdk.client.session.status({ workspace }, { throwOnError: true })
+              sdk.flushEvents()
+              if (epoch !== sdk.connectionEpoch || snapshot !== statusSnapshot) return
+              setStore(
+                "session_status",
+                reconcile({
+                  ...Object.fromEntries(
+                    Object.entries(response.data).filter(([id]) => versions.get(id) === statusVersions.get(id)),
+                  ),
+                  ...Object.fromEntries(
+                    Object.entries(store.session_status).filter(([id]) => versions.get(id) !== statusVersions.get(id)),
+                  ),
+                }),
+              )
+            })(),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
@@ -672,12 +717,18 @@ export const {
           return last.time.completed ? "idle" : "working"
         },
         async sync(sessionID: string) {
-          await sdk.eventsReady()
+          await sdk.streamReady()
           if (!sdk.interest.includes(sessionID)) return
           if (fullSyncedSessions.has(sessionID)) return
-          const syncing = syncingSessions.get(sessionID)
+          const syncing =
+            hydratingSessions.get(sessionID)?.epoch === sdk.connectionEpoch ? syncingSessions.get(sessionID) : undefined
           if (syncing) return syncing
-          const tracker = { messages: new Set<string>(), parts: new Set<string>() }
+          const tracker = {
+            epoch: sdk.connectionEpoch,
+            messages: new Set<string>(),
+            parts: new Set<string>(),
+            touched: new Set<string>(),
+          }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
             const [session, messages, todo, diff] = await Promise.all([
@@ -687,13 +738,20 @@ export const {
               sdk.client.session.diff({ sessionID }),
             ])
             sdk.flushEvents()
-            if (!sdk.interest.includes(sessionID) || hydratingSessions.get(sessionID) !== tracker) return
+            if (
+              tracker.epoch !== sdk.connectionEpoch ||
+              !sdk.interest.includes(sessionID) ||
+              hydratingSessions.get(sessionID) !== tracker
+            )
+              return
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
-                if (match.found) draft.session[match.index] = session.data!
-                if (!match.found) draft.session.splice(match.index, 0, session.data!)
-                draft.todo[sessionID] = todo.data ?? []
+                if (!tracker.touched.has("info")) {
+                  if (match.found) draft.session[match.index] = session.data!
+                  if (!match.found) draft.session.splice(match.index, 0, session.data!)
+                }
+                if (!tracker.touched.has("todo")) draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
                 const infos = (messages.data ?? []).flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]
@@ -738,7 +796,7 @@ export const {
                 }
                 for (const message of removed) delete draft.part[message.id]
                 draft.message[sessionID] = visible
-                draft.session_diff[sessionID] = diff.data ?? []
+                if (!tracker.touched.has("diff")) draft.session_diff[sessionID] = diff.data ?? []
               }),
             )
             fullSyncedSessions.add(sessionID)
@@ -753,6 +811,143 @@ export const {
       },
       bootstrap,
     }
+    onCleanup(
+      sdk.onRecovery(async (epoch) => {
+        fullSyncedSessions.clear()
+        const tracker = {
+          permission: new Set<string>(),
+          v2permission: new Set<string>(),
+          question: new Set<string>(),
+          status: new Set<string>(),
+        }
+        recovering = tracker
+        const workspace = project.workspace.current()
+        const controlled = [
+          ...new Set([
+            ...store.session.map((session) => session.id),
+            ...requestLocations.keys(),
+            ...sdk.interest.query().split(",").filter(Boolean),
+          ]),
+        ].filter((id) => sdk.interest.owns(id))
+        await Promise.all([
+          (async () => {
+            const locations = [
+              ...new Map(
+                [
+                  { directory: sdk.directory, workspace },
+                  ...store.session.map((session) => ({ directory: session.directory, workspace: session.workspaceID })),
+                  ...requestLocations.values(),
+                ].map((location) => [JSON.stringify(location), location]),
+              ).values(),
+            ]
+            const snapshots = await Promise.all(
+              locations.map(async (location) => {
+                const [permissions, questions, statuses] = await Promise.all([
+                  sdk.client.permission.list(location, { throwOnError: true }),
+                  sdk.client.question.list(location, { throwOnError: true }),
+                  sdk.client.session.status(location, { throwOnError: true }),
+                ])
+                return { location, permissions: permissions.data, questions: questions.data, statuses: statuses.data }
+              }),
+            )
+            sdk.flushEvents()
+            if (epoch !== sdk.connectionEpoch) return
+            statusSnapshot++
+            setStore(
+              produce((draft) => {
+                const pending = snapshots
+                  .flatMap((snapshot) => snapshot.permissions)
+                  .filter((item) => !tracker.permission.has(item.id))
+                pending.push(
+                  ...Object.values(draft.permission)
+                    .flat()
+                    .filter((item) => tracker.permission.has(item.id)),
+                )
+                draft.permission = Object.groupBy(
+                  [...new Map(pending.map((item) => [item.id, item])).values()].toSorted((a, b) =>
+                    a.id.localeCompare(b.id),
+                  ),
+                  (item) => item.sessionID,
+                ) as Record<string, PermissionRequest[]>
+                const asked = snapshots
+                  .flatMap((snapshot) => snapshot.questions)
+                  .filter((item) => !tracker.question.has(item.id))
+                asked.push(
+                  ...Object.values(draft.question)
+                    .flat()
+                    .filter((item) => tracker.question.has(item.id)),
+                )
+                draft.question = Object.groupBy(
+                  [...new Map(asked.map((item) => [item.id, item])).values()].toSorted((a, b) =>
+                    a.id.localeCompare(b.id),
+                  ),
+                  (item) => item.sessionID,
+                ) as Record<string, QuestionRequest[]>
+                draft.session_status = {
+                  ...Object.fromEntries(snapshots.flatMap((snapshot) => Object.entries(snapshot.statuses))),
+                  ...Object.fromEntries(Object.entries(draft.session_status).filter(([id]) => tracker.status.has(id))),
+                }
+              }),
+            )
+            sdk.interest.reconcileStatus(store.session_status)
+            const pending = [
+              ...new Map(
+                snapshots.flatMap((snapshot) =>
+                  snapshot.permissions.map(
+                    (request) => [request.id, { request, location: snapshot.location }] as const,
+                  ),
+                ),
+              ).values(),
+            ]
+            for (const item of pending) {
+              sdk.flushEvents()
+              if (epoch !== sdk.connectionEpoch) return
+              if (
+                permission.mode !== "auto" ||
+                !sdk.interest.owns(item.request.sessionID) ||
+                tracker.permission.has(item.request.id)
+              )
+                continue
+              await sdk.client.permission.reply(
+                { requestID: item.request.id, reply: "once", ...item.location },
+                { throwOnError: true },
+              )
+              if (epoch !== sdk.connectionEpoch) return
+              setStore("permission", item.request.sessionID, (items = []) =>
+                items.filter((request) => request.id !== item.request.id),
+              )
+            }
+          })(),
+          ...(permission.mode === "auto"
+            ? controlled.map(async (sessionID) => {
+                const response = await sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true })
+                sdk.flushEvents()
+                if (epoch !== sdk.connectionEpoch || !sdk.interest.owns(sessionID)) return
+                for (const request of response.data.data) {
+                  sdk.flushEvents()
+                  if (epoch !== sdk.connectionEpoch) return
+                  if (tracker.v2permission.has(request.id)) continue
+                  await sdk.client.v2.session.permission.reply(
+                    { sessionID, requestID: request.id, reply: "once" },
+                    { throwOnError: true },
+                  )
+                }
+              })
+            : []),
+          ...[
+            ...new Set([
+              ...store.session.map((session) => session.id),
+              ...hydratingSessions.keys(),
+              ...Object.keys(store.message),
+            ]),
+          ]
+            .filter((id) => sdk.interest.includes(id))
+            .map((id) => result.session.sync(id)),
+        ]).finally(() => {
+          if (recovering === tracker) recovering = undefined
+        })
+      }),
+    )
     return result
   },
 })

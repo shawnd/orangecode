@@ -21,11 +21,13 @@ process.on("unhandledRejection", onUnhandledRejection)
 process.on("uncaughtException", onUncaughtException)
 
 // Subscribe to global events and forward them via RPC
-GlobalBus.on("event", (event) => {
+const forwardEvent = (event: unknown) => {
   Rpc.emit("global.event", event)
-})
+}
+GlobalBus.on("event", forwardEvent)
 
 let server: Awaited<ReturnType<typeof Server.listen>> | undefined
+let stopping: Promise<void> | undefined
 
 export const rpc = {
   async warmup(input: { directory: string }) {
@@ -84,11 +86,20 @@ export const rpc = {
       }),
     )
   },
-  async shutdown() {
-    await InstanceRuntime.disposeAllInstances()
-    if (server) await server.stop(true)
-    process.off("unhandledRejection", onUnhandledRejection)
-    process.off("uncaughtException", onUncaughtException)
+  shutdown() {
+    return (stopping ??= (async () => {
+      try {
+        await InstanceRuntime.disposeAllInstances()
+      } finally {
+        try {
+          if (server) await server.stop(true)
+        } finally {
+          GlobalBus.off("event", forwardEvent)
+          process.off("unhandledRejection", onUnhandledRejection)
+          process.off("uncaughtException", onUncaughtException)
+        }
+      }
+    })())
   },
 }
 

@@ -24,6 +24,8 @@ export interface McpOAuthCallbacks {
 }
 
 export class McpOAuthProvider implements OAuthClientProvider {
+  private verifier?: string
+  private oauthState?: string
   constructor(
     protected mcpName: string,
     protected serverUrl: string,
@@ -133,26 +135,22 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    await Effect.runPromise(this.auth.updateCodeVerifier(this.mcpName, codeVerifier))
+    this.verifier = codeVerifier
   }
 
   async codeVerifier(): Promise<string> {
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
-    if (!entry?.codeVerifier) {
+    if (!this.verifier) {
       throw new Error(`No code verifier saved for MCP server: ${this.mcpName}`)
     }
-    return entry.codeVerifier
+    return this.verifier
   }
 
   async saveState(state: string): Promise<void> {
-    await Effect.runPromise(this.auth.updateOAuthState(this.mcpName, state))
+    this.oauthState = state
   }
 
   async state(): Promise<string> {
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
-    if (entry?.oauthState) {
-      return entry.oauthState
-    }
+    if (this.oauthState) return this.oauthState
 
     // Generate a new state if none exists — the SDK calls state() as a
     // generator, not just a reader, so we need to produce a value even when
@@ -161,16 +159,21 @@ export class McpOAuthProvider implements OAuthClientProvider {
     const newState = Array.from(crypto.getRandomValues(new Uint8Array(32)))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("")
-    await Effect.runPromise(this.auth.updateOAuthState(this.mcpName, newState))
+    this.oauthState = newState
     return newState
   }
 
+  clearFlow(): void {
+    this.verifier = undefined
+    this.oauthState = undefined
+  }
+
   async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
+    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
     if (!entry) return
     switch (type) {
       case "all":
-        await Effect.runPromise(this.auth.remove(this.mcpName))
+        await Effect.runPromise(this.auth.remove(this.mcpName, this.serverUrl))
         break
       case "client":
         delete entry.clientInfo
@@ -187,8 +190,16 @@ export class McpOAuthProvider implements OAuthClientProvider {
 export class McpOAuthPendingProvider extends McpOAuthProvider {
   private pendingClientInfo?: OAuthClientInformationFull
   private pendingTokens?: OAuthTokens
+  private connected = false
+
+  useStoredCredentials(): void {
+    this.connected = true
+    this.pendingClientInfo = undefined
+    this.pendingTokens = undefined
+  }
 
   override async clientInformation(): Promise<OAuthClientInformation | undefined> {
+    if (this.connected) return super.clientInformation()
     if (!this.config.clientId) return this.pendingClientInfo
     return {
       client_id: this.config.clientId,
@@ -197,18 +208,22 @@ export class McpOAuthPendingProvider extends McpOAuthProvider {
   }
 
   override async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
+    if (this.connected) return super.saveClientInformation(info)
     this.pendingClientInfo = info
   }
 
   override async tokens(): Promise<OAuthTokens | undefined> {
+    if (this.connected) return super.tokens()
     return this.pendingTokens
   }
 
   override async saveTokens(tokens: OAuthTokens): Promise<void> {
+    if (this.connected) return super.saveTokens(tokens)
     this.pendingTokens = tokens
   }
 
   override async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
+    if (this.connected) return super.invalidateCredentials(type)
     if (type === "all" || type === "client") this.pendingClientInfo = undefined
     if (type === "all" || type === "tokens") this.pendingTokens = undefined
   }

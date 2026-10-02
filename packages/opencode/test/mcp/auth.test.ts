@@ -76,3 +76,20 @@ test("serializes concurrent auth file updates across service instances", async (
     }),
   )
 })
+
+test("URL-scoped updates and logout cannot relabel or remove another server's credentials", async () => {
+  const file = authFile()
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const auth = yield* authService(file.fsLayer)
+      yield* auth.updateTokens("same-name", { accessToken: "first-token" }, "https://first.example/mcp")
+      yield* auth.updateClientInfo("same-name", { clientId: "second-client" }, "https://second.example/mcp")
+      expect((yield* auth.get("same-name"))?.tokens).toBeUndefined()
+      expect(yield* auth.getForUrl("same-name", "https://first.example/mcp")).toBeUndefined()
+      yield* auth.remove("same-name", "https://first.example/mcp")
+      expect((yield* auth.getForUrl("same-name", "https://second.example/mcp"))?.clientInfo?.clientId).toBe("second-client")
+      yield* auth.remove("same-name", "https://second.example/mcp")
+      expect(yield* auth.get("same-name")).toBeUndefined()
+    }),
+  )
+})

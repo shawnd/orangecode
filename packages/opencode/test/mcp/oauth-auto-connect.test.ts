@@ -149,7 +149,7 @@ mcpTest.instance("first connect to OAuth server shows needs_auth instead of fail
   }),
 )
 
-mcpTest.instance("state() generates and persists a new state when none is saved", () =>
+mcpTest.instance("state() generates a provider-owned state without persisting it", () =>
   Effect.gen(function* () {
     const auth = yield* McpAuth.Service
     const provider = new McpOAuthProvider(
@@ -164,11 +164,12 @@ mcpTest.instance("state() generates and persists a new state when none is saved"
 
     const state = yield* Effect.promise(() => provider.state())
     expect(state).toHaveLength(64)
-    expect((yield* auth.get("test-state-gen"))?.oauthState).toBe(state)
+    expect(yield* Effect.promise(() => provider.state())).toBe(state)
+    expect((yield* auth.get("test-state-gen"))?.oauthState).toBeUndefined()
   }),
 )
 
-mcpTest.instance("state() returns existing state when one is saved", () =>
+mcpTest.instance("state() ignores legacy persisted state and returns the flow's saved state", () =>
   Effect.gen(function* () {
     const auth = yield* McpAuth.Service
     const provider = new McpOAuthProvider(
@@ -180,7 +181,9 @@ mcpTest.instance("state() returns existing state when one is saved", () =>
     )
 
     yield* auth.updateOAuthState("test-state-existing", "pre-saved-state-value")
-    expect(yield* Effect.promise(() => provider.state())).toBe("pre-saved-state-value")
+    expect(yield* Effect.promise(() => provider.state())).not.toBe("pre-saved-state-value")
+    yield* Effect.promise(() => provider.saveState("flow-state"))
+    expect(yield* Effect.promise(() => provider.state())).toBe("flow-state")
   }),
 )
 
@@ -198,6 +201,26 @@ mcpTest.instance("pending provider does not expose or overwrite existing credent
     expect(yield* Effect.promise(() => provider.tokens())).toBeUndefined()
     expect((yield* auth.get(name))?.tokens?.accessToken).toBe("old-token")
     expect((yield* auth.get(name))?.clientInfo?.clientId).toBe("old-client")
+  }),
+)
+
+mcpTest.instance("connected pending providers resume shared URL-validated credentials and persist refreshes", () =>
+  Effect.gen(function* () {
+    const auth = yield* McpAuth.Service
+    const name = "test-pending-connected"
+    const url = "https://example.com/mcp"
+    const provider = new McpOAuthPendingProvider(name, url, {}, { onRedirect: async () => {} }, auth)
+    yield* Effect.promise(() => provider.saveTokens({ access_token: "new-token", token_type: "Bearer" }))
+    yield* Effect.promise(() => provider.commit())
+    provider.useStoredCredentials()
+    expect((yield* Effect.promise(() => provider.tokens()))?.access_token).toBe("new-token")
+    yield* Effect.promise(() => provider.saveTokens({ access_token: "refreshed-token", token_type: "Bearer" }))
+    expect((yield* auth.getForUrl(name, url))?.tokens?.accessToken).toBe("refreshed-token")
+    yield* auth.updateTokens(name, { accessToken: "foreign-token" }, "https://foreign.example/mcp")
+    expect(yield* Effect.promise(() => provider.tokens())).toBeUndefined()
+    yield* auth.updateTokens(name, { accessToken: "restored-token" }, url)
+    yield* auth.remove(name, url)
+    expect(yield* Effect.promise(() => provider.tokens())).toBeUndefined()
   }),
 )
 

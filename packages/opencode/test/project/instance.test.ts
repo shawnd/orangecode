@@ -39,6 +39,33 @@ const registerDisposerScoped = (disposer: (directory: string) => Promise<void>) 
   )
 
 describe("InstanceStore", () => {
+  it.live("disposes a healthy project while another project is still initializing", () =>
+    Effect.gen(function* () {
+      const stuck = yield* tmpdirScoped({ git: true })
+      const healthy = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const disposed = yield* Deferred.make<void>()
+      yield* setBootstrap(Effect.gen(function* () {
+        const ctx = yield* InstanceRef
+        if (ctx?.directory !== stuck) return
+        yield* Deferred.succeed(started, undefined)
+        yield* Deferred.await(release)
+      }))
+      const loading = yield* store.load({ directory: stuck }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      yield* store.load({ directory: healthy })
+      yield* registerDisposerScoped(async (directory) => {
+        if (directory === healthy) Effect.runSync(Deferred.succeed(disposed, undefined))
+      })
+      const cleanup = yield* store.disposeAll().pipe(Effect.forkScoped)
+      yield* Deferred.await(disposed).pipe(Effect.timeout("2 seconds"), Effect.ensuring(Deferred.succeed(release, undefined)))
+      yield* Fiber.join(loading)
+      yield* Fiber.join(cleanup)
+    }),
+  )
+
   it.live("loads instance context", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })

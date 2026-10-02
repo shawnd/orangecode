@@ -1,6 +1,10 @@
 # Synced shared-server benchmark rerun
 
 Rerun of the default-policy native fleet comparison after merging `shawnd`.
+This measures changes from an older shared-server revision, not the server
+architecture choice. For current `shawnd` per-terminal backends versus the
+merged shared daemon, see
+[`server-approach-synced-results.md`](server-approach-synced-results.md).
 Two read-only measurement subagents own MINI and full-TUI runs respectively;
 the shared benchmark lock serializes all measurements.
 

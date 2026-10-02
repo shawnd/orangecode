@@ -6,7 +6,19 @@ import { makeGlobalNode } from "./effect/app-node"
 
 export type Status = "running" | "completed" | "error" | "cancelled"
 
-export type Info = {
+export type Archive = {
+  load: Effect.Effect<string | undefined, unknown>
+  expiresAt?: number
+}
+
+/** Availability of the result/preview payload, independently of status and any full-output log paths. */
+export type OutputAvailability = {
+  outputAvailability?: "archived" | "available" | "expired" | "unavailable"
+  outputExpiresAt?: number
+  outputError?: string
+}
+
+export type Info = OutputAvailability & {
   id: string
   type: string
   title?: string
@@ -33,7 +45,7 @@ type Active = {
 
 type State = {
   jobs: SynchronizedRef.SynchronizedRef<Map<string, Active>>
-  terminal: Map<string, { info: Info; output: Effect.Effect<string> }>
+  terminal: Map<string, { info: Info; archive: Archive }>
   scope: Scope.Scope
 }
 
@@ -87,6 +99,7 @@ export type WaitResult = {
 }
 
 export interface Interface {
+  /** Lists descriptors without consulting historical storage. Use get/wait to load archived output. */
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: string) => Effect.Effect<Info | undefined>
   readonly start: (input: StartInput) => Effect.Effect<Info>
@@ -96,7 +109,7 @@ export interface Interface {
   readonly promote: (id: string) => Effect.Effect<Info | undefined>
   readonly cancel: (id: string) => Effect.Effect<Info | undefined>
   /** Caller has delivered the terminal result and persisted a reloadable output. Never releases running work. */
-  readonly acknowledge: (id: string, output: Effect.Effect<string>) => Effect.Effect<boolean>
+  readonly acknowledge: (id: string, output: Archive["load"] | Archive) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/BackgroundJob") {}
@@ -112,6 +125,28 @@ function errorText(error: unknown) {
   if (error instanceof Error) return error.message
   return String(error)
 }
+
+/** Missing/expired payloads do not erase terminal status; other read failures remain distinguishable and retryable. */
+export const archivedOutput = Effect.fn("BackgroundJob.archivedOutput")(function* (archive: Archive, load = true) {
+  const outputExpiresAt = archive.expiresAt
+  if (outputExpiresAt !== undefined && (yield* Clock.currentTimeMillis) >= outputExpiresAt)
+    return { outputAvailability: "expired" as const, outputExpiresAt }
+  if (!load) return { outputAvailability: "archived" as const, outputExpiresAt }
+  const exit = yield* archive.load.pipe(Effect.exit)
+  if (Exit.isFailure(exit)) {
+    if (Cause.hasInterrupts(exit.cause)) return yield* Effect.failCause(exit.cause)
+    return {
+      outputAvailability: "unavailable" as const,
+      outputExpiresAt,
+      outputError: errorText(Cause.squash(exit.cause)),
+    }
+  }
+  return {
+    outputAvailability: exit.value === undefined ? ("expired" as const) : ("available" as const),
+    outputExpiresAt,
+    output: exit.value,
+  }
+}, Effect.orDie)
 
 /**
  * Makes one scoped, process-local registry. Entries are intentionally not
@@ -196,10 +231,10 @@ export const make = Effect.gen(function* () {
     const terminal = yield* Effect.forEach(
       Array.from(state.terminal.values()),
       (job) =>
-        Effect.map(job.output, (output) => ({
+        Effect.map(archivedOutput(job.archive, false), (output) => ({
           ...job.info,
           metadata: job.info.metadata ? { ...job.info.metadata } : undefined,
-          output,
+          ...output,
         })),
       { concurrency: 8 },
     )
@@ -214,7 +249,7 @@ export const make = Effect.gen(function* () {
     return {
       ...terminal.info,
       metadata: terminal.info.metadata ? { ...terminal.info.metadata } : undefined,
-      output: yield* terminal.output,
+      ...(yield* archivedOutput(terminal.archive)),
     }
   })
 
@@ -381,7 +416,10 @@ export const make = Effect.gen(function* () {
     return yield* SynchronizedRef.modify(state.jobs, (jobs) => {
       const job = jobs.get(id)
       if (!job || job.info.status === "running") return [false, jobs] as const
-      state.terminal.set(id, { info: { ...snapshot(job), output: undefined }, output })
+      state.terminal.set(id, {
+        info: { ...snapshot(job), output: undefined },
+        archive: Effect.isEffect(output) ? { load: output } : output,
+      })
       jobs.delete(id)
       return [true, jobs] as const
     })

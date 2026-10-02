@@ -32,7 +32,19 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const selective = process.env.OPENCODE_EXPERIMENTAL_EVENT_INTEREST === "1"
     const interest = createSessionInterest(selective)
     let mounted = false
+    let subscription: string | undefined
     let ready = Promise.withResolvers<void>()
+    let listening = Promise.withResolvers<void>()
+    let epoch = 0
+    const recoveries = new Set<(epoch: number) => Promise<void>>()
+
+    function resetConnection() {
+      epoch++
+      ready.resolve()
+      listening.resolve()
+      ready = Promise.withResolvers<void>()
+      listening = Promise.withResolvers<void>()
+    }
 
     function createSDK() {
       return createOpencodeClient({
@@ -50,9 +62,22 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
                 /^\/(?:api\/session\/([^/]+)\/(?:prompt|shell|compact)|session\/([^/]+)\/(?:message|prompt_async|shell|command))$/,
               )
             if (submission) {
-              interest.control(decodeURIComponent(submission[1] ?? submission[2]))
-              if (selective) await eventsReady()
+              request.signal.throwIfAborted()
+              const sessionID = decodeURIComponent(submission[1] ?? submission[2])
+              const release = interest.holdSubmission(sessionID)
+              try {
+                interest.control(sessionID)
+                while (true) {
+                  const current = await waitReady(false, request.signal)
+                  request.signal.throwIfAborted()
+                  if (current !== epoch) continue
+                  return (props.fetch ?? fetch)(request)
+                }
+              } finally {
+                release()
+              }
             }
+            request.signal.throwIfAborted()
             return (props.fetch ?? fetch)(request)
           },
           { preconnect: fetch.preconnect },
@@ -94,12 +119,26 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       queue.flush()
     }
 
-    const handleEvent = (event: GlobalEvent) => {
+    const handleEvent = (event: GlobalEvent, failed?: () => void) => {
       if (abort.signal.aborted) return
       if (event.payload.type === "server.connected") {
+        if (props.events) resetConnection()
         for (const session of event.payload.properties.sessions ?? [])
           interest.observe({ id: session.id, parentID: session.parentID ?? undefined }, false)
-        ready.resolve()
+        const current = epoch
+        const completion = ready
+        listening.resolve()
+        // Recovery reads wait for the transport, never for submission readiness.
+        // Continue consuming SSE while snapshots are held so live updates can win.
+        flush()
+        void Promise.all([...recoveries].map((recover) => recover(current)))
+          .then(() => {
+            if (epoch === current) completion.resolve()
+          })
+          .catch((error) => {
+            console.error("Failed to recover event connection:", error)
+            if (epoch === current && !abort.signal.aborted) failed?.()
+          })
       }
       if (event.payload.type === "session.created" || event.payload.type === "session.updated")
         interest.observe(event.payload.properties.info)
@@ -121,8 +160,8 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     function startSSE() {
       flush()
       sse?.abort()
-      ready.resolve()
-      ready = Promise.withResolvers<void>()
+      resetConnection()
+      subscription = interest.query()
       const ctrl = new AbortController()
       sse = ctrl
       ;(async () => {
@@ -130,25 +169,30 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         while (true) {
           if (abort.signal.aborted || ctrl.signal.aborted) break
 
-          const events = await sdk.global.event({
-            ...(selective ? { sessions: interest.query() } : {}),
-            signal: ctrl.signal,
-            sseMaxRetryAttempts: 0,
-          })
+          await (async () => {
+            const connection = new AbortController()
+            const events = await sdk.global.event({
+              ...(selective ? { sessions: interest.query() } : {}),
+              signal: AbortSignal.any([ctrl.signal, connection.signal]),
+              sseMaxRetryAttempts: 0,
+            })
 
-          if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
-            // Start syncing workspaces, it's important to do this after
-            // we've started listening to events
-            await sdk.sync.start().catch(() => {})
-          }
+            if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
+              // Start syncing workspaces, it's important to do this after
+              // we've started listening to events
+              await sdk.sync.start().catch(() => {})
+            }
 
-          for await (const event of events.stream) {
-            if (ctrl.signal.aborted) break
-            handleEvent(event)
-          }
+            for await (const event of events.stream) {
+              if (ctrl.signal.aborted) break
+              if (event.payload.type === "server.connected") attempt = 0
+              handleEvent(event, () => connection.abort())
+            }
+          })().catch(() => {})
 
           if (timer) clearTimeout(timer)
           if (queue.length > 0) flush()
+          if (sse === ctrl && !ctrl.signal.aborted) resetConnection()
           attempt += 1
           if (abort.signal.aborted || ctrl.signal.aborted) break
 
@@ -170,7 +214,10 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           return
         }
         unsubscribe = cleanup
-        ready.resolve()
+        if (epoch === 0) {
+          listening.resolve()
+          ready.resolve()
+        }
 
         if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
           // Start syncing workspaces, it's important to do this after
@@ -183,7 +230,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     })
     onCleanup(
       interest.onChange(() => {
-        if (selective && mounted && !props.events) startSSE()
+        if (selective && mounted && !props.events && subscription !== interest.query()) startSSE()
       }),
     )
 
@@ -192,20 +239,36 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       sse?.abort()
       unsubscribe?.()
       ready.resolve()
+      listening.resolve()
       if (timer) clearTimeout(timer)
       handlers.clear()
       queue.close()
     })
 
-    async function eventsReady() {
-      while (!abort.signal.aborted) {
-        const current = ready
-        await current.promise
-        if (current === ready) {
+    async function waitReady(transport: boolean, signal?: AbortSignal) {
+      const cancellation = AbortSignal.any([abort.signal, ...(signal ? [signal] : [])])
+      cancellation.throwIfAborted()
+      const stopped = Promise.withResolvers<never>()
+      const cancel = () => stopped.reject(cancellation.reason)
+      cancellation.addEventListener("abort", cancel, { once: true })
+      try {
+        while (true) {
+          const current = transport ? listening : ready
+          await Promise.race([current.promise, stopped.promise])
+          cancellation.throwIfAborted()
+          if (current !== (transport ? listening : ready)) continue
           flush()
-          return
+          cancellation.throwIfAborted()
+          if (current !== (transport ? listening : ready)) continue
+          return epoch
         }
+      } finally {
+        cancellation.removeEventListener("abort", cancel)
       }
+    }
+
+    async function eventsReady(signal?: AbortSignal) {
+      await waitReady(false, signal)
     }
 
     return {
@@ -225,6 +288,14 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       interest,
       selective,
       eventsReady,
+      streamReady: (signal?: AbortSignal) => waitReady(true, signal),
+      get connectionEpoch() {
+        return epoch
+      },
+      onRecovery(recover: (epoch: number) => Promise<void>) {
+        recoveries.add(recover)
+        return () => recoveries.delete(recover)
+      },
       flushEvents: flush,
       // Explicit adoption is client-local. A second attached client starts view-only.
       adoptSession(sessionID: string) {

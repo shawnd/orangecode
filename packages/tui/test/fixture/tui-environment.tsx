@@ -23,8 +23,11 @@ export function TestTuiContexts(
       value={{
         cwd: props.cwd ?? props.directory ?? "/tmp/opencode/packages/tui",
         home: "/tmp/opencode/home",
-        state: "/tmp/opencode/state",
-        database: path.join(props.paths?.state ?? "/tmp/opencode/state", "opencode.db"),
+        state: path.join(process.env.TMPDIR ?? "/tmp/opencode", "state"),
+        database: path.join(
+          props.paths?.state ?? path.join(process.env.TMPDIR ?? "/tmp/opencode", "state"),
+          "opencode.db",
+        ),
         worktree: "/tmp/opencode",
         ...props.paths,
       }}

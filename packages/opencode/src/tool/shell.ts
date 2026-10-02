@@ -1,4 +1,4 @@
-import { Effect, Fiber, Option, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
@@ -460,6 +460,7 @@ export const ShellTool = Tool.define(
       let cut = false
       let expired = false
       let aborted = false
+      const sinkFailed = yield* Deferred.make<never, Error>()
 
       const closeSink = Effect.fnUntraced(function* () {
         const stream = sink
@@ -534,6 +535,7 @@ export const ShellTool = Tool.define(
                         sink = createWriteStream(next, { flags: "a" })
                         sink.on("error", (error) => {
                           sinkError = error
+                          Deferred.doneUnsafe(sinkFailed, Effect.fail(error))
                         })
                         full = ""
                       }),
@@ -557,6 +559,12 @@ export const ShellTool = Tool.define(
             }),
           )
 
+          // On failure, terminate the group before closing consumer pipes, even
+          // when the leader has exited or a descendant ignores TERM.
+          yield* Effect.addFinalizer((exit) =>
+            Exit.isFailure(exit) ? handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.ignore) : Effect.void,
+          )
+
           const abort = Effect.callback<void>((resume) => {
             if (ctx.abort.aborted) return resume(Effect.void)
             const handler = () => resume(Effect.void)
@@ -566,14 +574,15 @@ export const ShellTool = Tool.define(
 
           const timeout = Effect.sleep(`${input.timeout + 100} millis`)
 
-          const exit = yield* Effect.raceAll([
+          const exit = yield* Effect.raceAllFirst([
             // Pipe holders can outlive the shell. Keep abort/timeout active while
             // draining output, rather than joining after the race has finished.
-            handle.exitCode.pipe(
-              Effect.flatMap((code) => Fiber.join(output).pipe(Effect.as({ kind: "exit" as const, code }))),
+            Effect.all([handle.exitCode, Fiber.join(output)], { concurrency: "unbounded" }).pipe(
+              Effect.map(([code]) => ({ kind: "exit" as const, code })),
             ),
             abort.pipe(Effect.map(() => ({ kind: "abort" as const, code: null }))),
             timeout.pipe(Effect.map(() => ({ kind: "timeout" as const, code: null }))),
+            Deferred.await(sinkFailed),
           ])
 
           if (exit.kind === "abort") {
@@ -585,6 +594,7 @@ export const ShellTool = Tool.define(
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
           }
 
+          yield* closeSink()
           if (sinkError) return yield* Effect.fail(sinkError)
 
           return exit.kind === "exit" ? exit.code : null

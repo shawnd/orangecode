@@ -91,6 +91,8 @@ def run(binary, root, port, full=False, policies=False):
         resumed.close()
         clients.remove(resumed)
         forked = attach("fork", ["--session", session, "--fork"])
+        # Full TUI paints before sync completes and the asynchronous fork runs.
+        bench.drain_until([forked], lambda: len(bench.api(endpoint, env, "/session")) == 2)
         all_sessions = bench.api(endpoint, env, "/session")
         assert len(all_sessions) == 2, all_sessions
         new = next(item["id"] for item in all_sessions if item["id"] != session)
