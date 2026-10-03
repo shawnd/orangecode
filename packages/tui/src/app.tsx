@@ -346,12 +346,22 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                 <ToastProvider>
                                   <RouteProvider
                                     initialRoute={
-                                      input.args.continue
+                                      input.args.diff
                                         ? {
-                                            type: "session",
-                                            sessionID: "dummy",
+                                            type: "plugin",
+                                            id: "diff",
+                                            data: {
+                                              mode: "git",
+                                              directory: input.directory,
+                                              returnRoute: { name: "home" },
+                                            },
                                           }
-                                        : undefined
+                                        : input.args.continue
+                                          ? {
+                                              type: "session",
+                                              sessionID: "dummy",
+                                            }
+                                          : undefined
                                     }
                                   >
                                     <TuiConfigProvider config={input.config}>
@@ -545,6 +555,18 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   const args = useArgs()
+  const navigateStartup = (sessionID: string) => {
+    if (!args.diff) {
+      route.navigate({ type: "session", sessionID })
+      return
+    }
+    api.route.navigate("diff", {
+      mode: "git",
+      directory: sdk.directory,
+      sessionID,
+      returnRoute: { name: "session", params: { sessionID } },
+    })
+  }
   onMount(() => {
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
@@ -559,10 +581,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         local.model.set({ providerID, modelID }, { recent: true })
       }
       if (args.sessionID && !args.fork) {
-        route.navigate({
-          type: "session",
-          sessionID: args.sessionID,
-        })
+        navigateStartup(args.sessionID)
       }
     })
   })
@@ -579,13 +598,13 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       if (args.fork) {
         void sdk.client.session.fork({ sessionID: match }).then((result) => {
           if (result.data?.id) {
-            route.navigate({ type: "session", sessionID: result.data.id })
+            navigateStartup(result.data.id)
           } else {
             toast.show({ message: "Failed to fork session", variant: "error" })
           }
         })
       } else {
-        route.navigate({ type: "session", sessionID: match })
+        navigateStartup(match)
       }
     }
   })
@@ -599,7 +618,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     forked = true
     void sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
       if (result.data?.id) {
-        route.navigate({ type: "session", sessionID: result.data.id })
+        navigateStartup(result.data.id)
       } else {
         toast.show({ message: "Failed to fork session", variant: "error" })
       }

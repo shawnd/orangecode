@@ -24,6 +24,7 @@ await Promise.resolve(
     cors: [],
     agent: undefined,
     continue: undefined,
+    diff: undefined,
     fork: undefined,
     model: undefined,
     prompt: undefined,

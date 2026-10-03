@@ -97,6 +97,11 @@ export const TuiThreadCommand = cmd({
         describe: "continue the last session",
         type: "boolean",
       })
+      .option("diff", {
+        alias: ["d"],
+        describe: "open the working-tree diff viewer",
+        type: "boolean",
+      })
       .option("session", {
         alias: ["s"],
         type: "string",
@@ -159,6 +164,11 @@ export const TuiThreadCommand = cmd({
     const noReplay = args.replay === false || args.noReplay === true
 
     if (args.mini) {
+      if (args.diff) {
+        UI.error("--diff cannot be used with --mini")
+        process.exitCode = 1
+        return
+      }
       const network = ["--port", "--hostname", "--mdns", "--no-mdns", "--mdns-domain", "--cors"].find((option) =>
         process.argv.some((arg) => arg === option || arg.startsWith(option + "=")),
       )
@@ -298,6 +308,7 @@ export const TuiThreadCommand = cmd({
             events: transport.events,
             args: {
               continue: args.continue,
+              diff: args.diff,
               sessionID: args.session,
               agent: args.agent,
               model: args.model,

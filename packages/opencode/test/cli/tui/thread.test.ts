@@ -11,8 +11,8 @@ describe("tui thread", () => {
   test("loads the TUI integration lazily", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui.ts", import.meta.url)).text()
 
-    expect(source).toContain('await import("../tui/layer")')
-    expect(source).toMatch(/await import\(["']@\/plugin\/tui\/runtime["']\)/)
+    expect(source).toContain('import("../tui/layer")')
+    expect(source).toMatch(/import\(["']@\/plugin\/tui\/runtime["']\)/)
     expect(source).not.toContain('import("./app")')
   })
 
@@ -71,6 +71,28 @@ describe("tui thread", () => {
 
     expect(args.mdns).toBe(false)
   })
+
+  test("parses diff aliases with a project and session continuation", async () => {
+    for (const option of ["-d", "--diff"]) {
+      const args = await yargs([])
+        .command({ ...TuiThreadCommand, handler: () => {} })
+        .exitProcess(false)
+        .parse([".", option, "-c"])
+
+      expect(args.diff).toBe(true)
+      expect(args.project).toBe(".")
+      expect(args.continue).toBe(true)
+    }
+  })
+
+  cliIt.live("rejects the diff viewer in mini mode", ({ opencode }) =>
+    Effect.gen(function* () {
+      const result = yield* opencode.spawn(["--mini", "-d"])
+
+      opencode.expectExit(result, 1)
+      expect(result.stderr).toContain("--diff cannot be used with --mini")
+    }),
+  )
 
   cliIt.live("rejects mini-only options without --mini", ({ opencode }) =>
     Effect.gen(function* () {

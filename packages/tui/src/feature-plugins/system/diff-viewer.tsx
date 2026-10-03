@@ -118,6 +118,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     ("params" in props.api.route.current ? props.api.route.current.params : undefined) as
       | {
           mode?: DiffMode
+          directory?: string
           sessionID?: string
           messageID?: string
           returnRoute?: TuiRouteCurrent
@@ -141,7 +142,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
       mode: mode(),
       sessionID,
       messageID: params()?.messageID,
-      directory: sessionID ? props.api.state.session.get(sessionID)?.directory : undefined,
+      directory: params()?.directory ?? (sessionID ? props.api.state.session.get(sessionID)?.directory : undefined),
     }
   })
   const [diff] = createResource(diffInput, async (input) => {
@@ -1073,6 +1074,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
             dialog.clear()
             props.api.route.navigate(ROUTE, {
               mode: option.value,
+              directory: params()?.directory,
               sessionID: params()?.sessionID,
               messageID: params()?.messageID,
               returnRoute: params()?.returnRoute,
