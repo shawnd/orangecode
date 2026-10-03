@@ -77,6 +77,9 @@ export function createSessionInterest(selective = true) {
     owns(sessionID: string) {
       return belongs(sessionID, controlled)
     },
+    shouldNotify(sessionID: string) {
+      return belongs(sessionID, new Set([...controlled, ...(selected ? [selected] : [])]))
+    },
     includes(sessionID: string) {
       if (!selective) return true
       return belongs(sessionID, new Set([...active, ...(selected ? [selected] : [])]))

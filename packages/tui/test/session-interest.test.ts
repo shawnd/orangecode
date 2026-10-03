@@ -1,6 +1,33 @@
 import { expect, test } from "bun:test"
 import { createSessionInterest } from "../src/context/session-interest"
 
+test("error notifications stay local even when selective event subscriptions are disabled", () => {
+  const client = createSessionInterest(false)
+  client.observe({ id: "other-child", parentID: "other" })
+  client.observe({ id: "my-child", parentID: "mine" })
+  client.observe({ id: "my-grandchild", parentID: "my-child" })
+
+  expect(client.includes("other")).toBe(true)
+  expect(client.shouldNotify("other")).toBe(false)
+  expect(client.shouldNotify("other-child")).toBe(false)
+
+  client.select("other")
+  expect(client.shouldNotify("other")).toBe(true)
+  expect(client.shouldNotify("other-child")).toBe(true)
+  expect(client.owns("other")).toBe(false)
+
+  client.control("mine")
+  client.select("third")
+  client.status("mine", false)
+  expect(client.shouldNotify("other")).toBe(false)
+  expect(client.shouldNotify("other-child")).toBe(false)
+  expect(client.shouldNotify("third")).toBe(true)
+  expect(client.shouldNotify("my-grandchild")).toBe(true)
+
+  client.remove("mine")
+  expect(client.shouldNotify("my-grandchild")).toBe(false)
+})
+
 test("navigation cannot grant automatic approval authority, including descendants", () => {
   const client = createSessionInterest()
   client.observe({ id: "other-child", parentID: "other" })
