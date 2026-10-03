@@ -522,6 +522,7 @@ async function deactivatePluginEntry(state: RuntimeState, plugin: PluginEntry, p
 }
 
 async function activatePluginEntry(state: RuntimeState, plugin: PluginEntry, persist: boolean) {
+  if (runtime !== state) return false
   plugin.enabled = true
   if (persist) writePluginEnabledState(state.api, plugin.id, true)
   if (plugin.scope) {
@@ -534,6 +535,7 @@ async function activatePluginEntry(state: RuntimeState, plugin: PluginEntry, per
   const ok = await Promise.resolve()
     .then(async () => {
       await syncPluginThemes(plugin)
+      if (runtime !== state) return false
       await plugin.plugin(api, plugin.load.options, plugin.meta)
       return true
     })
@@ -548,13 +550,13 @@ async function activatePluginEntry(state: RuntimeState, plugin: PluginEntry, per
 
   if (!ok) {
     await scope.dispose()
-    state.view.update({ status: listPluginStatus(state) })
+    if (runtime === state) state.view.update({ status: listPluginStatus(state) })
     return false
   }
 
-  if (!plugin.enabled) {
+  if (runtime !== state || !plugin.enabled) {
     await scope.dispose()
-    state.view.update({ status: listPluginStatus(state) })
+    if (runtime === state) state.view.update({ status: listPluginStatus(state) })
     return true
   }
 
@@ -672,9 +674,9 @@ function addPluginEntry(state: RuntimeState, plugin: PluginEntry) {
   return true
 }
 
-function applyInitialPluginEnabledState(state: RuntimeState, config: TuiConfig.Resolved) {
+function applyInitialPluginEnabledState(state: RuntimeState, config: TuiConfig.Resolved, plugins = state.plugins) {
   const map = pluginEnabledState(state, config)
-  for (const plugin of state.plugins) {
+  for (const plugin of plugins) {
     const enabled = map[plugin.id]
     if (enabled === undefined) continue
     plugin.enabled = enabled
@@ -792,6 +794,7 @@ async function addExternalPluginEntries(state: RuntimeState, ready: PluginLoad[]
     })),
   ).catch(() => undefined)
 
+  if (runtime !== state) return { plugins: [] as PluginEntry[], ok: false }
   const plugins: PluginEntry[] = []
   let ok = true
   for (let i = 0; i < ready.length; i++) {
@@ -999,6 +1002,7 @@ export async function init(input: {
   runtime?: PluginRuntime
   dispose?: () => void
   disposeTimeoutMs?: number
+  onBuiltinsReady?: () => void
 }) {
   const cwd = process.cwd()
   if (loaded) {
@@ -1036,11 +1040,12 @@ export async function installPlugin(spec: string, options?: { global?: boolean }
 
 export async function dispose() {
   const task = loaded
-  loaded = undefined
-  dir = ""
-  if (task) await task.catch((error) => fail("failed to finish loading tui plugins during disposal", { error }))
   const state = runtime
   runtime = undefined
+  loaded = undefined
+  dir = ""
+  // Dependency resolution may outlive the UI; invalidate ownership before cleaning up.
+  if (task) void task.catch((error) => fail("failed to finish loading tui plugins during disposal", { error }))
   if (!state) return
   const queue = [...state.plugins].reverse()
   for (const plugin of queue) {
@@ -1062,6 +1067,7 @@ async function load(input: {
   runtime: PluginRuntime
   dispose?: () => void
   disposeTimeoutMs?: number
+  onBuiltinsReady?: () => void
 }) {
   const { api, config } = input
   const cwd = process.cwd()
@@ -1098,6 +1104,7 @@ async function load(input: {
     if (Flag.OPENCODE_PURE && pluginOrigins.length) {
     }
 
+    if (runtime !== next) return
     for (const item of internalTuiPlugins(flags)) {
       const entry = loadInternalPlugin(item)
       const meta = createMeta(entry.source, entry.spec, entry.target, undefined, entry.id)
@@ -1111,11 +1118,29 @@ async function load(input: {
       })
     }
 
-    const ready = await resolveExternalPlugins(records, () => TuiConfig.waitForDependencies())
-    await addExternalPluginEntries(next, ready)
+    const internalCount = next.plugins.length
+    if (input.onBuiltinsReady) {
+      applyInitialPluginEnabledState(next, config)
+      for (const plugin of next.plugins) {
+        if (runtime !== next) return
+        if (!plugin.enabled) continue
+        await activatePluginEntry(next, plugin, false)
+      }
+      if (runtime !== next) return
+      input.onBuiltinsReady()
+    }
 
-    applyInitialPluginEnabledState(next, config)
-    for (const plugin of next.plugins) {
+    if (runtime !== next) return
+    const ready = await resolveExternalPlugins(records, () => TuiConfig.waitForDependencies())
+    if (runtime !== next) return
+    await addExternalPluginEntries(next, ready)
+    if (runtime !== next) return
+
+    // Only apply initial settings to new entries: the UI may have toggled builtins while resolving dependencies.
+    const plugins = input.onBuiltinsReady ? next.plugins.slice(internalCount) : next.plugins
+    applyInitialPluginEnabledState(next, config, plugins)
+    for (const plugin of plugins) {
+      if (runtime !== next) return
       if (!plugin.enabled) continue
       // Keep plugin execution sequential for deterministic side effects:
       // command registration order affects keybind/command precedence,
@@ -1123,6 +1148,7 @@ async function load(input: {
       // and hook chains rely on stable plugin ordering.
       await activatePluginEntry(next, plugin, false)
     }
+    if (runtime !== next) return
     next.view.update({ status: listPluginStatus(next) })
   } catch (error) {
     fail("failed to load tui plugins", { directory: cwd, error })

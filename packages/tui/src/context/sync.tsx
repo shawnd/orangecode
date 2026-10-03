@@ -34,6 +34,7 @@ import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
 import { isSessionNotFound } from "../util/error"
+import { createDiffBootstrap } from "./diff-bootstrap"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -283,6 +284,7 @@ export const {
           void bootstrap()
           break
         case "mcp.tools.changed":
+          if (initialBootstrap.deferred()) break
           void Promise.all([
             sdk.client.mcp.status({}, { throwOnError: true }),
             sdk.client.experimental.resource.list({}, { throwOnError: true }),
@@ -538,6 +540,7 @@ export const {
         }
 
         case "lsp.updated": {
+          if (initialBootstrap.deferred()) break
           const workspace = project.workspace.current()
           void sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", x.data ?? []))
           break
@@ -545,6 +548,7 @@ export const {
 
         case "vcs.branch.updated": {
           if (workspace === project.workspace.current()) {
+            vcsVersion++
             setStore("vcs", { branch: event.properties.branch })
           }
           break
@@ -555,8 +559,24 @@ export const {
     const exit = useExit()
     const args = useArgs()
     let bootstrapVersion = 0
+    let vcsVersion = 0
+    const initialBootstrap = createDiffBootstrap(
+      () => void bootstrap({ backgroundCatalog: true }),
+      Boolean(args.diff && !args.continue && !args.sessionID && !args.fork),
+    )
+
+    async function refreshVcs() {
+      const version = ++vcsVersion
+      const workspace = project.workspace.current()
+      const epoch = sdk.connectionEpoch
+      const response = await sdk.client.vcs.get({ workspace })
+      if (version !== vcsVersion || epoch !== sdk.connectionEpoch || workspace !== project.workspace.current()) return
+      setStore("vcs", reconcile(response.data))
+    }
 
     async function bootstrap(input: { fatal?: boolean; backgroundCatalog?: boolean } = {}) {
+      if (initialBootstrap.deferred())
+        return refreshVcs().catch((error) => console.error("Failed to refresh VCS metadata:", error))
       const version = ++bootstrapVersion
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
@@ -665,7 +685,7 @@ export const {
               )
             })(),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
-            sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
+            refreshVcs(),
             project.workspace.sync(),
           ])
             .then(() => {
@@ -693,7 +713,7 @@ export const {
     }
 
     onMount(() => {
-      void bootstrap({ backgroundCatalog: true })
+      if (initialBootstrap.deferred()) void bootstrap({ backgroundCatalog: true })
     })
 
     const result = {
@@ -703,6 +723,9 @@ export const {
         return store.status
       },
       get ready() {
+        // Keep this provider mounted on the first close, even while the newly
+        // admitted bootstrap is loading. Readiness is not a completed snapshot.
+        if (initialBootstrap.initial) return true
         if (startup.skipInitialLoading) return true
         return store.status !== "loading"
       },
@@ -858,6 +881,7 @@ export const {
     }
     onCleanup(
       sdk.onRecovery(async (epoch) => {
+        if (initialBootstrap.deferred() && !sdk.interest.query() && requestLocations.size === 0) return refreshVcs()
         fullSyncedSessions.clear()
         const tracker = {
           permission: new Set<string>(),

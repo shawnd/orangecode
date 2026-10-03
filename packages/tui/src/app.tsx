@@ -442,6 +442,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
 
 function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
   const startup = useTuiStartup()
+  const args = useArgs()
   const tuiConfig = useTuiConfig()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
@@ -484,12 +485,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     }),
   )
   const [ready, setReady] = createSignal(false)
+  const [builtinsReady, setBuiltinsReady] = createSignal(false)
+  const routeReady = createMemo(
+    () => ready() || (builtinsReady() && route.data.type === "plugin" && route.data.id === "diff"),
+  )
   props.pluginHost
     .start({
       api,
       config: tuiConfig,
       runtime: pluginRuntime,
       dispose: () => attention.dispose(),
+      onBuiltinsReady: args.diff ? () => setBuiltinsReady(true) : undefined,
     })
     .catch((error) => {
       console.error("Failed to load TUI plugins", error)
@@ -554,10 +560,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     }
   })
 
-  const args = useArgs()
   const navigateStartup = (sessionID: string) => {
-    if (!args.diff) {
-      route.navigate({ type: "session", sessionID })
+    // Session selection may finish after the user has already closed the early diff.
+    if (!args.diff || route.data.type !== "plugin" || route.data.id !== "diff") {
+      route.navigate({
+        type: "session",
+        sessionID,
+        prompt: args.diff && route.data.type === "home" ? route.data.prompt : undefined,
+      })
       return
     }
     api.route.navigate("diff", {
@@ -627,7 +637,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   createEffect(
     on(
-      () => sync.status === "complete" && sync.data.provider.length === 0,
+      () =>
+        sync.status === "complete" &&
+        sync.data.provider.length === 0 &&
+        !(route.data.type === "plugin" && route.data.id === "diff"),
       (isEmpty, wasEmpty) => {
         // only trigger when we transition into an empty-provider state
         if (!isEmpty || wasEmpty) return
@@ -1213,10 +1226,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     void exit()
   })
 
+  // Unrelated route registrations and final plugin readiness must not remount an early viewer.
+  const pluginRender = createMemo(() => {
+    if (!routeReady() || route.data.type !== "plugin") return
+    return pluginRuntime.routes.get(route.data.id)
+  })
   const plugin = createMemo(() => {
-    if (!ready()) return
+    if (!routeReady()) return
     if (route.data.type !== "plugin") return
-    const render = pluginRuntime.routes.get(route.data.id)
+    const render = pluginRender()
     if (!render) return <PluginRouteMissing id={route.data.id} onHome={() => route.navigate({ type: "home" })} />
     return render({ params: route.data.data })
   })
@@ -1244,7 +1262,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       <Show when={Flag.OPENCODE_SHOW_TTFD}>
         <TimeToFirstDraw />
       </Show>
-      <Show when={ready()}>
+      <Show when={routeReady()}>
         <box flexGrow={1} minHeight={0} flexDirection="column">
           <Switch>
             <Match when={route.data.type === "home"}>
@@ -1268,7 +1286,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         <pluginRuntime.Slot name="app" />
       </Show>
       <Show when={!startup.skipInitialLoading}>
-        <StartupLoading ready={ready} />
+        <StartupLoading ready={routeReady} />
       </Show>
     </box>
   )

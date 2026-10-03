@@ -228,6 +228,16 @@ export const TuiThreadCommand = cmd({
       const cwd = Filesystem.resolve(process.cwd())
       const network = resolveNetworkOptionsNoConfig(args)
       const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
+      // Module evaluation can overlap server startup; config loading still waits
+      // for session validation before it may start dependency installations.
+      const modules = {
+        config: import("@/config/tui"),
+        effect: import("effect"),
+        tui: import("../tui/layer"),
+        plugins: import("@/plugin/tui/runtime"),
+      }
+      // Observe early import failures until the startup join below handles them.
+      void Promise.all(Object.values(modules)).catch(() => {})
 
       const transport = await (async () => {
         if (!external) {
@@ -276,15 +286,15 @@ export const TuiThreadCommand = cmd({
         // including resumes and flag combinations without an early prompt.
         const [config, prompt, { Effect }, { run }, { createLegacyTuiPluginHost }] = await Promise.all([
           (async () => {
-            const { TuiConfig } = await import("@/config/tui")
+            const { TuiConfig } = await modules.config
             // Config loading can start dependency installs with their own lifetime.
             await validation
             return TuiConfig.get()
           })(),
           input(args.prompt),
-          import("effect"),
-          import("../tui/layer"),
-          import("@/plugin/tui/runtime"),
+          modules.effect,
+          modules.tui,
+          modules.plugins,
           validation,
         ])
         setTimeout(() => {

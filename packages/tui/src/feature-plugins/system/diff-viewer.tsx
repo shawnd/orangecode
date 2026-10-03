@@ -413,8 +413,12 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     })
   }
 
+  let measuringPatchFiller = false
   const measurePatchFiller = () => {
+    if (measuringPatchFiller) return
+    measuringPatchFiller = true
     requestAnimationFrame(() => {
+      measuringPatchFiller = false
       if (!scroll) return
       const entries = visiblePatchFiles()
         .map((entry) => patchNodeByFileIndex.get(entry.fileIndex))

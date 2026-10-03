@@ -64,6 +64,8 @@ export type TuiPluginHost = {
     config: TuiConfig.Resolved
     runtime: PluginRuntime
     dispose?: () => void
+    /** Opt into activating enabled builtins before external resolution, then signal readiness. */
+    onBuiltinsReady?: () => void
   }): Promise<void>
   dispose(): Promise<void>
 }

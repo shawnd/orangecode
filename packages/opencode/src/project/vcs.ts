@@ -11,6 +11,7 @@ import { VcsEvent } from "@opencode-ai/schema/vcs-event"
 const PATCH_CONTEXT_LINES = 2_147_483_647
 const MAX_PATCH_BYTES = 10_000_000
 const MAX_TOTAL_PATCH_BYTES = 10_000_000
+const DIFF_CONCURRENCY = 4
 type DiffOptions = {
   readonly context?: number
 }
@@ -176,24 +177,37 @@ const files = Effect.fnUntraced(function* (
   let total = 0
   let capped = false
 
-  for (const item of list.toSorted((a, b) => a.file.localeCompare(b.file))) {
-    const stat = map.get(item.file) ?? (item.status === "added" ? yield* git.statUntracked(cwd, item.file) : undefined)
-    const patch = yield* patchForItem(git, cwd, ref, item, batch, capped, options)
-    const result: { patch: string; capped: boolean } = capped
-      ? { patch, capped: true }
-      : totalPatch(item.file, patch, total)
-    capped = capped || result.capped
-    if (!capped) {
-      total += Buffer.byteLength(result.patch)
-      capped = total >= MAX_TOTAL_PATCH_BYTES
+  const sorted = list.toSorted((a, b) => a.file.localeCompare(b.file))
+  // Bound both Git processes and buffered patches; commit the byte budget in file order.
+  for (let index = 0; index < sorted.length; index += DIFF_CONCURRENCY) {
+    const prepared = yield* Effect.forEach(
+      sorted.slice(index, index + DIFF_CONCURRENCY),
+      (item) =>
+        Effect.gen(function* () {
+          const stat =
+            map.get(item.file) ?? (item.status === "added" ? yield* git.statUntracked(cwd, item.file) : undefined)
+          const patch = yield* patchForItem(git, cwd, ref, item, batch, capped, options)
+          return { item, stat, patch }
+        }),
+      { concurrency: DIFF_CONCURRENCY },
+    )
+    for (const entry of prepared) {
+      const result: { patch: string; capped: boolean } = capped
+        ? { patch: emptyPatch(entry.item.file), capped: true }
+        : totalPatch(entry.item.file, entry.patch, total)
+      capped = capped || result.capped
+      if (!capped) {
+        total += Buffer.byteLength(result.patch)
+        capped = total >= MAX_TOTAL_PATCH_BYTES
+      }
+      next.push({
+        file: entry.item.file,
+        patch: result.patch,
+        additions: entry.stat?.additions ?? 0,
+        deletions: entry.stat?.deletions ?? 0,
+        status: entry.item.status,
+      })
     }
-    next.push({
-      file: item.file,
-      patch: result.patch,
-      additions: stat?.additions ?? 0,
-      deletions: stat?.deletions ?? 0,
-      status: item.status,
-    })
   }
 
   return next
@@ -371,13 +385,13 @@ const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Service> = 
         )
       }),
       diff: Effect.fn("Vcs.diff")(function* (mode: Mode, options?: DiffOptions) {
-        const value = yield* InstanceState.get(state)
         const ctx = yield* InstanceState.context
         if (ctx.project.vcs !== "git") return []
         if (mode === "git") {
           return yield* track(git, ctx.directory, (yield* git.hasHead(ctx.directory)) ? "HEAD" : undefined, options)
         }
 
+        const value = yield* InstanceState.get(state)
         if (!value.root) return []
         if (value.current && value.current === value.root.name) return []
         const ref = yield* git.mergeBase(ctx.directory, value.root.ref)
