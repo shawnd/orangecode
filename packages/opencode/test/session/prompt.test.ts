@@ -1916,28 +1916,121 @@ noLLMServer.instance("assertNotBusy succeeds when idle", () =>
 
 // Shell semantics
 
-it.instance("shell rejects with BusyError when loop running", () =>
+unix("shell executes during an active run and includes complete output in the next LLM input", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
+    const gate = yield* Deferred.make<void>()
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
+    const status = yield* SessionStatus.Service
+    const run = yield* SessionRunState.Service
     const chat = yield* sessions.create({ title: "Pinned" })
-    yield* llm.hang
+    yield* llm.hold("first", deferredAsPromise(gate))
+    yield* llm.text("second")
     yield* user(chat.id, "hi")
 
     const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
     yield* llm.wait(1)
     yield* waitForBusy(chat.id)
 
-    const exit = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo hi" }).pipe(Effect.exit)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(Cause.squash(exit.cause)).toBeInstanceOf(Session.BusyError)
-      expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "SessionBusyError", sessionID: chat.id })
-    }
+    const result = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "printf shell-result" })
+    expect(completedTool(result.parts)?.state.output).toBe("shell-result")
+    expect((yield* status.get(chat.id)).type).toBe("busy")
+    expect(yield* llm.calls).toBe(1)
 
+    yield* Deferred.succeed(gate, undefined)
+    yield* awaitWithTimeout(Fiber.join(fiber), "active run never consumed shell output")
+    expect(yield* llm.calls).toBe(2)
+    const inputs = yield* llm.inputs
+    expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("shell-result")
+    yield* run.assertNotBusy(chat.id)
+  }),
+)
+
+unix("shell output is withheld from history until a concurrent command finishes", () =>
+  Effect.gen(function* () {
+    const { llm, dir } = yield* useServerConfig(providerCfg)
+    const gate = yield* Deferred.make<void>()
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const fs = yield* FSUtil.Service
+    const status = yield* SessionStatus.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    yield* llm.hold("first", deferredAsPromise(gate))
+    yield* llm.text("after shell")
+    yield* user(chat.id, "hi")
+    const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    const before = yield* sessions.messages({ sessionID: chat.id })
+    const shell = yield* prompt
+      .shell({
+        sessionID: chat.id,
+        agent: "build",
+        command:
+          "printf partial; touch shell-ready; while [ ! -e shell-release ]; do sleep 0.01; done; printf complete",
+      })
+      .pipe(Effect.forkChild)
+    yield* pollWithTimeout(
+      fs.existsSafe(path.join(dir, "shell-ready")).pipe(Effect.map((exists) => (exists ? true : undefined))),
+      "concurrent shell never executed",
+    )
+    expect((yield* sessions.messages({ sessionID: chat.id })).map((message) => message.info.id)).toEqual(
+      before.map((message) => message.info.id),
+    )
+    yield* Deferred.succeed(gate, undefined)
+    yield* awaitWithTimeout(Fiber.join(run), "model did not finish while shell was running")
+    expect((yield* status.get(chat.id)).type).toBe("busy")
+    yield* writeText(path.join(dir, "shell-release"), "")
+    const result = yield* awaitWithTimeout(Fiber.join(shell), "concurrent shell never completed")
+    expect(completedTool(result.parts)?.state.output).toBe("partialcomplete")
+    yield* llm.wait(2)
+    yield* pollWithTimeout(
+      status.get(chat.id).pipe(Effect.map((current) => (current.type === "idle" ? true : undefined))),
+      "queued shell output was not consumed",
+    )
+    expect(JSON.stringify((yield* llm.inputs).at(-1)?.messages)).toContain("partialcomplete")
+  }),
+)
+
+unix("concurrent shells remain busy after the model finishes and are cancelled with the session", () =>
+  Effect.gen(function* () {
+    const { llm, dir } = yield* useServerConfig(providerCfg)
+    const gate = yield* Deferred.make<void>()
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const state = yield* SessionRunState.Service
+    const status = yield* SessionStatus.Service
+    const fs = yield* FSUtil.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    yield* llm.hold("done", deferredAsPromise(gate))
+    yield* user(chat.id, "hi")
+    const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    const shells = yield* Effect.forEach(["first", "second"], (name) =>
+      prompt
+        .shell({ sessionID: chat.id, agent: "build", command: `touch ${name}-ready; sleep 30` })
+        .pipe(Effect.forkChild),
+    )
+    yield* pollWithTimeout(
+      Effect.all([fs.existsSafe(path.join(dir, "first-ready")), fs.existsSafe(path.join(dir, "second-ready"))]).pipe(
+        Effect.map((ready) => (ready.every(Boolean) ? true : undefined)),
+      ),
+      "concurrent shells never executed",
+    )
+    yield* Deferred.succeed(gate, undefined)
+    yield* awaitWithTimeout(Fiber.join(run), "model did not finish independently of the shells")
+    expect((yield* status.get(chat.id)).type).toBe("busy")
+    expect(Exit.isFailure(yield* state.assertNotBusy(chat.id).pipe(Effect.exit))).toBe(true)
     yield* prompt.cancel(chat.id)
-    yield* Fiber.await(fiber)
+    yield* Effect.forEach(shells, (shell) => awaitWithTimeout(Fiber.join(shell), "shell was not cancelled"))
+    yield* state.assertNotBusy(chat.id)
+    expect((yield* status.get(chat.id)).type).toBe("idle")
+    const msgs = yield* sessions.messages({ sessionID: chat.id })
+    const tools = msgs.flatMap((msg) => msg.parts.filter((part) => part.type === "tool"))
+    expect(tools).toHaveLength(2)
+    expect(tools.every((part) => part.state.status === "completed" && part.state.output.includes("User aborted"))).toBe(
+      true,
+    )
   }),
 )
 
@@ -2392,25 +2485,25 @@ unixNoLLMServer(
 )
 
 unixNoLLMServer(
-  "shell rejects when another shell is already running",
+  "shell executes while another shell is already running",
   () =>
     withSh(() =>
       Effect.gen(function* () {
-        const { prompt, chat } = yield* boot()
+        const { prompt, run, chat } = yield* boot()
+        const status = yield* SessionStatus.Service
 
         const a = yield* prompt
           .shell({ sessionID: chat.id, agent: "build", command: "sleep 30" })
           .pipe(Effect.forkChild)
         yield* waitForBusy(chat.id)
 
-        const exit = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo hi" }).pipe(Effect.exit)
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(Cause.squash(exit.cause)).toBeInstanceOf(Session.BusyError)
-        }
+        const result = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "printf hi" })
+        expect(completedTool(result.parts)?.state.output).toBe("hi")
+        expect((yield* status.get(chat.id)).type).toBe("busy")
 
         yield* prompt.cancel(chat.id)
         yield* Fiber.await(a)
+        yield* run.assertNotBusy(chat.id)
       }),
     ),
   { git: true, config: cfg },

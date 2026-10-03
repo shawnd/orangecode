@@ -450,11 +450,15 @@ const layer = Layer.effect(
       } satisfies SessionV1.TextPart)
     })
 
-    const shellImpl = Effect.fn("SessionPrompt.shellImpl")(function* (input: ShellInput, ready?: Latch.Latch) {
+    const shellImpl = Effect.fn("SessionPrompt.shellImpl")(function* (
+      input: ShellInput,
+      ready?: Latch.Latch,
+      queued = false,
+    ) {
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const markReady = ready ? ready.open.pipe(Effect.asVoid) : Effect.void
-          const { msg, part, cwd } = yield* Effect.gen(function* () {
+          const { userMsg, userPart, msg, part, cwd } = yield* Effect.gen(function* () {
             const ctx = yield* InstanceState.context
             const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
             if (session.revert) {
@@ -477,7 +481,7 @@ const layer = Layer.effect(
               agent: input.agent,
               model: { providerID: model.providerID, modelID: model.modelID },
             }
-            yield* sessions.updateMessage(userMsg)
+            if (!queued) yield* sessions.updateMessage(userMsg)
             const userPart: SessionV1.Part = {
               type: "text",
               id: PartID.ascending(),
@@ -486,7 +490,7 @@ const layer = Layer.effect(
               text: "The following tool was executed by the user",
               synthetic: true,
             }
-            yield* sessions.updatePart(userPart)
+            if (!queued) yield* sessions.updatePart(userPart)
 
             const msg: SessionV1.Assistant = {
               id: MessageID.ascending(),
@@ -502,7 +506,7 @@ const layer = Layer.effect(
               modelID: model.modelID,
               providerID: model.providerID,
             }
-            yield* sessions.updateMessage(msg)
+            if (!queued) yield* sessions.updateMessage(msg)
             const started = Date.now()
             const part: SessionV1.ToolPart = {
               type: "tool",
@@ -517,8 +521,8 @@ const layer = Layer.effect(
                 input: { command: input.command },
               },
             }
-            yield* sessions.updatePart(part)
-            return { msg, part, cwd: ctx.directory }
+            if (!queued) yield* sessions.updatePart(part)
+            return { userMsg, userPart, msg, part, cwd: ctx.directory }
           }).pipe(Effect.ensuring(markReady))
 
           const cfg = yield* config.get()
@@ -533,6 +537,19 @@ const layer = Layer.effect(
                 output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
               }
               const completed = Date.now()
+              if (queued) {
+                // Publish only complete output at the next provider-turn boundary.
+                // Allocate IDs now so turns created during execution sort before it.
+                userMsg.id = input.messageID ?? MessageID.ascending()
+                userMsg.time.created = completed
+                userPart.messageID = userMsg.id
+                msg.id = MessageID.ascending()
+                msg.parentID = userMsg.id
+                msg.time.created = completed
+                part.messageID = msg.id
+                yield* sessions.updateMessage(userMsg)
+                yield* sessions.updatePart(userPart)
+              }
               if (!msg.time.completed) {
                 msg.time.completed = completed
                 yield* sessions.updateMessage(msg)
@@ -571,7 +588,7 @@ const layer = Layer.effect(
                   output += chunk
                   if (part.state.status === "running") {
                     part.state.metadata = { output }
-                    yield* sessions.updatePart(part)
+                    if (!queued) yield* sessions.updatePart(part)
                   }
                 }),
               )
@@ -588,6 +605,8 @@ const layer = Layer.effect(
             return yield* Effect.failCause(exit.cause)
           }
 
+          if (queued && !aborted)
+            yield* loop({ sessionID: input.sessionID }).pipe(Effect.forkIn(scope, { startImmediately: true }))
           return { info: msg, parts: [part] }
         }),
       )
@@ -1369,7 +1388,13 @@ const layer = Layer.effect(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
-      return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
+      return yield* state.startShell(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        shellImpl(input, ready),
+        ready,
+        shellImpl(input, ready, true),
+      )
     })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {

@@ -1371,7 +1371,7 @@ export function Prompt(props: PromptProps) {
       return false
     }
 
-    if (sendNow && props.sessionID) {
+    if (sendNow && props.sessionID && local.prompt.mode() !== "shell") {
       // Wait for cancellation and tool cleanup before starting another run.
       // The interrupted response and previously submitted inputs stay in history.
       const stopped =
