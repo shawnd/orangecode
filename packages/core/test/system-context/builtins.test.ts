@@ -9,6 +9,7 @@ import { Global } from "@opencode-ai/core/global"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextBuiltIns } from "@opencode-ai/core/system-context/builtins"
+import { CliSkills } from "@opencode-ai/core/system-context/cli-skills"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
@@ -70,6 +71,7 @@ describe("SystemContextBuiltIns", () => {
           "  Is directory a git repo: yes",
           `  Platform: ${process.platform}`,
           "</env>",
+          CliSkills.instructions,
           "",
           `Today's date: ${localDate(timestamp)}`,
         ].join("\n"),
@@ -90,6 +92,21 @@ describe("SystemContextBuiltIns", () => {
         _tag: "Updated",
         text: `Today's date is now: ${localDate(timestamp + 24 * 60 * 60 * 1000)}`,
       })
+    }),
+  )
+
+  it.effect("retains Herdr skill instructions in a replacement context generation", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(timestamp)
+      const context = yield* SystemContextRegistry.Service
+      const initialized = yield* SystemContext.initialize(yield* context.load())
+      const replacement = yield* SystemContext.replace(yield* context.load(), initialized.snapshot)
+
+      expect(replacement._tag).toBe("ReplacementReady")
+      if (replacement._tag !== "ReplacementReady") return
+      expect(replacement.generation.baseline).toContain(CliSkills.instructions)
+      expect(replacement.generation.baseline).toContain("herdr --skill")
+      expect(replacement.generation.baseline).toContain("After compaction, run it again")
     }),
   )
 
@@ -118,6 +135,7 @@ describe("SystemContextBuiltIns", () => {
           "  Is directory a git repo: yes",
           `  Platform: ${process.platform}`,
           "</env>",
+          CliSkills.instructions,
           "",
           `Today's date: ${localDate(timestamp)}`,
           "",

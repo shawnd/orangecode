@@ -24,6 +24,7 @@ import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/l
 import { Reference } from "@opencode-ai/core/reference"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { CliSkills } from "@opencode-ai/core/system-context/cli-skills"
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("muse")) {
@@ -86,6 +87,7 @@ const layer = Layer.effect(
             `  Platform: ${process.platform}`,
             `  Today's date: ${new Date().toDateString()}`,
             `</env>`,
+            CliSkills.instructions,
           ].join("\n"),
           references.length === 0
             ? undefined

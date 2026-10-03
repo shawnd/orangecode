@@ -9,6 +9,8 @@ import type { Provider } from "../../src/provider/provider"
 import { SystemPrompt } from "../../src/session/system"
 import { MCP } from "../../src/mcp"
 import { testEffect } from "../lib/effect"
+import { ProviderTest } from "../fake/provider"
+import { CliSkills } from "@opencode-ai/core/system-context/cli-skills"
 
 const skills: Skill.Info[] = [
   {
@@ -84,6 +86,18 @@ const it = testEffect(
 )
 
 describe("session.system", () => {
+  it.instance("environment includes Herdr skill loading and compaction instructions", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = (yield* prompt.environment(ProviderTest.model())).join("\n")
+
+      expect(output).toContain(CliSkills.instructions)
+      expect(output).toContain("herdr --skill")
+      expect(output).toContain("After compaction, run it again")
+      expect(output.indexOf(CliSkills.instructions)).toBeGreaterThan(output.indexOf("</env>"))
+    }),
+  )
+
   test("selects the Meta prompt for Muse Spark model IDs", () => {
     for (const id of ["meta/muse-spark-preview", "muse-spark-1.1", "muse-spark-1.2"]) {
       const prompt = SystemPrompt.provider({ api: { id } } as Provider.Model)[0]

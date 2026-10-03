@@ -8,6 +8,7 @@ import { InstructionContext } from "../instruction-context"
 import { SystemContextRegistry } from "./registry"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
+import { CliSkills } from "./cli-skills"
 
 const builtIns = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -20,6 +21,7 @@ const builtIns = Layer.effectDiscard(
       `  Is directory a git repo: ${location.vcs?.type === "git" ? "yes" : "no"}`,
       `  Platform: ${process.platform}`,
       "</env>",
+      CliSkills.instructions,
     ].join("\n")
     const context = SystemContext.combine([
       SystemContext.make({

@@ -1,0 +1,125 @@
+---
+name: orangecode
+description: "Use OrangeCode (oc), the OpenCode-based coding agent CLI, to run prompts, resume sessions, inspect models, and manage local servers. Load with oc --skill when the user asks to operate oc."
+---
+
+# OrangeCode
+
+`oc` is the OrangeCode CLI. It can open an interactive coding session, run a prompt non-interactively, resume an existing session, and attach to a running server.
+
+## Learn the installed CLI
+
+The installed binary is the authority for commands and flags. Start with:
+
+```bash
+oc --help
+oc --version
+```
+
+Read command-specific help before using unfamiliar options:
+
+```bash
+oc run --help
+oc session --help
+oc models --help
+oc providers --help
+oc server --help
+oc attach --help
+```
+
+`oc --skill` prints these instructions to stdout and exits. Run it again after compaction when these instructions are needed and their full output is no longer in context.
+
+## Run a coding task
+
+Use `run` for a non-interactive task and give the agent a concrete scope, expected deliverable, and verification requirements:
+
+```bash
+oc run "Review the current diff and report actionable findings. Do not edit files."
+oc run --dir /path/to/project "Implement the requested change and run the relevant checks."
+oc run --model provider/model --variant high "Investigate the failing test and fix its root cause."
+```
+
+Run in the intended project directory or set `--dir` explicitly. Model IDs use `provider/model`; variants are provider-specific. Inspect available models instead of inventing IDs:
+
+```bash
+oc models
+oc models provider
+```
+
+Attach files with `--file` or pipe prompt text through stdin:
+
+```bash
+oc run --file ./notes.md "Implement the requirements in the attached notes."
+oc run < prompt.txt
+```
+
+For structured event output:
+
+```bash
+oc run --format json "Summarize this project. Do not edit files."
+```
+
+JSON output is an event stream, not a single JSON response. Consume the stream through completion and check the process exit status. Permission or question requests may require interaction; use an interactive session when the task needs user input.
+
+## Resume and inspect sessions
+
+Discover session IDs from actual output:
+
+```bash
+oc session list --format json --max-count 20
+oc export <session-id>
+```
+
+Resume a specific session, continue the most recent one, or fork before continuing:
+
+```bash
+oc run --session <session-id> "Continue with the next step."
+oc run --continue "Summarize the remaining work."
+oc run --session <session-id> --fork "Explore an alternative implementation."
+```
+
+Prefer an explicit session ID for coordination. Reusing a session continues its conversation; a fork creates a separate continuation. A session inventory is metadata, not the full transcript; export a session when its history is needed.
+
+## Interactive sessions and servers
+
+Launch interactive commands in a terminal pane rather than a blocking shell tool:
+
+```bash
+oc /path/to/project
+oc --session <session-id>
+oc --mini
+```
+
+The shared local background server can be inspected or started with:
+
+```bash
+oc server status
+oc server start
+```
+
+For an explicit HTTP server and clients:
+
+```bash
+oc serve --hostname 127.0.0.1 --port 4096
+oc attach http://127.0.0.1:4096
+oc run --attach http://127.0.0.1:4096 --dir /path/to/project "Investigate this project."
+```
+
+`oc serve` is long-running. Use a background job or dedicated terminal pane. Read `oc serve --help` and `oc attach --help` for networking and authentication options. A remote `--dir` refers to a directory on the server.
+
+## Use oc inside Herdr
+
+When Herdr is mentioned or its pane context is attached, load `herdr --skill` unless its full output is already present in the current context. Reload it after compaction. Follow its environment check and discovery workflow before controlling panes or agents.
+
+Use Herdr's agent commands for a recognized coding agent and its pane commands for ordinary shell processes. Preserve the caller's directory and focus when creating background work, and use IDs returned by Herdr rather than predicting them.
+
+Inside an interactive oc session, `/split` opens another oc TUI attached to the current backend and session. `/herdr` gathers OpenCode pane metadata; inspect its available scopes in the slash-command menu. Multiple clients attached to one session share that session; choose a new session for independent work.
+
+## Coordination
+
+- Launch another agent only when the user or applicable instructions request delegation.
+- State whether a delegated task should edit files or only investigate, and avoid duplicating delegated work.
+- Preserve existing user changes and coordinate shared-file edits across concurrent agents.
+- Keep normal permission handling unless the user explicitly requests different behavior.
+- Stop shared servers or delete sessions only when explicitly requested. Stopping a shared server can interrupt other clients.
+- Return the agent's findings or completed changes to the user; starting a process alone does not complete the task.

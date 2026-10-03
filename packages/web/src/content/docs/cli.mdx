@@ -686,9 +686,14 @@ The opencode CLI takes the following global flags.
 | ------------------------------------------ | ----- | ------------------------------------ |
 | <nobr><code>{"--help"}</code></nobr>       | `-h`  | Display help                         |
 | <nobr><code>{"--version"}</code></nobr>    | `-v`  | Print version number                 |
+| <nobr><code>{"--skill"}</code></nobr>      |       | Print agent usage instructions       |
 | <nobr><code>{"--print-logs"}</code></nobr> |       | Print logs to stderr                 |
 | <nobr><code>{"--log-level"}</code></nobr>  |       | Log level (DEBUG, INFO, WARN, ERROR) |
 | <nobr><code>{"--pure"}</code></nobr>       |       | Run without external plugins         |
+
+`oc --skill` prints a Markdown skill document with YAML frontmatter to stdout and exits. It includes command discovery, non-interactive prompts, session continuation, server usage, and Herdr coordination guidance.
+
+When Herdr is mentioned in a conversation or attached context, agents are instructed to load `herdr --skill` once per current context and reload it after compaction.
 
 ---
 

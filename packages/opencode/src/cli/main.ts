@@ -14,6 +14,14 @@ if (args.length === 1 && (args[0] === "--version" || args[0] === "-v")) {
   process.exit()
 }
 
+async function printSkill() {
+  const skill = await import("./skill.txt")
+  process.stdout.write(skill.default)
+  process.exit()
+}
+
+if (args.length === 1 && args[0] === "--skill") await printSkill()
+
 const output: string[] = []
 const invalid = Symbol("invalid arguments")
 
@@ -31,6 +39,10 @@ try {
       .alias("help", "h")
       .version("version", "show version number", InstallationVersion)
       .alias("version", "v")
+      .option("skill", {
+        describe: "print agent usage instructions",
+        type: "boolean",
+      })
       .option("print-logs", {
         describe: "print logs to stderr",
         type: "boolean",
@@ -45,6 +57,7 @@ try {
         type: "boolean",
       })
       .middleware(async (opts) => {
+        if (opts.skill) await printSkill()
         if (opts.printLogs) process.env.OPENCODE_PRINT_LOGS = "1"
         if (opts.logLevel) process.env.OPENCODE_LOG_LEVEL = opts.logLevel
         if (opts.pure) {
