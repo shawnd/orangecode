@@ -20,6 +20,9 @@ type Mode =
   | "modal-tail"
   | "modal-paste"
   | "modal-select"
+  | "renderer-frame"
+  | "tab-cached"
+  | "tab-cold"
   | `renderer-${"preclaim" | "claimed"}-${"SIGTERM" | "SIGINT" | "SIGHUP" | "ctrl-c"}`
 
 // A real PTY verifies raw/cooked terminal state and two independent readers.
@@ -42,10 +45,11 @@ try:
     while time.monotonic() < deadline:
         if select.select([master], [], [], .01)[0]:
             output += os.read(master, 65536)
-        if (b"Type now" in output or b"cached selection" in output) and "initial" not in sent:
+        if (b"Type now" in output or b"click mode/model/variant" in output) and "initial" not in sent:
             sent.add("initial")
             text = "ab👩‍💻界\\x1b[D\\x7fZ".encode()
             if sys.argv[3] == "slash": text = b"/mo"
+            if sys.argv[3].startswith("tab-"): text = b"draft\\t"
             if sys.argv[3] == "controls":
                 text = b"\\x1b[<0;55;23M\\x1b[<0;55;23m"
             if sys.argv[3].startswith("modal-"): text = b""
@@ -76,6 +80,12 @@ try:
         if b"WAITING" in output and "paste" not in sent:
             sent.add("paste")
             os.write(master, b"\\r\\ntwo\\x1b[201~!")
+        if sys.argv[3].startswith("tab-") and b"Selection changes apply when ready" in output and "worker-tab" not in sent:
+            sent.add("worker-tab")
+            child.send_signal(signal.SIGUSR1)
+        if b"TAB_TAKEOVER" in output and "tabs" not in sent:
+            sent.add("tabs")
+            os.write(master, b"\\x1b[Z\\x1b[9u\\x1b[9;2u\\x1b[200~\\tinside\\x1b[201~")
         if b"CLAIMED" in output and "native" not in sent:
             sent.add("native")
             if sys.argv[3] == "hangup": child.send_signal(signal.SIGHUP)
@@ -119,6 +129,129 @@ finally:
   expect(error).toBe("")
   expect(code).toBe(0)
   return JSON.parse(output) as { output: string; code: number; restored: boolean }
+}
+
+for (const mode of ["tab-cached", "tab-cold"] as const) {
+  test.skipIf(!supported)(
+    `${mode} cycles modes in the worker and after takeover without inserting spaces`,
+    async () => {
+      const result = await run(
+        `
+        const typed = new Promise(resolve => process.once("SIGUSR1", resolve));
+        const until = Date.now() + 800;
+        while (Date.now() < until) {}
+        await typed;
+        const early = getEarlyInput();
+        await early.takeover();
+        process.stdout.write("WORKER_DRAFT=" + JSON.stringify(early.read()) + "\\n");
+        process.stdout.write("WORKER_AGENT=" + early.presentation.selection?.agent + "\\n");
+        const done = new Promise(resolve => {
+          const off = early.subscribe(() => {
+            if (early.read().text !== "draft\\tinside") return;
+            off();
+            resolve();
+          });
+        });
+        process.stdout.write("TAB_TAKEOVER\\n");
+        await done;
+        process.stdout.write("FINAL_AGENT=" + early.presentation.selection?.agent + "\\n");
+        process.stdout.write("FINAL_DRAFT=" + JSON.stringify(early.claim()) + "\\n");
+        await stopEarlyInput();
+      `,
+        mode,
+        [],
+        mode === "tab-cached"
+          ? `
+          const { startupPresentation } = await import(${JSON.stringify(import.meta.resolve("@opencode-ai/tui/startup/presentation"))});
+          await Bun.write(process.env.XDG_STATE_HOME + "/opencode/startup-presentation.json", JSON.stringify({
+            ...startupPresentation(),
+            selection: { directory: process.cwd(), agent: "Build", agentID: "build", model: "Model", modelID: "model", provider: "Test", providerID: "test", variant: "default" },
+            controls: { directory: process.cwd(), providerID: "test", models: [], agents: [
+              { id: "build", label: "Build", color: "#111111" },
+              { id: "plan", label: "Plan", color: "#222222" },
+              { id: "review", label: "Review", color: "#333333" }
+            ] }
+          }));
+        `
+          : "",
+      )
+      const worker = JSON.parse(result.output.match(/WORKER_DRAFT=(\{[^\r\n]+\})/)![1])
+      const final = JSON.parse(result.output.match(/FINAL_DRAFT=(\{[^\r\n]+\})/)![1])
+      expect(worker.text).toBe("draft")
+      expect(worker.changes).toEqual([{ target: "agent", direction: 1 }])
+      expect(final.text).toBe("draft\tinside")
+      expect(final.changes).toEqual([
+        { target: "agent", direction: 1 },
+        { target: "agent", direction: -1 },
+        { target: "agent", direction: 1 },
+        { target: "agent", direction: -1 },
+      ])
+      if (mode === "tab-cached") {
+        expect(result.output).toContain("WORKER_AGENT=Plan")
+        expect(result.output).toContain("FINAL_AGENT=Build")
+      }
+      expect(result.code).toBe(0)
+      expect(result.restored).toBe(true)
+    },
+    15000,
+  )
+}
+
+for (const background of ["transparent", "#112233"]) {
+  test.skipIf(!supported)(
+    `renderer takeover preserves the ${background} canvas through terminal setup`,
+    async () => {
+      const result = await run(
+        `
+      const { createInputRenderer, destroyRenderer } = await import(${rendererModule});
+      const { TextRenderable } = await import(${coreModule});
+      const early = getEarlyInput();
+      const stdin = await early.takeover();
+      process.stdout.write("TAKEOVER_BEGIN");
+      const renderer = await createInputRenderer({ stdin, backgroundColor: early.presentation.background, exitOnCtrlC: false, externalOutputMode: "passthrough" }, early);
+      process.stdout.write("NATIVE_SETUP_COMPLETE");
+      const frame = new Promise(resolve => renderer.once("frame", resolve));
+      renderer.root.add(new TextRenderable(renderer, { content: "NATIVE_FRAME_MARK" }));
+      await frame;
+      process.stdout.write("TAKEOVER_END");
+      destroyRenderer(renderer);
+      await stopEarlyInput();
+    `,
+        "renderer-frame",
+        [],
+        `
+      const { startupPresentation } = await import(${JSON.stringify(import.meta.resolve("@opencode-ai/tui/startup/presentation"))});
+      await Bun.write(process.env.XDG_STATE_HOME + "/opencode/startup-presentation.json", JSON.stringify({
+        ...startupPresentation(), background: ${JSON.stringify(background)}, backgroundElement: "#aabbcc"
+      }));
+    `,
+      )
+      const output = result.output.slice(result.output.indexOf("TAKEOVER_BEGIN"), result.output.indexOf("TAKEOVER_END"))
+      const begin = output.indexOf("\x1b[?2026h")
+      const enter = output.indexOf("\x1b[?1049h")
+      const frame = output.indexOf("NATIVE_FRAME_MARK")
+      const end = output.indexOf("\x1b[?2026l")
+      const preview = output.slice(enter, output.indexOf("NATIVE_SETUP_COMPLETE"))
+      expect(preview).toContain("Type now · starting")
+      expect(preview).toContain("█▀▀█")
+      expect(begin).toBeGreaterThanOrEqual(0)
+      expect(enter).toBeGreaterThan(begin)
+      expect(frame).toBeGreaterThan(enter)
+      expect(end).toBeGreaterThan(output.indexOf("Type now · starting", enter))
+      expect(output).not.toContain("\x1b[48;2;0;0;0m")
+      const entries = [...result.output.matchAll(/\x1b\[\?1049h/g)]
+      expect(entries).toHaveLength(2)
+      for (const entry of entries) {
+        // Alternate-screen entry can erase using the current SGR background. It
+        // must inherit the canvas, never the lighter fill under the input cursor.
+        const colors = result.output.slice(0, entry.index).match(/\x1b\[(?:0|49|48;2;\d+;\d+;\d+)m/g)
+        expect(colors?.at(-1)).toBe(background === "transparent" ? "\x1b[49m" : "\x1b[48;2;17;34;51m")
+      }
+      expect(result.code).toBe(0)
+      expect(result.restored).toBe(true)
+    },
+    15000,
+  )
 }
 
 for (const mode of ["modal-tail", "modal-paste", "modal-select"] as const) {
@@ -248,7 +381,7 @@ test.skipIf(!supported)(
     expect(plain.indexOf("Plan · Cached Model Provider · high")).toBeLessThan(plain.indexOf("MAIN_UNBLOCKED"))
     expect(result.output).toContain("\x1b[38;2;119;136;153m\x1b[22mPlan")
     expect(result.output).toContain("\x1b[38;2;17;34;51m\x1b[1mhigh\x1b[22m")
-    expect(result.output).toContain("cached selection")
+    expect(result.output).toContain("click mode/model/variant to change")
     expect(result.output).toContain('"variant":"high"')
     expect(result.output).toContain("abZ界")
     expect(result.code).toBe(0)
@@ -473,6 +606,9 @@ for (const phase of ["preclaim", "claimed"] as const) {
         expect(result.output).toContain("SCOPE_FINALIZER")
         expect(result.output).toContain("EARLY_DISPOSED")
         expect(result.output).toContain("SCOPED_DONE")
+        const teardown = result.output.slice(result.output.indexOf("RENDERER_READY"))
+        expect(teardown.indexOf("\x1b[?2026l")).toBeGreaterThanOrEqual(0)
+        expect(teardown.indexOf("\x1b[?2026l")).toBeLessThan(teardown.indexOf("RENDERER_DESTROYED"))
         expect(result.output.indexOf("\x1b[?1049l")).toBeLessThan(result.output.indexOf("EARLY_DISPOSED"))
         if (phase === "preclaim") {
           expect(result.output).toContain("Unsent startup draft (not submitted):")

@@ -220,7 +220,7 @@ test("ANSI geometry matches the shared native home frame across terminal sizes, 
         if (width === 120 && height === 40) {
           const frame = app.captureCharFrame()
           expect(frame).toContain("Plan · Cached Model Provider · high")
-          expect(frame).toContain("cached selection")
+          expect(frame).toContain("click mode/model/variant to change")
           expect(frame).toContain("/project")
           expect(frame).toContain("test-version")
         }

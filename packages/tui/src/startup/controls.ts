@@ -30,21 +30,22 @@ export function clickStartupSelection(
   target: StartupControlTarget | "provider",
   direction: 1 | -1 = 1,
 ) {
-  if (!presentation.selection) return false
   if (target === "provider") {
     state.command = { name: "provider.connect", display: "/connect", prefix: "" }
     return true
   }
   if ((state.changes?.length ?? 0) >= 64) return false
-  state.changes = [...(state.changes ?? []), { target, direction: target === "agent" ? 1 : direction }]
+  state.changes = [...(state.changes ?? []), { target, direction }]
   const controls = presentation.controls
-  if (!controls) return true
   const selection = presentation.selection
+  // A cold directory has no preview yet, but keyboard changes must still replay
+  // against live state when the full prompt adopts the draft.
+  if (!controls || !selection) return true
   if (target === "agent") {
     const index = controls.agents.findIndex(
       (agent) => agent.id === selection.agentID || agent.label === selection.agent,
     )
-    const next = controls.agents[(index + 1 + controls.agents.length) % controls.agents.length]
+    const next = controls.agents[(index + direction + controls.agents.length) % controls.agents.length]
     if (!next) return true
     const model = controls.models.find((model) => model.id === next.modelID)
     presentation.selection = {

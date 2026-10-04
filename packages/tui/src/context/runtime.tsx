@@ -41,6 +41,7 @@ export type EarlyInput = {
   selectModel?(providerID: string, modelID: string): void
   subscribe(listener: () => void): () => void
   takeover(): Promise<NodeJS.ReadStream>
+  redraw?(): void
   onCancel(shutdown: () => void): void
   claim(): StartupSlashDraft | undefined
   dispose(): void

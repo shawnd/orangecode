@@ -44,7 +44,7 @@ test("cached mouse controls preview forward/reverse cycling and preserve directi
     { target: "variant", direction: 1 },
     { target: "model", direction: 1 },
     { target: "variant", direction: -1 },
-    { target: "agent", direction: 1 },
+    { target: "agent", direction: -1 },
   ])
   expect(draft.text).toBe("typing")
   clickStartupSelection(presentation, draft, "provider")

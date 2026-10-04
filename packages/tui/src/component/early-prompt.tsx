@@ -190,7 +190,7 @@ export function EarlyPrompt(props: { input: EarlyInput }) {
                       : draft().changes?.length
                         ? "Selection changes apply when ready · Enter submits"
                         : theme.selection
-                          ? "Starting · cached selection · Enter submits · Shift+Enter adds a line"
+                          ? "Starting · click mode/model/variant to change · Enter submits"
                           : "Enter submits · Shift+Enter adds a line · Ctrl-C exits"}
               </text>
             </box>

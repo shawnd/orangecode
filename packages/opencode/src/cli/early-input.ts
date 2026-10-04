@@ -30,6 +30,7 @@ export type EarlyInput = {
   selectModel(providerID: string, modelID: string): void
   subscribe(listener: () => void): () => void
   takeover(): Promise<NodeJS.ReadStream>
+  redraw(): void
   onCancel(shutdown: () => void): void
   claim(): EarlyDraft | undefined
   dispose(): void
@@ -58,7 +59,13 @@ export function startEarlyInput() {
   const raw = process.stdin.isRaw
   const listeners = new Set<() => void>()
   let slashes = createStartupSlashes(builtinStartupSlashes())
-  let editor = createEarlyEditor(undefined, undefined, slashes.key)
+  const key = (value: string, state: EarlyState, binding: string) => {
+    if (slashes.key(value, state)) return true
+    if (binding !== "tab" && binding !== "shift+tab") return false
+    clickStartupSelection(presentation, state, "agent", binding === "tab" ? 1 : -1)
+    return true
+  }
+  let editor = createEarlyEditor(undefined, undefined, key)
   let active = true
   let modal = false
   let capturing = false
@@ -69,6 +76,7 @@ export function startEarlyInput() {
   let resolve: ((state: EarlyState) => void) | undefined
   let taking: Promise<NodeJS.ReadStream> | undefined
   let recovery: EarlyState | undefined
+  let frame = ""
   let presentation = startupPresentation()
   let location: EarlyInput["location"]
   const channel = new MessageChannel()
@@ -169,19 +177,23 @@ export function startEarlyInput() {
     notify()
   }
   worker.onmessage = (
-    event: MessageEvent<
-      EarlyState & { presentation: StartupPresentation; location: NonNullable<EarlyInput["location"]> }
-    >,
+    event: MessageEvent<{
+      state: EarlyState
+      presentation: StartupPresentation
+      location: NonNullable<EarlyInput["location"]>
+      frame: string
+    }>,
   ) => {
     if (closed) return
     slashes = createStartupSlashes(event.data.presentation.slashes?.items ?? builtinStartupSlashes())
     editor = createEarlyEditor(
-      event.data,
+      event.data.state,
       (sequence) => terminal.write(sequence),
-      slashes.key,
+      key,
       event.data.presentation.inputBindings,
     )
     presentation = event.data.presentation
+    frame = event.data.frame
     location = event.data.location
     // The worker has paused and drained its reader before acknowledging. Install
     // the next reader in this same callback; kernel-buffered input stays raw.
@@ -193,7 +205,7 @@ export function startEarlyInput() {
       editor.escape()
       notify()
     }, 40)
-    resolve?.(event.data)
+    resolve?.(event.data.state)
   }
   worker.onerror = (event) => {
     if (closed) return
@@ -295,6 +307,11 @@ export function startEarlyInput() {
         return terminal as unknown as NodeJS.ReadStream
       }))
     },
+    redraw() {
+      if (!active || closed || modal || !frame) return
+      process.stdout.write(frame)
+      frame = ""
+    },
     onCancel(handler) {
       shutdown = handler
     },
@@ -351,6 +368,7 @@ function earlyWorker(
   let escape: ReturnType<typeof setTimeout> | undefined
   let recovery: MessagePort | undefined
   let resizing: ReturnType<typeof setInterval> | undefined
+  let frame = ""
   const path = process.getBuiltinModule("node:path")
   const target = launch.args.find((arg) => !arg.startsWith("--"))
   const directory = target ? path.resolve(launch.pwd || launch.cwd, target) : launch.cwd
@@ -362,7 +380,17 @@ function earlyWorker(
   const location = { directory, displayDirectory, version: launch.version, auto }
   const theme = read(defaults, process.env, directory)
   const slashes = autocomplete(theme.slashes?.items ?? builtins())
-  const editor = create(undefined, (sequence) => pointer(sequence), slashes.key, theme.inputBindings)
+  const editor = create(
+    undefined,
+    (sequence) => pointer(sequence),
+    (value, state, binding) => {
+      if (slashes.key(value, state)) return true
+      if (binding !== "tab" && binding !== "shift+tab") return false
+      click(theme, state, "agent", binding === "tab" ? 1 : -1)
+      return true
+    },
+    theme.inputBindings,
+  )
   let hits: { left: number; right: number; row: number; target?: StartupControlTarget | "provider"; index?: number }[] =
     []
   const pointer = (sequence: string) => {
@@ -377,7 +405,7 @@ function earlyWorker(
     if (hit?.index !== undefined) slashes.select(editor.state, hit.index)
   }
   const hint = theme.selection
-    ? "Starting · cached selection · Enter submits · Shift+Enter adds a line"
+    ? "Starting · click mode/model/variant to change · Enter submits"
     : "Enter submits · Shift+Enter adds a line · Ctrl-C exits"
   const clip = (text: string, width: number) => {
     if (/^[\x20-\x7e]*$/.test(text)) return text.slice(0, Math.max(0, width))
@@ -568,10 +596,13 @@ function earlyWorker(
     output.push(
       at(layout.left + 3 + Math.min(cursor.column, width), layout.textTop + cursor.row - top),
       color(theme.text),
-      color(theme.backgroundElement, true),
+      // Terminal setup can erase with the current SGR background. Leave the
+      // canvas color active, not the lighter prompt fill under the cursor.
+      color(theme.background, true),
       "\x1b[?25h\x1b[?2026l",
     )
-    stdout.write(output.join(""))
+    frame = output.join("")
+    stdout.write(frame)
   }
   const capture = (chunk: Buffer) => {
     const result = editor.feed(chunk)
@@ -605,7 +636,7 @@ function earlyWorker(
       stdin.resume()
       // Disambiguate modified Enter immediately, matching OpenTUI's keyboard
       // protocol. Pop our entry before the renderer installs its own settings.
-      stdout.write("\x1b[?1049h\x1b[?2004h\x1b[>1u")
+      stdout.write("\x1b[?2026h" + color(theme.background, true) + "\x1b[?1049h\x1b[?2004h\x1b[>1u")
       if (theme.mouse && !launch.disableMouse) stdout.write("\x1b[?1000h\x1b[?1006h")
       if (theme.cursorStyle !== "default")
         stdout.write(
@@ -627,6 +658,6 @@ function earlyWorker(
     if (resizing) clearInterval(resizing)
     stdout.off("resize", draw)
     process.off("SIGWINCH", resize)
-    postMessage({ ...editor.state, presentation: theme, location })
+    postMessage({ state: editor.state, presentation: theme, location, frame })
   }
 }

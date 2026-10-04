@@ -14,7 +14,7 @@ export type EarlyState = EarlyDraft & {
 export function createEarlyEditor(
   initial?: EarlyState,
   response?: (sequence: string) => void,
-  intercept?: (key: string, state: EarlyState) => boolean,
+  intercept?: (key: string, state: EarlyState, binding: string) => boolean,
   bindings?: StartupInputBindings,
 ) {
   const state: EarlyState = initial ?? { text: "", cursor: 0, pending: "", bytes: [], paste: false }
@@ -74,14 +74,18 @@ export function createEarlyEditor(
       binding ??
         (value === "\r"
           ? "return"
-          : value === "\x1b\r"
-            ? "alt+return"
-            : value.length === 1 && value.charCodeAt(0) > 0 && value.charCodeAt(0) < 27
-              ? `ctrl+${String.fromCharCode(value.charCodeAt(0) + 96)}`
-              : value),
+          : value === "\t"
+            ? "tab"
+            : value === "\x1b[Z"
+              ? "shift+tab"
+              : value === "\x1b\r"
+                ? "alt+return"
+                : value.length === 1 && value.charCodeAt(0) > 0 && value.charCodeAt(0) < 27
+                  ? `ctrl+${String.fromCharCode(value.charCodeAt(0) + 96)}`
+                  : value),
     )
     if (inputBindings.newline.some((binding) => normalize(binding) === stroke)) return insert("\n")
-    if (((value !== "\r" && value !== "\n") || stroke === "return") && intercept?.(value, state)) return
+    if (((value !== "\r" && value !== "\n") || stroke === "return") && intercept?.(value, state, stroke)) return
     if (inputBindings.submit.some((binding) => normalize(binding) === stroke)) {
       if (state.text.trim() && !state.command) state.submit = true
       return
@@ -129,7 +133,7 @@ export function createEarlyEditor(
       if (state.pending === "\x1b") {
         state.pending = ""
         delete state.submit
-        intercept?.("\x1b", state)
+        intercept?.("\x1b", state, "escape")
       }
     },
     feed(chunk: Uint8Array) {
