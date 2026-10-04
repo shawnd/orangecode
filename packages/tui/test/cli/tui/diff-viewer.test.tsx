@@ -18,7 +18,7 @@ import { ThemeProvider } from "../../../src/context/theme"
 import { TuiConfigProvider } from "../../../src/config"
 import { TuiKeybind } from "../../../src/config/keybind"
 import { OpencodeKeymapProvider, registerOpencodeKeymap } from "../../../src/keymap"
-import { onCleanup } from "solid-js"
+import { createSignal, onCleanup } from "solid-js"
 import diffViewerPlugin from "../../../src/feature-plugins/system/diff-viewer"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -36,7 +36,7 @@ test("closing the diff viewer returns to the route it opened from", async () => 
       name: "diff",
       params: { mode: "git", sessionID: "session-1", returnRoute: startRoute },
     })
-    expect(viewer.vcsDiffInput()).toEqual({ directory: "/repo/session", mode: "git", context: 12 })
+    expect(viewer.vcsDiffInput()).toEqual({ directory: "/repo/session", mode: "git", context: 12, view: "summary" })
 
     expect(viewer.commands.has("diff.close")).toBe(true)
     viewer.commands.get("diff.close")!.run?.({} as never)
@@ -130,6 +130,200 @@ const scrollPatch = {
     "--- /dev/null\n+++ b/scroll.txt\n@@ -0,0 +1,100 @@\n" +
     Array.from({ length: 100 }, (_, index) => `+row${String(index + 1).padStart(3, "0")}`).join("\n"),
 }
+
+test("renders the full tree before patches and preserves review state as patches arrive", async () => {
+  const first = Promise.withResolvers<unknown[]>()
+  const second = Promise.withResolvers<unknown[]>()
+  const signals: (AbortSignal | undefined)[] = []
+  const viewer = await renderDiffViewer(
+    [reviewPatch, scrollPatch].map(({ patch, ...file }) => file),
+    28,
+    undefined,
+    100,
+    false,
+    (file, signal) => {
+      signals.push(signal)
+      return file === reviewPatch.file ? first.promise : second.promise
+    },
+  )
+  try {
+    await viewer.app.waitForFrame(
+      (frame) => frame.includes("review.txt") && frame.includes("scroll.txt") && frame.includes("Loading patch"),
+    )
+    first.resolve([reviewPatch])
+    await viewer.app.waitForFrame((frame) => frame.includes("new one"))
+    expect(viewer.app.captureCharFrame()).toContain("Loading patch")
+    const node = findDiffs(viewer.app.renderer.root)[0]
+    viewer.commands.get("diff.next_hunk")!.run?.({} as never)
+    viewer.commands.get("diff.mark_reviewed")!.run?.({} as never)
+    second.resolve([scrollPatch])
+    await viewer.app.waitFor(() => findDiffs(viewer.app.renderer.root).length === 3)
+    await viewer.app.flush()
+    expect(findDiffs(viewer.app.renderer.root)[0]).toBe(node)
+    expect(viewer.app.captureCharFrame()).toContain("✓")
+  } finally {
+    await viewer.dispose()
+  }
+  expect(signals.length).toBe(2)
+  expect(signals.every((signal) => signal?.aborted)).toBe(true)
+})
+
+test("a failed patch does not hide the tree or prevent other files loading", async () => {
+  const viewer = await renderDiffViewer(
+    [reviewPatch, scrollPatch].map(({ patch, ...file }) => file),
+    28,
+    undefined,
+    100,
+    false,
+    async (file) => {
+      if (file === reviewPatch.file) throw new Error("unavailable")
+      return [scrollPatch]
+    },
+  )
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("Failed to load patch") && frame.includes("row001"))
+    expect(viewer.app.captureCharFrame()).toContain("review.txt")
+  } finally {
+    await viewer.dispose()
+  }
+})
+
+test("a failed file-list request shows an error instead of an empty diff", async () => {
+  const viewer = await renderDiffViewer(async () => {
+    throw new Error("unavailable")
+  })
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("Failed to load diff"))
+    expect(viewer.app.captureCharFrame()).not.toContain("No diff!")
+  } finally {
+    await viewer.dispose()
+  }
+})
+
+test("prioritizes a selected file and cancels pending patch work when disposed", async () => {
+  const requests: string[] = []
+  const third = Promise.withResolvers<void>()
+  const signals: (AbortSignal | undefined)[] = []
+  const pending = new Map(
+    ["a.txt", "b.txt", "c.txt", "d.txt"].map((file) => [file, Promise.withResolvers<unknown[]>()]),
+  )
+  const viewer = await renderDiffViewer(
+    [...pending.keys()].map((file) => ({ file, additions: 0, deletions: 0, status: "added" })),
+    14,
+    undefined,
+    100,
+    false,
+    (file, signal) => {
+      requests.push(file)
+      signals.push(signal)
+      if (requests.length === 3) third.resolve()
+      return pending.get(file)!.promise
+    },
+  )
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("Loading patch"))
+    expect(requests).toEqual(["a.txt", "b.txt"])
+    for (let index = 0; index < 4; index++) viewer.commands.get("diff.next_file")!.run?.({} as never)
+    await viewer.app.flush()
+    pending.get("a.txt")!.resolve([{ ...reviewPatch, file: "a.txt" }])
+    await third.promise
+    expect(requests).toEqual(["a.txt", "b.txt", "d.txt"])
+  } finally {
+    await viewer.dispose()
+    pending.forEach((request) => request.resolve([]))
+  }
+  expect(signals.every((signal) => signal?.aborted)).toBe(true)
+})
+
+test("loading an earlier patch keeps the current viewport anchored", async () => {
+  const earlier = Promise.withResolvers<unknown[]>()
+  const viewer = await renderDiffViewer(
+    ["a.txt", "b.txt"].map((file) => ({ file, additions: 0, deletions: 0, status: "added" })),
+    18,
+    undefined,
+    100,
+    false,
+    (file) => (file === "a.txt" ? earlier.promise : Promise.resolve([{ ...scrollPatch, file }])),
+  )
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("row001"))
+    viewer.commands.get("diff.next_file")!.run?.({} as never)
+    viewer.commands.get("diff.next_file")!.run?.({} as never)
+    await viewer.app.flush()
+    const scroll = findScrollBox(viewer.app.renderer.root)!
+    scroll.scrollBy(20)
+    await viewer.app.flush()
+    const node = findDiffs(viewer.app.renderer.root)[0]
+    const y = node.y
+    const top = scroll.scrollTop
+    earlier.resolve([{ ...scrollPatch, file: "a.txt" }])
+    await viewer.app.waitFor(() => findDiffs(viewer.app.renderer.root).length === 2)
+    await viewer.app.flush()
+    expect(node.y).toBe(y)
+    expect(scroll.scrollTop).toBeGreaterThan(top)
+  } finally {
+    await viewer.dispose()
+  }
+})
+
+test("switching sources cancels old requests and ignores their late responses", async () => {
+  const old = Promise.withResolvers<unknown[]>()
+  const next = Promise.withResolvers<unknown[]>()
+  const started = Promise.withResolvers<void>()
+  const signals = new Map<string, AbortSignal | undefined>()
+  const viewer = await renderDiffViewer(
+    [{ file: "src/review.txt", additions: 0, deletions: 0, status: "modified" }],
+    28,
+    undefined,
+    100,
+    false,
+    (_file, signal, mode) => {
+      signals.set(mode!, signal)
+      if (mode === "git") return old.promise
+      started.resolve()
+      return next.promise
+    },
+  )
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("Loading patch"))
+    viewer.navigate({ name: "diff", params: { mode: "branch", sessionID: "session-1" } })
+    await started.promise
+    expect(signals.get("git")?.aborted).toBe(true)
+    next.resolve([{ ...reviewPatch, patch: reviewPatch.patch.replaceAll("new one", "branch one") }])
+    await viewer.app.waitForFrame((frame) => frame.includes("branch one"))
+    old.resolve([reviewPatch])
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("branch one")
+    expect(viewer.app.captureCharFrame()).not.toContain("new one")
+    expect(signals.get("branch")?.aborted).toBe(false)
+  } finally {
+    await viewer.dispose()
+  }
+})
+
+test("filenames matching object properties load as ordinary files", async () => {
+  const ready = Promise.withResolvers<void>()
+  const viewer = await renderDiffViewer(
+    ["__proto__", "constructor"].map((file) => ({ file, additions: 0, deletions: 0, status: "modified" })),
+    28,
+    undefined,
+    100,
+    false,
+    async (file) => {
+      await ready.promise
+      return [{ ...reviewPatch, file }]
+    },
+  )
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("__proto__"))
+    expect(viewer.app.captureCharFrame().match(/Loading patch/g)).toHaveLength(2)
+    ready.resolve()
+    await viewer.app.waitFor(() => findDiffs(viewer.app.renderer.root).length === 4)
+  } finally {
+    ready.resolve()
+    await viewer.dispose()
+  }
+})
 
 test("hunk shortcuts keep the destination header visible with a reserved selection gutter", async () => {
   const viewer = await renderDiffViewer(
@@ -974,11 +1168,12 @@ for (const width of [80, 160]) {
 }
 
 async function renderDiffViewer(
-  vcsDiff: unknown[],
+  vcsDiff: unknown[] | (() => Promise<unknown[]>),
   height = 20,
   initialRoute?: TuiRouteCurrent,
   width = 80,
   kittyKeyboard = false,
+  loadPatch?: (file: string, signal?: AbortSignal, mode?: string) => Promise<unknown[]>,
 ) {
   const tmp = await tmpdir()
   const cleanup: Promise<void>[] = []
@@ -986,7 +1181,7 @@ async function renderDiffViewer(
     string,
     NonNullable<Parameters<TuiPluginApi["keymap"]["registerLayer"]>[0]["commands"]>[number]
   >()
-  let current = initialRoute ?? startRoute
+  const [current, setCurrent] = createSignal(initialRoute ?? startRoute)
   let renderDiff: TuiRouteDefinition["render"] | undefined
   let vcsDiffInput: unknown
   let sessionDiffInput: unknown
@@ -1004,9 +1199,10 @@ async function renderDiffViewer(
       keymap,
       client: {
         vcs: {
-          diff: async (input: unknown) => {
+          diff: async (input: { file?: string; mode?: string }, options?: { signal?: AbortSignal }) => {
+            if (input.file && loadPatch) return { data: await loadPatch(input.file, options?.signal, input.mode) }
             vcsDiffInput = input
-            return { data: vcsDiff }
+            return { data: typeof vcsDiff === "function" ? await vcsDiff() : vcsDiff }
           },
         },
         session: {
@@ -1030,10 +1226,10 @@ async function renderDiffViewer(
           return () => {}
         },
         navigate(name, params) {
-          current = params ? { name, params } : { name }
+          setCurrent(params ? { name, params } : { name })
         },
         get current() {
-          return current
+          return current()
         },
       },
     } satisfies TuiPluginApi
@@ -1049,7 +1245,8 @@ async function renderDiffViewer(
           return dialog.stack.length > 0
         },
       }
-      return renderDiff?.({ params: "params" in current ? current.params : undefined })
+      const route = current()
+      return renderDiff?.({ params: "params" in route ? route.params : undefined })
     }
 
     void diffViewerPlugin.tui(api, undefined, pluginMeta)
@@ -1084,7 +1281,8 @@ async function renderDiffViewer(
       await tmp[Symbol.asyncDispose]()
     },
     commands,
-    current: () => current,
+    current,
+    navigate: setCurrent,
     vcsDiffInput: () => vcsDiffInput,
     sessionDiffInput: () => sessionDiffInput,
   }
@@ -1125,7 +1323,7 @@ test("branch diff source requests branch VCS diff", async () => {
       name: "diff",
       params: { mode: "branch", sessionID: "session-1", returnRoute: startRoute },
     })
-    expect(viewer.vcsDiffInput()).toEqual({ directory: "/repo/session", mode: "branch", context: 12 })
+    expect(viewer.vcsDiffInput()).toEqual({ directory: "/repo/session", mode: "branch", context: 12, view: "summary" })
     expect(viewer.sessionDiffInput()).toBeUndefined()
   } finally {
     await viewer.dispose()

@@ -14,6 +14,8 @@ const MAX_TOTAL_PATCH_BYTES = 10_000_000
 const DIFF_CONCURRENCY = 4
 type DiffOptions = {
   readonly context?: number
+  readonly view?: "summary"
+  readonly file?: string
 }
 
 const emptyPatch = (file: string) => formatPatch(structuredPatch(file, file, "", "", "", "", { context: 0 }))
@@ -173,11 +175,22 @@ const files = Effect.fnUntraced(function* (
   batch: { patches: Map<string, string>; capped: boolean },
   options?: DiffOptions,
 ) {
+  const sorted = list
+    .filter((item) => options?.file === undefined || item.file === options.file)
+    .toSorted((a, b) => a.file.localeCompare(b.file))
+  // The tree must not wait for patch generation or content-based line counts.
+  if (options?.view === "summary") {
+    return sorted.map((item) => ({
+      file: item.file,
+      additions: 0,
+      deletions: 0,
+      status: item.status,
+    }))
+  }
   const next: FileDiff[] = []
   let total = 0
   let capped = false
 
-  const sorted = list.toSorted((a, b) => a.file.localeCompare(b.file))
   // Bound both Git processes and buffered patches; commit the byte budget in file order.
   for (let index = 0; index < sorted.length; index += DIFF_CONCURRENCY) {
     const prepared = yield* Effect.forEach(
@@ -219,9 +232,16 @@ const diffAgainstRef = Effect.fnUntraced(function* (
   ref: string,
   options?: DiffOptions,
 ) {
-  const [list, stats, extra] = yield* Effect.all([git.diff(cwd, ref), git.stats(cwd, ref), git.status(cwd)], {
-    concurrency: 3,
-  })
+  const [list, stats, extra] = yield* Effect.all(
+    [
+      git.diff(cwd, ref),
+      options?.view === "summary" ? Effect.succeed([]) : git.stats(cwd, ref, options?.file),
+      git.status(cwd),
+    ],
+    {
+      concurrency: 3,
+    },
+  )
   return yield* files(
     git,
     cwd,
@@ -231,7 +251,9 @@ const diffAgainstRef = Effect.fnUntraced(function* (
       extra.filter((item) => item.code === "??"),
     ),
     nums(stats),
-    yield* batchPatches(git, cwd, ref, list, options),
+    options?.view === "summary" || options?.file !== undefined
+      ? emptyBatch()
+      : yield* batchPatches(git, cwd, ref, list, options),
     options,
   )
 })
@@ -259,9 +281,7 @@ export type Info = Schema.Schema.Type<typeof Info>
 
 export const FileDiff = Schema.Struct({
   file: Schema.String,
-  // Mirrors Snapshot.FileDiff (see #26574). The current producer always
-  // populates patch, but loosening matches the sibling schema so a
-  // future code path that omits it can't crash /instance/vcs/diff.
+  // Summary responses omit patches so the tree can render before file contents load.
   patch: Schema.optional(Schema.String),
   additions: Schema.Finite,
   deletions: Schema.Finite,

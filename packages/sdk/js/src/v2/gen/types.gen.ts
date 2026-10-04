@@ -8266,6 +8266,8 @@ export type VcsDiffData = {
     workspace?: string
     mode: "git" | "branch"
     context?: number
+    view?: "summary"
+    file?: string
   }
   url: "/vcs/diff"
 }

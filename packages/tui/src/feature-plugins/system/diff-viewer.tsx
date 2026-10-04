@@ -18,7 +18,18 @@ import type { CommandContext } from "@opentui/keymap"
 import { tint, useTheme } from "../../context/theme"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import path from "path"
-import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  Show,
+  Switch,
+  untrack,
+} from "solid-js"
 import { DiffViewerFileTree } from "./diff-viewer-file-tree"
 import { Panel, PanelGroup, Separator } from "./diff-viewer-ui"
 import { DialogSelect } from "../../ui/dialog-select"
@@ -157,12 +168,22 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     }
 
     const result = await props.api.client.vcs.diff(
-      { directory: input.directory, mode: input.mode, context: VCS_DIFF_CONTEXT_LINES },
+      { directory: input.directory, mode: input.mode, context: VCS_DIFF_CONTEXT_LINES, view: "summary" },
       { throwOnError: true },
     )
     return normalizeDiffs(result.data ?? [])
   })
-  const files = createMemo(() => diff() ?? [])
+  const files = createMemo(() => (diff.error ? [] : (diff() ?? [])))
+  const [patches, setPatches] = createStore<
+    Record<
+      number,
+      {
+        data?: DiffFile
+        hunks: ReturnType<typeof diffHunks>
+        error?: boolean
+      }
+    >
+  >({})
   const [focus, setFocus] = createSignal<DiffViewerFocus>("patches")
   const [fileTreeEnabled, setFileTreeEnabled] = createSignal(
     props.api.kv.get<boolean>(KV_SHOW_FILE_TREE, true) !== false,
@@ -202,10 +223,71 @@ function DiffViewer(props: { api: TuiPluginApi }) {
   const patchNodeByFileIndex = new Map<number, BoxRenderable>()
   const hunkNodes = new Map<string, BoxRenderable>()
   const diffNodes = new Map<string, DiffRenderable>()
-  const patchHunks = createMemo(() => files().map((file) => diffHunks(file.patch ?? "")))
+  const initialHunks = createMemo(() => files().map((file) => diffHunks(file.patch ?? "")))
+  const patchHunks = (index: number) => patches[index]?.hunks ?? initialHunks()[index] ?? []
   const [selectedHunk, setSelectedHunk] = createSignal<SelectedHunk | undefined>()
   const [pendingPatchScrollFileIndex, setPendingPatchScrollFileIndex] = createSignal<number | undefined>()
   const [patchFillerHeight, setPatchFillerHeight] = createSignal(0)
+
+  createEffect(() => {
+    const input = diffInput()
+    const list = files()
+    const loading = diff.loading
+    setPatches(reconcile({}))
+    if (loading || input.mode === "last-turn" || !list.length) return
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+    const pending = untrack(patchFileIndexes).filter((index) => list[index].patch === undefined)
+    const load = async () => {
+      while (pending.length && !controller.signal.aborted) {
+        const selected = untrack(selectedFileIndex)
+        const position = selected === undefined ? -1 : pending.indexOf(selected)
+        const index = pending.splice(position === -1 ? 0 : position, 1)[0]
+        const file = list[index].file
+        await props.api.client.vcs
+          .diff(
+            {
+              directory: input.directory,
+              mode: input.mode === "branch" ? "branch" : "git",
+              context: VCS_DIFF_CONTEXT_LINES,
+              file,
+            },
+            { throwOnError: true, signal: controller.signal },
+          )
+          .then(
+            (result) => {
+              if (controller.signal.aborted) return
+              const data = normalizeDiffs(result.data ?? []).find((item) => item.file === file)
+              let top = scroll?.scrollTop
+              const anchor = top ? patchNodeByFileIndex.get(currentPatchFileIndex() ?? -1) : undefined
+              const y = anchor?.y
+              setPatches(index, { data, hunks: diffHunks(data?.patch ?? "") })
+              // Loading an earlier file changes layout above the viewport. Keep the
+              // current file anchored unless the user has scrolled in the meantime.
+              // RAF runs before layout, so repeat after the new patch is measured.
+              if (anchor && y !== undefined) {
+                const restore = () => {
+                  if (controller.signal.aborted || anchor.isDestroyed || scroll?.scrollTop !== top) return
+                  scroll?.scrollBy(anchor.y - y)
+                  top = scroll?.scrollTop
+                }
+                requestAnimationFrame(() => {
+                  restore()
+                  requestAnimationFrame(restore)
+                })
+              }
+            },
+            () => {
+              if (!controller.signal.aborted) setPatches(index, { hunks: [], error: true })
+            },
+          )
+        // Let layout, input, and painting run between chunks, even on a local server.
+        await new Promise((resolve) => setTimeout(resolve, 16))
+      }
+    }
+    void load()
+    void load()
+  })
 
   onCleanup(() => props.api.ui.dialog.clear())
 
@@ -316,7 +398,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     if (!patchScroll) return
     const hunks = visiblePatchFiles()
       .flatMap((entry) => {
-        return (patchHunks()[entry.fileIndex] ?? []).flatMap((_, hunkIndex) => {
+        return patchHunks(entry.fileIndex).flatMap((_, hunkIndex) => {
           const node = hunkNodes.get(`${entry.fileIndex}:${hunkIndex}`)
           if (!node || node.isDestroyed) return []
           return [
@@ -476,7 +558,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
 
   const editAnnotation = (note: DiffAnnotation) => {
     const fileIndex = files().findIndex((file) => file.file === note.file)
-    const hunkIndex = patchHunks()[fileIndex]?.findIndex((hunk) => hunk.header === note.hunk) ?? -1
+    const hunkIndex = patchHunks(fileIndex).findIndex((hunk) => hunk.header === note.hunk)
     if (fileIndex !== -1 && hunkIndex !== -1 && note.source === diffSourceLabel(mode())) {
       selectPatchFile(fileIndex)
       setReview("collapsed", `${fileIndex}`, false)
@@ -520,7 +602,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     if (fileIndex === undefined) return
     const hunkIndex =
       selected?.hunkIndex ?? (selectedHunk()?.fileIndex === fileIndex ? selectedHunk()?.hunkIndex : undefined) ?? 0
-    const hunk = patchHunks()[fileIndex]?.[hunkIndex]
+    const hunk = patchHunks(fileIndex)[hunkIndex]
     if (!hunk) return
     const header = hunk.header.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))?/)
     if (!header) return
@@ -572,7 +654,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
 
   const patchNodes = () =>
     visiblePatchFiles().flatMap((entry) =>
-      (patchHunks()[entry.fileIndex] ?? []).flatMap((_, hunkIndex) => {
+      patchHunks(entry.fileIndex).flatMap((_, hunkIndex) => {
         if (review.collapsed[`${entry.fileIndex}`] || review.collapsed[`${entry.fileIndex}:${hunkIndex}`]) return []
         const node = diffNodes.get(`${entry.fileIndex}:${hunkIndex}`)
         if (!node || node.isDestroyed) return []
@@ -1158,16 +1240,16 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                 <text fg={theme().textMuted}>Loading diff…</text>
               </box>
             </Match>
-            <Match when={!diff.loading && files().length === 0}>
-              <Separator axis="x" />
-              <box flexGrow={1} paddingLeft={1}>
-                <text fg={theme().textMuted}>No diff!</text>
-              </box>
-            </Match>
             <Match when={!diff.loading && diff.error}>
               <Separator axis="x" />
               <box flexGrow={1} paddingLeft={1}>
                 <text fg={theme().error}>Failed to load diff</text>
+              </box>
+            </Match>
+            <Match when={!diff.loading && files().length === 0}>
+              <Separator axis="x" />
+              <box flexGrow={1} paddingLeft={1}>
+                <text fg={theme().textMuted}>No diff!</text>
               </box>
             </Match>
             <Match when={!diff.loading}>
@@ -1240,26 +1322,42 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                               >
                                 {reviewed() ? "✓ reviewed" : "mark reviewed"}
                               </text>
-                              <text fg={reviewed() ? theme().textMuted : theme().diffAdded}>
-                                +{entry.file.additions}
-                              </text>
-                              <text fg={reviewed() ? theme().textMuted : theme().diffRemoved}>
-                                -{entry.file.deletions}
-                              </text>
+                              <Show
+                                when={
+                                  mode() === "last-turn" ||
+                                  entry.file.patch !== undefined ||
+                                  patches[entry.fileIndex]?.data
+                                }
+                              >
+                                <text fg={reviewed() ? theme().textMuted : theme().diffAdded}>
+                                  +{patches[entry.fileIndex]?.data?.additions ?? entry.file.additions}
+                                </text>
+                                <text fg={reviewed() ? theme().textMuted : theme().diffRemoved}>
+                                  -{patches[entry.fileIndex]?.data?.deletions ?? entry.file.deletions}
+                                </text>
+                              </Show>
                             </box>
                             <Show when={!review.collapsed[`${entry.fileIndex}`]}>
                               <Separator axis="x" start={showFileTree() ? "edge" : undefined} />
                               <Show
-                                when={entry.file.patch}
-                                fallback={<text fg={theme().textMuted}>No patch available for this file.</text>}
+                                when={patches[entry.fileIndex]?.data?.patch ?? entry.file.patch}
+                                fallback={
+                                  <text fg={theme().textMuted}>
+                                    {patches[entry.fileIndex]?.error
+                                      ? "Failed to load patch."
+                                      : mode() !== "last-turn" && !patches[entry.fileIndex]
+                                        ? "Loading patch…"
+                                        : "No patch available for this file."}
+                                  </text>
+                                }
                               >
                                 {(patch) => (
                                   <box border={patchLeftBorder()} borderColor={theme().border}>
                                     <Show
-                                      when={patchHunks()[entry.fileIndex]?.length}
+                                      when={patchHunks(entry.fileIndex).length}
                                       fallback={<text fg={theme().textMuted}>{patch()}</text>}
                                     >
-                                      <For each={patchHunks()[entry.fileIndex]}>
+                                      <For each={patchHunks(entry.fileIndex)}>
                                         {(hunk, hunkIndex) => {
                                           const key = () => `${entry.fileIndex}:${hunkIndex()}`
                                           const notes = () =>

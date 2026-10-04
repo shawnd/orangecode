@@ -82,7 +82,7 @@ export interface Interface {
   readonly show: (cwd: string, ref: string, file: string, prefix?: string) => Effect.Effect<string>
   readonly status: (cwd: string) => Effect.Effect<Item[]>
   readonly diff: (cwd: string, ref: string) => Effect.Effect<Item[]>
-  readonly stats: (cwd: string, ref: string) => Effect.Effect<Stat[]>
+  readonly stats: (cwd: string, ref: string, file?: string) => Effect.Effect<Stat[]>
   readonly patch: (cwd: string, ref: string, file: string, options?: PatchOptions) => Effect.Effect<Patch>
   readonly patchAll: (cwd: string, ref: string, options?: PatchOptions) => Effect.Effect<Patch>
   readonly patchUntracked: (cwd: string, file: string, options?: PatchOptions) => Effect.Effect<Patch>
@@ -237,9 +237,12 @@ const layer = Layer.effect(
       })
     })
 
-    const stats = Effect.fn("Git.stats")(function* (cwd: string, ref: string) {
+    const stats = Effect.fn("Git.stats")(function* (cwd: string, ref: string, file?: string) {
       return nuls(
-        yield* text(["diff", "--no-ext-diff", "--no-renames", "--numstat", "-z", ref, "--", "."], { cwd }),
+        yield* text(
+          ["diff", "--no-ext-diff", "--no-renames", "--numstat", "-z", ref, "--", file ? `:(literal)${file}` : "."],
+          { cwd },
+        ),
       ).flatMap((item) => {
         const a = item.indexOf("\t")
         const b = item.indexOf("\t", a + 1)
@@ -262,7 +265,16 @@ const layer = Layer.effect(
 
     const patch = Effect.fn("Git.patch")(function* (cwd: string, ref: string, file: string, options?: PatchOptions) {
       const result = yield* run(
-        ["diff", "--patch", "--no-ext-diff", "--no-renames", `--unified=${options?.context ?? 3}`, ref, "--", file],
+        [
+          "diff",
+          "--patch",
+          "--no-ext-diff",
+          "--no-renames",
+          `--unified=${options?.context ?? 3}`,
+          ref,
+          "--",
+          `:(literal)${file}`,
+        ],
         { cwd, maxOutputBytes: options?.maxOutputBytes },
       )
       return { text: result.truncated ? "" : result.text(), truncated: result.truncated } satisfies Patch

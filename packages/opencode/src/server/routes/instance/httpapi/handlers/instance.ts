@@ -49,9 +49,9 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getVcsDiff = Effect.fn("InstanceHttpApi.vcsDiff")(function* (ctx: {
-      query: { mode: Vcs.Mode; context?: number }
+      query: { mode: Vcs.Mode; context?: number; view?: "summary"; file?: string }
     }) {
-      return yield* vcs.diff(ctx.query.mode, { context: ctx.query.context })
+      return yield* vcs.diff(ctx.query.mode, ctx.query)
     })
 
     const getVcsDiffRaw = Effect.fn("InstanceHttpApi.vcsDiffRaw")(function* () {

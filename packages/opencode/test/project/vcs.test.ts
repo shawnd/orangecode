@@ -164,6 +164,105 @@ describe("Vcs diff", () => {
   })
 
   controlledIt.instance(
+    "summary returns the whole tree without reading patches or counting file contents",
+    () =>
+      Effect.gen(function* () {
+        const vcs = yield* Vcs.Service
+        expect(yield* vcs.diff("git", { view: "summary" })).toEqual([
+          { file: "a.txt", additions: 0, deletions: 0, status: "modified" },
+          { file: "z.tar.gz", additions: 0, deletions: 0, status: "added" },
+        ])
+      }).pipe(
+        Effect.provide(
+          diffLayer({
+            hasHead: () => Effect.succeed(true),
+            diff: () => Effect.succeed([{ file: "a.txt", code: "M", status: "modified" }]),
+            status: () => Effect.succeed([{ file: "z.tar.gz", code: "??", status: "added" }]),
+          }),
+        ),
+      ),
+    { git: true },
+  )
+
+  it.instance(
+    "individual patches match the complete diff including literal paths and untracked files",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* write(path.join(test.directory, "[a].txt"), "before\n")
+        yield* write(path.join(test.directory, "a.txt"), "before\n")
+        yield* git(test.directory, ["add", "."])
+        yield* git(test.directory, ["commit", "-m", "fixture"])
+        yield* write(path.join(test.directory, "[a].txt"), "after\n")
+        yield* write(path.join(test.directory, "a.txt"), "after\n")
+        yield* write(path.join(test.directory, "new.txt"), "new\n")
+        const vcs = yield* Vcs.Service
+        const all = yield* vcs.diff("git", { context: 12 })
+        expect(all).toHaveLength(3)
+        for (const file of all) {
+          expect(yield* vcs.diff("git", { file: file.file, context: 12 })).toEqual([file])
+          expect(yield* vcs.diff("git", { view: "summary", file: file.file })).toEqual([
+            { file: file.file, status: file.status, additions: 0, deletions: 0 },
+          ])
+        }
+        expect(yield* vcs.diff("git", { file: "missing.txt" })).toEqual([])
+        expect(yield* vcs.diff("git", { file: "" })).toEqual([])
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "summary and individual patches work before the first commit",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* git(test.directory, ["update-ref", "-d", "HEAD"])
+        yield* write(path.join(test.directory, "staged.txt"), "staged\n")
+        yield* git(test.directory, ["add", "staged.txt"])
+        yield* write(path.join(test.directory, "untracked.txt"), "untracked\n")
+        const vcs = yield* Vcs.Service
+        expect(yield* vcs.diff("git", { view: "summary" })).toEqual([
+          { file: "staged.txt", status: "added", additions: 0, deletions: 0 },
+          { file: "untracked.txt", status: "added", additions: 0, deletions: 0 },
+        ])
+        const all = yield* vcs.diff("git")
+        for (const file of all) {
+          expect(yield* vcs.diff("git", { file: file.file })).toEqual([file])
+        }
+      }),
+    { git: true },
+  )
+
+  controlledIt.instance(
+    "a single-file request never prepares unrelated patches or untracked stats",
+    () =>
+      Effect.gen(function* () {
+        const vcs = yield* Vcs.Service
+        expect(yield* vcs.diff("git", { file: "a.txt", context: 12 })).toEqual([
+          { file: "a.txt", patch: "patch", status: "modified", additions: 1, deletions: 1 },
+        ])
+      }).pipe(
+        Effect.provide(
+          diffLayer({
+            hasHead: () => Effect.succeed(true),
+            diff: () => Effect.succeed([{ file: "a.txt", code: "M", status: "modified" }]),
+            status: () => Effect.succeed([{ file: "z.tar.gz", code: "??", status: "added" }]),
+            stats: (_cwd, _ref, file) => {
+              expect(file).toBe("a.txt")
+              return Effect.succeed([{ file: "a.txt", additions: 1, deletions: 1 }])
+            },
+            patch: (_cwd, _ref, file, options) => {
+              expect(file).toBe("a.txt")
+              expect(options?.context).toBe(12)
+              return Effect.succeed({ text: "patch", truncated: false })
+            },
+          }),
+        ),
+      ),
+    { git: true },
+  )
+
+  controlledIt.instance(
     "diff('git') does not initialize branch discovery",
     () =>
       Effect.gen(function* () {
@@ -541,9 +640,17 @@ describe("Vcs diff", () => {
         yield* write(path.join(test.directory, "branch.txt"), "hello\n")
         yield* git(test.directory, ["add", "."])
         yield* git(test.directory, ["commit", "--no-gpg-sign", "-m", "branch file"])
+        yield* write(path.join(test.directory, "untracked.txt"), "untracked\n")
 
         const vcs = yield* Vcs.Service
         const diff = yield* vcs.diff("branch")
+        expect(yield* vcs.diff("branch", { view: "summary" })).toEqual([
+          { file: "branch.txt", status: "added", additions: 0, deletions: 0 },
+          { file: "untracked.txt", status: "added", additions: 0, deletions: 0 },
+        ])
+        for (const file of diff) {
+          expect(yield* vcs.diff("branch", { file: file.file })).toEqual([file])
+        }
 
         expect(diff).toEqual(
           expect.arrayContaining([

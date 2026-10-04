@@ -2112,6 +2112,8 @@ export class Vcs extends HeyApiClient {
       workspace?: string
       mode: "git" | "branch"
       context?: number
+      view?: "summary"
+      file?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2124,6 +2126,8 @@ export class Vcs extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "query", key: "mode" },
             { in: "query", key: "context" },
+            { in: "query", key: "view" },
+            { in: "query", key: "file" },
           ],
         },
       ],
